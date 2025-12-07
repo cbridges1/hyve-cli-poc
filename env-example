@@ -1,0 +1,3 @@
+CIVO_TOKEN=your-civo-token-here
+CLOUDFLARE_API_TOKEN=your-cloudflare-api-token-here
+DOMAIN=example.com
