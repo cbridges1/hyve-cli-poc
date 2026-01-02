@@ -302,6 +302,51 @@ func (m *Manager) ShouldManage(cluster civogo.KubernetesCluster) bool {
 	return false
 }
 
+// GetClusterInfo returns detailed information about a cluster for GitHub Actions export
+func (m *Manager) GetClusterInfo(ctx context.Context, clusterName string) (*ClusterInfo, error) {
+	cluster, err := m.FindByName(clusterName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find cluster %s: %w", clusterName, err)
+	}
+
+	if cluster == nil {
+		return nil, fmt.Errorf("cluster %s not found", clusterName)
+	}
+
+	// Get kubeconfig
+	kubeconfig, err := m.client.GetKubernetesClusterKubeconfig(cluster.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get kubeconfig for cluster %s: %w", clusterName, err)
+	}
+
+	// Get cluster details
+	clusterDetails, err := m.client.GetKubernetesCluster(cluster.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get cluster details for %s: %w", clusterName, err)
+	}
+
+	info := &ClusterInfo{
+		Name:       cluster.Name,
+		IPAddress:  clusterDetails.MasterIP,
+		AccessPort: "6443", // Standard Kubernetes API port
+		Kubeconfig: kubeconfig,
+		Status:     cluster.Status,
+		ID:         cluster.ID,
+	}
+
+	return info, nil
+}
+
+// ClusterInfo holds cluster information for export
+type ClusterInfo struct {
+	Name       string
+	IPAddress  string
+	AccessPort string
+	Kubeconfig string
+	Status     string
+	ID         string
+}
+
 // CleanupOrphaned deletes orphaned clusters
 func (m *Manager) CleanupOrphaned(ctx context.Context, orphanedClusters []*civogo.KubernetesCluster) error {
 	if len(orphanedClusters) == 0 {

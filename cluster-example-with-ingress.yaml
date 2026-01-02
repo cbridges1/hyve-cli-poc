@@ -4,8 +4,10 @@ metadata:
   name: example-cluster
   region: PHX1
 spec:
-  nodeCount: 2
-  size: g4s.kube.xsmall
+  provider: civo
+  nodes:
+    - g4s.kube.xsmall
+    - g4s.kube.xsmall
   clusterType: k3s
   masterCluster: true
   firewall:

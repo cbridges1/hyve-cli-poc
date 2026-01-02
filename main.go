@@ -26,6 +26,7 @@ type CLIParams struct {
 	Action        string
 	ClusterName   string
 	Region        string
+	Provider      string
 	Nodes         string
 	ClusterType   string
 	MasterCluster bool
@@ -52,6 +53,7 @@ func parseCLIFlags() CLIParams {
 	flag.StringVar(&params.Action, "action", "", "Action to perform: add, modify, or delete")
 	flag.StringVar(&params.ClusterName, "cluster-name", "", "Name of the cluster")
 	flag.StringVar(&params.Region, "region", "PHX1", "Region for the cluster")
+	flag.StringVar(&params.Provider, "provider", "civo", "Cloud provider (e.g., civo, aws, gcp, azure)")
 	flag.StringVar(&params.Nodes, "nodes", "g4s.kube.small", "Comma-separated list of node sizes (e.g., g4s.kube.small,g4s.kube.medium)")
 	flag.StringVar(&params.ClusterType, "cluster-type", "k3s", "Type of Kubernetes cluster")
 	flag.BoolVar(&params.MasterCluster, "master-cluster", false, "Whether this is a master cluster")
@@ -62,10 +64,10 @@ func parseCLIFlags() CLIParams {
 		fmt.Fprintf(os.Stderr, "CLI mode flags:\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, "\nExamples:\n")
-		fmt.Fprintf(os.Stderr, "  # Add a new worker cluster with 2 medium nodes\n")
-		fmt.Fprintf(os.Stderr, "  %s -action=add -cluster-name=worker-1 -region=PHX1 -nodes=g4s.kube.medium,g4s.kube.medium\n\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  # Add a new master cluster with 1 small node\n")
-		fmt.Fprintf(os.Stderr, "  %s -action=add -cluster-name=master-1 -region=PHX1 -nodes=g4s.kube.small -master-cluster=true\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  # Add a new worker cluster with 2 medium nodes on Civo\n")
+		fmt.Fprintf(os.Stderr, "  %s -action=add -cluster-name=worker-1 -region=PHX1 -provider=civo -nodes=g4s.kube.medium,g4s.kube.medium\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  # Add a new master cluster with 1 small node on AWS\n")
+		fmt.Fprintf(os.Stderr, "  %s -action=add -cluster-name=master-1 -region=PHX1 -provider=aws -nodes=t3.small -master-cluster=true\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  # Modify an existing cluster to have 3 nodes (small, medium, large)\n")
 		fmt.Fprintf(os.Stderr, "  %s -action=modify -cluster-name=worker-1 -nodes=g4s.kube.small,g4s.kube.medium,g4s.kube.large\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  # Delete a cluster\n")
@@ -140,6 +142,7 @@ func addClusterFromCLI(params CLIParams, filePath string) {
 			Region: params.Region,
 		},
 		Spec: types.ClusterSpec{
+			Provider:      params.Provider,
 			Nodes:         nodeArray,
 			ClusterType:   params.ClusterType,
 			MasterCluster: params.MasterCluster,
@@ -176,9 +179,21 @@ func addClusterFromCLI(params CLIParams, filePath string) {
 	log.Printf("Created cluster definition file: %s", filePath)
 	log.Printf("Cluster %s configuration:", params.ClusterName)
 	log.Printf("  Region: %s", params.Region)
+	log.Printf("  Provider: %s", params.Provider)
 	log.Printf("  Nodes: %v", nodeArray)
 	log.Printf("  Cluster Type: %s", params.ClusterType)
 	log.Printf("  Master Cluster: %t", params.MasterCluster)
+
+	// Export cluster info if this was just created
+	log.Printf("Exporting cluster information...")
+	ctx := context.Background()
+	configMgr := config.NewManager()
+	if apiKey := configMgr.GetCivoToken(); apiKey != "" {
+		err := exportClusterInfo(ctx, apiKey, clusterDef)
+		if err != nil {
+			log.Printf("Warning: Failed to export cluster info: %v", err)
+		}
+	}
 }
 
 // modifyClusterFromCLI updates an existing cluster YAML file with CLI parameters
@@ -203,6 +218,9 @@ func modifyClusterFromCLI(params CLIParams, filePath string) {
 	// Update only the fields that were provided (non-default values)
 	if flag.Lookup("region").Value.String() != flag.Lookup("region").DefValue {
 		clusterDef.Metadata.Region = params.Region
+	}
+	if flag.Lookup("provider").Value.String() != flag.Lookup("provider").DefValue {
+		clusterDef.Spec.Provider = params.Provider
 	}
 	if flag.Lookup("nodes").Value.String() != flag.Lookup("nodes").DefValue {
 		// Parse nodes string into array
@@ -237,9 +255,21 @@ func modifyClusterFromCLI(params CLIParams, filePath string) {
 	log.Printf("Updated cluster definition file: %s", filePath)
 	log.Printf("Cluster %s updated configuration:", params.ClusterName)
 	log.Printf("  Region: %s", clusterDef.Metadata.Region)
+	log.Printf("  Provider: %s", clusterDef.Spec.Provider)
 	log.Printf("  Nodes: %v", clusterDef.Spec.Nodes)
 	log.Printf("  Cluster Type: %s", clusterDef.Spec.ClusterType)
 	log.Printf("  Master Cluster: %t", clusterDef.Spec.MasterCluster)
+
+	// Export cluster info if this was just modified
+	log.Printf("Exporting cluster information...")
+	ctx := context.Background()
+	configMgr := config.NewManager()
+	if apiKey := configMgr.GetCivoToken(); apiKey != "" {
+		err := exportClusterInfo(ctx, apiKey, clusterDef)
+		if err != nil {
+			log.Printf("Warning: Failed to export cluster info: %v", err)
+		}
+	}
 }
 
 // deleteClusterFromCLI removes a cluster YAML file
@@ -383,6 +413,10 @@ func runReconciliationMode() {
 	}
 
 	log.Println("Cluster reconciliation completed")
+
+	// Export cluster information for GitHub Actions
+	log.Println("Exporting cluster information...")
+	exportAllClusterInfo(ctx, apiKey, clusterDefs)
 }
 
 // reconcileCluster handles the reconciliation of a single cluster
@@ -551,6 +585,78 @@ func cleanupOrphanedResources(ctx context.Context, clusterMgr *cluster.Manager, 
 	}
 
 	return nil
+}
+
+// exportClusterInfo exports cluster information as environment variables for GitHub Actions
+func exportClusterInfo(ctx context.Context, apiKey string, clusterDef types.ClusterDefinition) error {
+	client, err := civogo.NewClient(apiKey, clusterDef.Metadata.Region)
+	if err != nil {
+		return fmt.Errorf("failed to create Civo client: %w", err)
+	}
+
+	clusterMgr := cluster.NewManager(client)
+
+	// Get cluster information
+	clusterInfo, err := clusterMgr.GetClusterInfo(ctx, clusterDef.Metadata.Name)
+	if err != nil {
+		return fmt.Errorf("failed to get cluster info: %w", err)
+	}
+
+	// Only export if cluster is active
+	if clusterInfo.Status != "ACTIVE" {
+		log.Printf("Cluster %s is not active (status: %s), skipping export", clusterInfo.Name, clusterInfo.Status)
+		return nil
+	}
+
+	// Write to GitHub Actions environment file if it exists (for GitHub Actions)
+	if githubEnv := os.Getenv("GITHUB_ENV"); githubEnv != "" {
+		log.Printf("Exporting cluster information to GitHub Actions environment")
+		file, err := os.OpenFile(githubEnv, os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			log.Printf("Warning: Failed to open GITHUB_ENV file: %v", err)
+		} else {
+			defer file.Close()
+
+			// Write environment variables
+			fmt.Fprintf(file, "HYVE_CLUSTER_NAME=%s\n", clusterInfo.Name)
+			fmt.Fprintf(file, "HYVE_CLUSTER_IP_ADDRESS=%s\n", clusterInfo.IPAddress)
+			fmt.Fprintf(file, "HYVE_CLUSTER_ACCESS_PORT=%s\n", clusterInfo.AccessPort)
+			fmt.Fprintf(file, "HYVE_CLUSTER_ID=%s\n", clusterInfo.ID)
+			fmt.Fprintf(file, "HYVE_CLUSTER_STATUS=%s\n", clusterInfo.Status)
+
+			// For kubeconfig, we'll encode it as base64 to handle multiline content
+			// Users can decode it in their workflow with: echo $HYVE_CLUSTER_KUBECONFIG | base64 -d
+			fmt.Fprintf(file, "HYVE_CLUSTER_KUBECONFIG=%s\n", clusterInfo.Kubeconfig)
+
+			log.Printf("✅ Exported cluster information to GitHub Actions environment:")
+			log.Printf("  HYVE_CLUSTER_NAME=%s", clusterInfo.Name)
+			log.Printf("  HYVE_CLUSTER_IP_ADDRESS=%s", clusterInfo.IPAddress)
+			log.Printf("  HYVE_CLUSTER_ACCESS_PORT=%s", clusterInfo.AccessPort)
+			log.Printf("  HYVE_CLUSTER_ID=%s", clusterInfo.ID)
+			log.Printf("  HYVE_CLUSTER_STATUS=%s", clusterInfo.Status)
+			log.Printf("  HYVE_CLUSTER_KUBECONFIG=<kubeconfig content>")
+		}
+	}
+
+	// Also set as regular environment variables for local usage
+	os.Setenv("HYVE_CLUSTER_NAME", clusterInfo.Name)
+	os.Setenv("HYVE_CLUSTER_IP_ADDRESS", clusterInfo.IPAddress)
+	os.Setenv("HYVE_CLUSTER_ACCESS_PORT", clusterInfo.AccessPort)
+	os.Setenv("HYVE_CLUSTER_ID", clusterInfo.ID)
+	os.Setenv("HYVE_CLUSTER_STATUS", clusterInfo.Status)
+	os.Setenv("HYVE_CLUSTER_KUBECONFIG", clusterInfo.Kubeconfig)
+
+	return nil
+}
+
+// exportAllClusterInfo exports information for all active clusters
+func exportAllClusterInfo(ctx context.Context, apiKey string, clusterDefs []types.ClusterDefinition) {
+	for _, clusterDef := range clusterDefs {
+		err := exportClusterInfo(ctx, apiKey, clusterDef)
+		if err != nil {
+			log.Printf("Failed to export info for cluster %s: %v", clusterDef.Metadata.Name, err)
+		}
+	}
 }
 
 // cleanupAllRegions handles cleanup when no clusters are defined

@@ -4,8 +4,9 @@ metadata:
   name: new-cluster
   region: PHX1
 spec:
-  nodeCount: 1
-  size: g4s.kube.medium
+  provider: civo
+  nodes:
+    - g4s.kube.medium
   clusterType: k3s
   masterCluster: true
   firewall:

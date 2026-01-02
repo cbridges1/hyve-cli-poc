@@ -37,6 +37,16 @@ on:
         required: false
         default: 'g4s.kube.small'
         type: string
+      provider:
+        description: 'Cloud provider for the cluster'
+        required: false
+        default: 'civo'
+        type: choice
+        options:
+          - 'civo'
+          - 'aws'
+          - 'gcp'
+          - 'azure'
       cluster-type:
         description: 'Type of Kubernetes cluster'
         required: false
@@ -91,6 +101,7 @@ jobs:
         echo "Action: ${{ github.event.inputs.action }}"
         echo "Cluster Name: ${{ github.event.inputs.cluster-name }}"
         echo "Region: ${{ github.event.inputs.region }}"
+        echo "Provider: ${{ github.event.inputs.provider }}"
         echo "Nodes: ${{ github.event.inputs.nodes }}"
         echo "Cluster Type: ${{ github.event.inputs.cluster-type }}"
         echo "Master Cluster: ${{ github.event.inputs.master-cluster }}"
@@ -101,6 +112,7 @@ jobs:
         CLI_COMMAND="$CLI_COMMAND -action=${{ github.event.inputs.action }}"
         CLI_COMMAND="$CLI_COMMAND -cluster-name=${{ github.event.inputs.cluster-name }}"
         CLI_COMMAND="$CLI_COMMAND -region=${{ github.event.inputs.region }}"
+        CLI_COMMAND="$CLI_COMMAND -provider=${{ github.event.inputs.provider }}"
         CLI_COMMAND="$CLI_COMMAND -nodes=\"${{ github.event.inputs.nodes }}\""
         CLI_COMMAND="$CLI_COMMAND -cluster-type=${{ github.event.inputs.cluster-type }}"
         if [ "${{ github.event.inputs.master-cluster }}" == "true" ]; then
@@ -223,6 +235,29 @@ jobs:
         
         # Run the cluster deployment
         ./civo-cluster-deploy
+        
+    - name: Display exported cluster information
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      run: |
+        echo "=== EXPORTED CLUSTER INFORMATION ==="
+        echo "These environment variables are now available for subsequent workflow steps:"
+        echo ""
+        if [ -n "$HYVE_CLUSTER_NAME" ]; then
+          echo "✅ HYVE_CLUSTER_NAME: $HYVE_CLUSTER_NAME"
+          echo "✅ HYVE_CLUSTER_IP_ADDRESS: $HYVE_CLUSTER_IP_ADDRESS"
+          echo "✅ HYVE_CLUSTER_ACCESS_PORT: $HYVE_CLUSTER_ACCESS_PORT"
+          echo "✅ HYVE_CLUSTER_ID: $HYVE_CLUSTER_ID"
+          echo "✅ HYVE_CLUSTER_STATUS: $HYVE_CLUSTER_STATUS"
+          echo "✅ HYVE_CLUSTER_KUBECONFIG: <available for use>"
+          echo ""
+          echo "Example usage in subsequent steps:"
+          echo "  - name: Use cluster info"
+          echo "    run: |"
+          echo "      kubectl --kubeconfig <(echo \"\$HYVE_CLUSTER_KUBECONFIG\") get nodes"
+          echo "      curl -k https://\$HYVE_CLUSTER_IP_ADDRESS:\$HYVE_CLUSTER_ACCESS_PORT/api/v1"
+        else
+          echo "❌ No cluster information exported (no active clusters found)"
+        fi
         
     - name: Upload deployment logs
       if: always()
