@@ -17,7 +17,6 @@ Hyve is a **GitOps-first** cluster management tool that requires Git repositorie
 - **Automatic Reconciliation**: Add/delete commands automatically run reconciliation
 - **Modern CLI Interface**: Built with Cobra CLI for intuitive command structure
 - **Declarative Configuration**: Define clusters using YAML files in Git repositories
-- **Master Cluster Dependencies**: Ensures master clusters are ready before deploying workers
 - **Idempotent Operations**: Safe to run multiple times without side effects
 - **Firewall Management**: Automatic creation and cleanup of cluster firewalls
 - **SQLite Database**: Persistent storage for repository configurations
@@ -77,10 +76,7 @@ export HYVE_GIT_TOKEN=your_personal_access_token
 ### 2. Add Your First Cluster
 
 ```bash
-# Add a master cluster (automatically runs reconciliation)
-./hyve cluster add master --region PHX1 --nodes g4s.kube.small --master-cluster
-
-# Add a worker cluster (automatically runs reconciliation)
+# Add a cluster (automatically runs reconciliation)
 ./hyve cluster add production --region PHX1 --nodes g4s.kube.medium,g4s.kube.medium,g4s.kube.large
 ```
 
@@ -143,9 +139,6 @@ The CLI follows a command-subcommand structure:
 # Add a new cluster (automatically runs reconciliation)
 ./hyve cluster add production --region PHX1 --nodes g4s.kube.large,g4s.kube.large,g4s.kube.large
 
-# Add a master cluster (automatically runs reconciliation)
-./hyve cluster add master --region PHX1 --nodes g4s.kube.small --master-cluster
-
 # Modify existing cluster (automatically runs reconciliation)
 ./hyve cluster modify production --nodes g4s.kube.medium,g4s.kube.medium,g4s.kube.large,g4s.kube.large,g4s.kube.large
 
@@ -174,7 +167,6 @@ The CLI follows a command-subcommand structure:
 | `--provider` | `-p` | Cloud provider | civo |
 | `--nodes` | `-n` | Node sizes (comma-separated) | g4s.kube.small |
 | `--cluster-type` | `-t` | Kubernetes type | k3s |
-| `--master-cluster` | `-m` | Is master cluster | false |
 
 #### Available Regions
 - `PHX1` - Phoenix, USA
@@ -188,119 +180,6 @@ The CLI follows a command-subcommand structure:
 - `g4s.kube.medium` - 2 vCPU, 4GB RAM
 - `g4s.kube.large` - 4 vCPU, 8GB RAM
 - `g4s.kube.xlarge` - 6 vCPU, 16GB RAM
-
-### Method 2: GitHub Actions (Web UI)
-
-#### Automated Deployment (Push to Main)
-1. Make changes to YAML files in `state/clusters/`
-2. Commit and push to main branch
-3. GitHub Action automatically deploys changes
-
-#### Manual Deployment with Parameters
-1. Go to **Actions** tab in your GitHub repository
-2. Select **"Deploy Civo Clusters"** workflow
-3. Click **"Run workflow"**
-4. Fill in the parameters:
-   - **Action**: add, modify, or delete
-   - **Cluster Name**: Your cluster name
-   - **Region**: Select from dropdown
-   - **Node Count**: Number of nodes
-   - **Size**: Select node size
-   - **Cluster Type**: k3s or talos
-   - **Master Cluster**: Check if this is a master cluster
-5. Click **"Run workflow"**
-
-The workflow will:
-- Create/modify the cluster YAML file
-- Commit changes with `[skip ci]` to avoid recursion
-- Deploy the cluster automatically
-
-### Method 3: GitHub CLI
-
-#### Install and Setup GitHub CLI
-```bash
-# Install gh CLI (macOS)
-brew install gh
-
-# Install gh CLI (Linux)
-curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-sudo apt update && sudo apt install gh
-
-# Authenticate with GitHub
-gh auth login
-```
-
-#### Trigger GitHub Actions via CLI
-
-```bash
-# Basic reconciliation (no parameters)
-gh workflow run "Deploy Civo Clusters"
-
-# Add a new cluster
-gh workflow run "Deploy Civo Clusters" \
-  -f action=add \
-  -f cluster-name=production \
-  -f region=PHX1 \
-  -f node-count=3 \
-  -f size=g4s.kube.large \
-  -f cluster-type=k3s
-
-# Add a master cluster
-gh workflow run "Deploy Civo Clusters" \
-  -f action=add \
-  -f cluster-name=master \
-  -f region=PHX1 \
-  -f node-count=1 \
-  -f size=g4s.kube.small \
-  -f cluster-type=k3s \
-  -f master-cluster=true
-
-# Modify existing cluster
-gh workflow run "Deploy Civo Clusters" \
-  -f action=modify \
-  -f cluster-name=production \
-  -f node-count=5
-
-# Delete a cluster
-gh workflow run "Deploy Civo Clusters" \
-  -f action=delete \
-  -f cluster-name=production
-
-# Check workflow status
-gh run list --workflow="Deploy Civo Clusters"
-
-# View workflow logs
-gh run view --log
-```
-
-#### GitHub CLI Parameters
-
-| Flag | Description | Example |
-|------|-------------|---------|
-| `-f action=<value>` | Action to perform | `add`, `modify`, `delete` |
-| `-f cluster-name=<value>` | Cluster name | `production` |
-| `-f region=<value>` | Civo region | `PHX1`, `NYC1`, `FRA1`, `LON1` |
-| `-f node-count=<value>` | Number of nodes | `1`, `3`, `5` |
-| `-f size=<value>` | Node size | `g4s.kube.small` |
-| `-f cluster-type=<value>` | Kubernetes type | `k3s`, `talos` |
-| `-f master-cluster=<value>` | Master cluster flag | `true`, `false` |
-
-## Configuration
-
-### Git Repository Structure
-
-Each Git repository contains cluster configurations in a `clusters/` directory:
-
-```
-repository-root/
-├── README.md                    # Repository documentation  
-├── clusters/                    # Cluster definitions
-│   ├── production.yaml
-│   ├── master.yaml
-│   └── staging.yaml
-└── .gitignore                   # Ignore temporary files
-```
 
 ### Cluster YAML Structure
 
@@ -318,7 +197,6 @@ spec:
     - g4s.kube.large
     - g4s.kube.large
   clusterType: k3s
-  masterCluster: false  # Set to true for master clusters
   firewall:
     enabled: true
     rules:
@@ -353,82 +231,6 @@ Hyve stores repository configurations in SQLite database:
 └── config.yaml                 # Legacy config (unused in current version)
 ```
 
-## Workflow Modes
-
-### 1. GitOps Workflow (Recommended)
-- **Repository-Based**: All cluster state stored in Git repositories
-- **Multi-Environment**: Separate repositories for dev/staging/prod
-- **Automatic Reconciliation**: Add/delete operations trigger immediate reconciliation  
-- **Version Controlled**: All changes committed and pushed to Git
-- **Audit Trail**: Complete history of all cluster configuration changes
-
-### 2. Manual Reconciliation
-- **Explicit Control**: Run `hyve reconcile` when desired
-- **Batch Operations**: Make multiple configuration changes before deploying
-- **Review Before Deploy**: Inspect changes in Git before reconciliation
-
-### 3. Multi-Repository Management
-- **Environment Isolation**: Completely separate state per environment
-- **Easy Switching**: `hyve git use <env>` to switch between environments  
-- **Independent Operations**: Changes in one repository don't affect others
-
-## Master Cluster Dependencies
-
-The application enforces master cluster dependencies:
-
-1. **Validation**: Ensures exactly one master cluster exists when clusters are defined
-2. **Ordering**: Master clusters are always processed first
-3. **Readiness Check**: Worker clusters wait for master cluster to be ACTIVE
-4. **API-based Status**: Uses live Civo API status instead of stored state
-
-## Monitoring and Troubleshooting
-
-### Local Debugging
-```bash
-# Run with verbose output
-./hyve reconcile 2>&1 | tee deployment.log
-
-# Check cluster status directly via Civo CLI
-civo kubernetes list
-civo firewall list
-```
-
-### GitHub Actions Monitoring
-
-1. **View Logs**:
-   - Go to Actions tab → Select workflow run → View logs
-
-2. **Download Artifacts**:
-   - Deployment logs and state files are saved as artifacts
-   - Available for 30 days after each run
-
-3. **Common Issues**:
-   ```bash
-   # Missing CIVO_TOKEN
-   ❌ CIVO_TOKEN secret is not set!
-   
-   # No cluster configurations
-   No cluster configurations found in state/clusters directory
-   
-   # Master cluster not ready
-   Skipping cluster worker-1 - master cluster is not ready yet
-   ```
-
-### GitHub CLI Monitoring
-```bash
-# List recent workflow runs
-gh run list --workflow="Deploy Civo Clusters" --limit 5
-
-# View specific run details
-gh run view <run-id>
-
-# View logs for latest run
-gh run view --log
-
-# Watch a running workflow
-gh run watch
-```
-
 ## Security Considerations
 
 - **Secret Protection**: CIVO_TOKEN is only accessible to workflows
@@ -460,7 +262,6 @@ gh run watch
    ./hyve git use development
    
    # Add clusters (automatic reconciliation)
-   ./hyve cluster add dev-master --region PHX1 --nodes g4s.kube.small --master-cluster
    ./hyve cluster add dev-app --region PHX1 --nodes g4s.kube.medium,g4s.kube.medium
    ```
 
@@ -470,7 +271,6 @@ gh run watch
    ./hyve git use production
    
    # Add production clusters (automatic reconciliation)
-   ./hyve cluster add prod-master --region PHX1 --nodes g4s.kube.large --master-cluster
    ./hyve cluster add prod-app --region PHX1 --nodes g4s.kube.large,g4s.kube.large,g4s.kube.large
    ```
 
@@ -483,13 +283,12 @@ gh run watch
 ### Multi-Region Setup
 
 ```bash
-# Set up production repository with master cluster
+# Set up production repository
 ./hyve git use production
-./hyve cluster add master-phx --region PHX1 --master-cluster --nodes g4s.kube.medium
 
-# Worker clusters in different regions (automatic reconciliation for each)
-./hyve cluster add worker-nyc --region NYC1 --nodes g4s.kube.small,g4s.kube.small,g4s.kube.small
-./hyve cluster add worker-fra --region FRA1 --nodes g4s.kube.small,g4s.kube.small
+# Clusters in different regions (automatic reconciliation for each)
+./hyve cluster add app-nyc --region NYC1 --nodes g4s.kube.small,g4s.kube.small,g4s.kube.small
+./hyve cluster add app-fra --region FRA1 --nodes g4s.kube.small,g4s.kube.small
 
 # Manual reconciliation if needed
 ./hyve reconcile

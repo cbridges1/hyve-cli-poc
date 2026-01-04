@@ -76,34 +76,11 @@ func (r *Reconciler) reconcileRegion(ctx context.Context, region string, cluster
 	firewallMgr := firewall.NewManager(prov)
 	ingressMgr := ingress.NewManager(prov)
 
-	// First, reconcile all desired clusters with master cluster dependency check
-	masterClusterReady := false
+	// Reconcile all desired clusters
 	for _, clusterDef := range clusters {
-		if clusterDef.Spec.MasterCluster {
-			err := r.reconcileCluster(ctx, clusterMgr, firewallMgr, ingressMgr, clusterDef)
-			if err != nil {
-				log.Printf("Failed to reconcile master cluster %s: %v", clusterDef.Metadata.Name, err)
-				continue
-			}
-
-			updatedClusters := []types.ClusterDefinition{clusterDef}
-			if r.stateMgr.IsMasterClusterReady(ctx, updatedClusters, clusterMgr) {
-				masterClusterReady = true
-				log.Printf("Master cluster %s is ready, can now process other clusters", clusterDef.Metadata.Name)
-			}
-		} else {
-			if !masterClusterReady {
-				if !r.stateMgr.IsMasterClusterReady(ctx, clusters, clusterMgr) {
-					log.Printf("Skipping cluster %s - master cluster is not ready yet", clusterDef.Metadata.Name)
-					continue
-				}
-				masterClusterReady = true
-			}
-
-			err := r.reconcileCluster(ctx, clusterMgr, firewallMgr, ingressMgr, clusterDef)
-			if err != nil {
-				log.Printf("Failed to reconcile cluster %s: %v", clusterDef.Metadata.Name, err)
-			}
+		err := r.reconcileCluster(ctx, clusterMgr, firewallMgr, ingressMgr, clusterDef)
+		if err != nil {
+			log.Printf("Failed to reconcile cluster %s: %v", clusterDef.Metadata.Name, err)
 		}
 	}
 

@@ -24,12 +24,11 @@ type IngressSpec struct {
 
 // ClusterSpec represents the desired cluster configuration
 type ClusterSpec struct {
-	Provider      string       `yaml:"provider"`
-	Nodes         []string     `yaml:"nodes"`
-	ClusterType   string       `yaml:"clusterType"`
-	MasterCluster bool         `yaml:"masterCluster,omitempty"`
-	Firewall      FirewallSpec `yaml:"firewall"`
-	Ingress       IngressSpec  `yaml:"ingress"`
+	Provider    string       `yaml:"provider"`
+	Nodes       []string     `yaml:"nodes"`
+	ClusterType string       `yaml:"clusterType"`
+	Firewall    FirewallSpec `yaml:"firewall"`
+	Ingress     IngressSpec  `yaml:"ingress"`
 }
 
 // ClusterMetadata represents cluster metadata

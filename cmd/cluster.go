@@ -34,9 +34,7 @@ var addCmd = &cobra.Command{
 		provider, _ := cmd.Flags().GetString("provider")
 		nodes, _ := cmd.Flags().GetStringSlice("nodes")
 		clusterType, _ := cmd.Flags().GetString("cluster-type")
-		masterCluster, _ := cmd.Flags().GetBool("master-cluster")
-
-		addClusterFromCLI(clusterName, region, provider, nodes, clusterType, masterCluster)
+		addClusterFromCLI(clusterName, region, provider, nodes, clusterType)
 	},
 }
 
@@ -68,13 +66,11 @@ func init() {
 	addCmd.Flags().StringP("provider", "p", "civo", "Cloud provider (e.g., civo, aws, gcp, azure)")
 	addCmd.Flags().StringSliceP("nodes", "n", []string{"g4s.kube.small"}, "Node sizes")
 	addCmd.Flags().StringP("cluster-type", "t", "k3s", "Type of Kubernetes cluster")
-	addCmd.Flags().BoolP("master-cluster", "m", false, "Whether this is a master cluster")
 
 	modifyCmd.Flags().StringP("region", "r", "", "Region for the cluster")
 	modifyCmd.Flags().StringP("provider", "p", "", "Cloud provider")
 	modifyCmd.Flags().StringSliceP("nodes", "n", nil, "Node sizes")
 	modifyCmd.Flags().StringP("cluster-type", "t", "", "Type of Kubernetes cluster")
-	modifyCmd.Flags().BoolP("master-cluster", "m", false, "Whether this is a master cluster")
 
 	clusterCmd.AddCommand(addCmd)
 	clusterCmd.AddCommand(modifyCmd)
@@ -130,7 +126,7 @@ func commitStateChanges(ctx context.Context, stateMgr *state.Manager, message st
 	}
 }
 
-func addClusterFromCLI(clusterName, region, provider string, nodes []string, clusterType string, masterCluster bool) {
+func addClusterFromCLI(clusterName, region, provider string, nodes []string, clusterType string) {
 	ctx := context.Background()
 	stateMgr, stateDir := createStateManager(ctx)
 
@@ -152,10 +148,9 @@ func addClusterFromCLI(clusterName, region, provider string, nodes []string, clu
 			Region: region,
 		},
 		Spec: types.ClusterSpec{
-			Provider:      provider,
-			Nodes:         nodes,
-			ClusterType:   clusterType,
-			MasterCluster: masterCluster,
+			Provider:    provider,
+			Nodes:       nodes,
+			ClusterType: clusterType,
 			Firewall: types.FirewallSpec{
 				Enabled: true,
 				Rules: []types.FirewallRule{
@@ -190,7 +185,6 @@ func addClusterFromCLI(clusterName, region, provider string, nodes []string, clu
 	log.Printf("  Provider: %s", provider)
 	log.Printf("  Nodes: %v", nodes)
 	log.Printf("  Cluster Type: %s", clusterType)
-	log.Printf("  Master Cluster: %t", masterCluster)
 
 	// Commit changes to Git if configured
 	commitStateChanges(ctx, stateMgr, fmt.Sprintf("Add cluster %s", clusterName))
@@ -242,10 +236,6 @@ func modifyClusterFromCLI(cmd *cobra.Command, clusterName string) {
 		clusterType, _ := cmd.Flags().GetString("cluster-type")
 		clusterDef.Spec.ClusterType = clusterType
 	}
-	if cmd.Flags().Changed("master-cluster") {
-		masterCluster, _ := cmd.Flags().GetBool("master-cluster")
-		clusterDef.Spec.MasterCluster = masterCluster
-	}
 
 	updatedData, err := yaml.Marshal(&clusterDef)
 	if err != nil {
@@ -262,7 +252,6 @@ func modifyClusterFromCLI(cmd *cobra.Command, clusterName string) {
 	log.Printf("  Provider: %s", clusterDef.Spec.Provider)
 	log.Printf("  Nodes: %v", clusterDef.Spec.Nodes)
 	log.Printf("  Cluster Type: %s", clusterDef.Spec.ClusterType)
-	log.Printf("  Master Cluster: %t", clusterDef.Spec.MasterCluster)
 
 	// Commit changes to Git if configured
 	commitStateChanges(ctx, stateMgr, fmt.Sprintf("Modify cluster %s", clusterName))

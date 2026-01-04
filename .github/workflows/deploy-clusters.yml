@@ -55,11 +55,6 @@ on:
         options:
           - 'k3s'
           - 'talos'
-      master-cluster:
-        description: 'Whether this is a master cluster'
-        required: false
-        default: false
-        type: boolean
 
 jobs:
   deploy:
@@ -104,7 +99,6 @@ jobs:
         echo "Provider: ${{ github.event.inputs.provider }}"
         echo "Nodes: ${{ github.event.inputs.nodes }}"
         echo "Cluster Type: ${{ github.event.inputs.cluster-type }}"
-        echo "Master Cluster: ${{ github.event.inputs.master-cluster }}"
         echo ""
         
         # Build CLI command with the provided inputs
@@ -115,9 +109,6 @@ jobs:
         CLI_COMMAND="$CLI_COMMAND -provider=${{ github.event.inputs.provider }}"
         CLI_COMMAND="$CLI_COMMAND -nodes=\"${{ github.event.inputs.nodes }}\""
         CLI_COMMAND="$CLI_COMMAND -cluster-type=${{ github.event.inputs.cluster-type }}"
-        if [ "${{ github.event.inputs.master-cluster }}" == "true" ]; then
-          CLI_COMMAND="$CLI_COMMAND -master-cluster=true"
-        fi
         
         echo "Executing: $CLI_COMMAND"
         $CLI_COMMAND

@@ -21,7 +21,6 @@ jobs:
         provider: 'civo'
         nodes: 'g4s.kube.medium,g4s.kube.medium'
         cluster-type: 'k3s'
-        master-cluster: true
       env:
         CIVO_TOKEN: ${{ secrets.CIVO_TOKEN }}
     
