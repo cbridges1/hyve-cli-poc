@@ -1,49 +1,45 @@
-# Hyve - Kubernetes Cluster Management CLI
+# Hyve - GitOps Kubernetes Cluster Management CLI
 
-A declarative Kubernetes cluster management tool for Civo Cloud built with Cobra CLI that supports both local CLI usage and automated GitHub Actions deployment.
+A declarative GitOps Kubernetes cluster management tool for Civo Cloud that manages state through Git repositories with SQLite-backed multi-repository support.
 
 ## Overview
 
-This application provides multiple ways to manage Civo Kubernetes clusters:
-- **Local CLI**: Run directly on your machine for development and testing
-- **GitHub Actions**: Automated deployment triggered by repository changes
-- **GitHub CLI**: Trigger deployments remotely using the `gh` command
+Hyve is a **GitOps-first** cluster management tool that requires Git repositories for all state management. It supports:
+- **Multi-Repository Management**: Manage separate repositories for different environments (dev/staging/prod)
+- **SQLite-Backed Storage**: Persistent configuration storage for repository management
+- **Automatic Reconciliation**: Clusters are automatically reconciled after add/delete operations
+- **Pure GitOps Workflow**: All state changes are committed and pushed to Git repositories
 
 ## Features
 
+- **Git Repository Requirement**: All cluster state must be managed through Git repositories
+- **Multi-Repository Support**: Configure multiple repositories and switch between them
+- **Automatic Reconciliation**: Add/delete commands automatically run reconciliation
 - **Modern CLI Interface**: Built with Cobra CLI for intuitive command structure
-- **Declarative Configuration**: Define clusters using YAML files
+- **Declarative Configuration**: Define clusters using YAML files in Git repositories
 - **Master Cluster Dependencies**: Ensures master clusters are ready before deploying workers
 - **Idempotent Operations**: Safe to run multiple times without side effects
 - **Firewall Management**: Automatic creation and cleanup of cluster firewalls
-- **Multiple Interfaces**: CLI commands, GitHub Actions, and direct API access
-- **GitOps Ready**: Full GitHub Actions integration with automated deployments
+- **SQLite Database**: Persistent storage for repository configurations
 
 ## Prerequisites
 
-### For All Usage Methods
+### Required
 - **Civo API Token**: Get your API token from [Civo Dashboard](https://dashboard.civo.com/) → Settings → Security → API Keys
-
-### For Local Usage
+- **Git Repository**: A Git repository to store cluster state (GitHub, GitLab, etc.)
 - **Go 1.21+**: [Install Go](https://golang.org/doc/install)
-- **Git**: For cloning and managing the repository
+- **Git**: For repository operations
 
-### For GitHub Actions
-- **Repository Secrets**: Configure `CIVO_TOKEN` as a repository secret
-- **Repository Permissions**: Workflow has `contents: write` permission for configuration updates
-
-### For GitHub CLI
-- **GitHub CLI**: [Install gh CLI](https://cli.github.com/)
-- **Authentication**: `gh auth login` to authenticate with GitHub
+### Optional (for authentication)
+- **Git Token**: Personal access token or app password for private repositories
+- **Git Username**: Username for Git authentication
 
 ## Installation
-
-### Local Installation
 
 1. **Clone the repository**:
    ```bash
    git clone <repository-url>
-   cd portainer-master-cluster
+   cd hyve-action-poc
    ```
 
 2. **Build the application**:
@@ -55,33 +51,85 @@ This application provides multiple ways to manage Civo Kubernetes clusters:
    ```bash
    # Create .env file with your Civo API token
    echo "CIVO_TOKEN=your_civo_api_token_here" > .env
+   
+   # Optional: Set Git token for private repositories
+   export HYVE_GIT_TOKEN=your_git_token_here
    ```
 
-### GitHub Actions Setup
+## Quick Start
 
-1. **Add repository secret**:
-   - Go to repository Settings → Secrets and variables → Actions
-   - Create new secret: `CIVO_TOKEN` with your Civo API token
+### 1. Add Your First Repository
 
-2. **The workflow is ready to use** - it's already configured in `.github/workflows/deploy-clusters.yml`
+Before using Hyve, you must configure a Git repository for state management:
+
+```bash
+# Add a repository (public)
+./hyve git add production --repo-url https://github.com/company/hyve-state.git
+
+# Add a repository (private with authentication)
+export HYVE_GIT_TOKEN=your_personal_access_token
+./hyve git add production --repo-url https://github.com/company/hyve-state.git --username your-username
+
+# Check status
+./hyve git status
+```
+
+### 2. Add Your First Cluster
+
+```bash
+# Add a master cluster (automatically runs reconciliation)
+./hyve cluster add master --region PHX1 --nodes g4s.kube.small --master-cluster
+
+# Add a worker cluster (automatically runs reconciliation)
+./hyve cluster add production --region PHX1 --nodes g4s.kube.medium,g4s.kube.medium,g4s.kube.large
+```
+
+### 3. Manual Reconciliation
+
+```bash
+# Run reconciliation manually if needed
+./hyve reconcile
+```
 
 ## Usage
 
-### Method 1: Local CLI
+### Git Repository Management
 
-Hyve provides a modern CLI interface built with Cobra that offers intuitive commands for cluster management.
+#### Git Commands
+
+```bash
+# Add repositories for different environments
+./hyve git add production --repo-url https://github.com/company/hyve-prod.git
+./hyve git add development --repo-url https://github.com/company/hyve-dev.git
+
+# List all configured repositories  
+./hyve git list
+
+# Switch between repositories
+./hyve git use development
+./hyve git use production
+
+# Show current repository status
+./hyve git status
+
+# Remove a repository
+./hyve git remove development
+
+# Reset all repositories (back to no configuration)
+./hyve git reset
+```
+
+### Cluster Management
 
 #### CLI Architecture
 
 The CLI follows a command-subcommand structure:
-- **Root command**: `hyve` - Shows help and available commands
-- **`reconcile`**: Processes all cluster configurations and reconciles with live state  
-- **`cluster`**: Parent command for cluster management operations
-  - **`add`**: Create new cluster configurations
-  - **`modify`**: Update existing configurations
-  - **`delete`**: Remove cluster configurations
-
-This replaces the previous flag-based approach with intuitive subcommands and named arguments.
+- **`hyve git`**: Git repository management
+- **`hyve reconcile`**: Manual reconciliation of all clusters in current repository
+- **`hyve cluster`**: Cluster operations (with automatic reconciliation)
+  - **`add`**: Create cluster + reconcile
+  - **`modify`**: Update cluster + reconcile  
+  - **`delete`**: Remove cluster + reconcile
 
 #### Basic Commands
 
@@ -89,36 +137,34 @@ This replaces the previous flag-based approach with intuitive subcommands and na
 # Show help
 ./hyve --help
 
-# Show all available commands
-./hyve help
-
-# Run reconciliation (deploy all clusters defined in state/clusters/)
+# Run manual reconciliation (deploy all clusters in current repository)
 ./hyve reconcile
 
-# Show cluster management commands
-./hyve cluster --help
-
-# Add a new cluster
+# Add a new cluster (automatically runs reconciliation)
 ./hyve cluster add production --region PHX1 --nodes g4s.kube.large,g4s.kube.large,g4s.kube.large
 
-# Add a master cluster
+# Add a master cluster (automatically runs reconciliation)
 ./hyve cluster add master --region PHX1 --nodes g4s.kube.small --master-cluster
 
-# Modify existing cluster (update node sizes)
+# Modify existing cluster (automatically runs reconciliation)
 ./hyve cluster modify production --nodes g4s.kube.medium,g4s.kube.medium,g4s.kube.large,g4s.kube.large,g4s.kube.large
 
-# Delete a cluster configuration
+# Delete a cluster (automatically runs reconciliation)
 ./hyve cluster delete production
 ```
 
 #### CLI Commands
 
-| Command | Description | 
-|---------|-------------|
-| `hyve reconcile` | Deploy all clusters defined in state/clusters/ |
-| `hyve cluster add [name]` | Create a new cluster configuration |
-| `hyve cluster modify [name]` | Update an existing cluster configuration |
-| `hyve cluster delete [name]` | Remove a cluster configuration |
+| Command | Description | Reconciliation |
+|---------|-------------|----------------|
+| `hyve git add [name]` | Add Git repository for state management | No |
+| `hyve git list` | List all configured repositories | No |
+| `hyve git use [name]` | Switch to different repository | No |
+| `hyve git status` | Show current repository status | No |
+| `hyve reconcile` | Deploy all clusters in current repository | Manual |
+| `hyve cluster add [name]` | Create cluster configuration | Automatic |
+| `hyve cluster modify [name]` | Update cluster configuration | Automatic |
+| `hyve cluster delete [name]` | Remove cluster configuration | Automatic |
 
 #### CLI Flags
 
@@ -240,14 +286,26 @@ gh run view --log
 | `-f cluster-type=<value>` | Kubernetes type | `k3s`, `talos` |
 | `-f master-cluster=<value>` | Master cluster flag | `true`, `false` |
 
-## Configuration Files
+## Configuration
+
+### Git Repository Structure
+
+Each Git repository contains cluster configurations in a `clusters/` directory:
+
+```
+repository-root/
+├── README.md                    # Repository documentation  
+├── clusters/                    # Cluster definitions
+│   ├── production.yaml
+│   ├── master.yaml
+│   └── staging.yaml
+└── .gitignore                   # Ignore temporary files
+```
 
 ### Cluster YAML Structure
 
-Cluster configurations are stored in `state/clusters/` directory:
-
 ```yaml
-# state/clusters/production.yaml
+# clusters/production.yaml
 apiVersion: v1
 kind: Cluster
 metadata:
@@ -275,32 +333,44 @@ spec:
     loadBalancer: true
 ```
 
-### Environment Configuration
-
-Create a `.env` file in the project root:
+### Local Environment Configuration
 
 ```bash
-# .env
+# .env file in Hyve CLI directory
 CIVO_TOKEN=your_civo_api_token_here
+
+# Environment variable for Git authentication (optional)
+export HYVE_GIT_TOKEN=your_personal_access_token
 ```
 
-## Deployment Modes
+### Repository Configuration Storage
 
-### 1. Reconciliation Mode (Default)
-- Reads all YAML files from `state/clusters/`
-- Compares with actual Civo cluster state
-- Creates, updates, or deletes clusters as needed
-- Ensures master cluster is ready before deploying workers
+Hyve stores repository configurations in SQLite database:
 
-### 2. CLI Mode
-- **Interactive Commands**: Use `hyve cluster` commands to create/modify/delete cluster YAML files
-- **Local Operations**: Operates on local filesystem configuration files
-- **Explicit Deployment**: Requires separate `hyve reconcile` command to deploy changes
+```
+~/.hyve/
+├── repositories.db              # SQLite database with repository configs
+└── config.yaml                 # Legacy config (unused in current version)
+```
 
-### 3. GitHub Actions Mode
-- **Automatic**: Triggered by push to main branch
-- **Manual**: Triggered via GitHub web UI or CLI
-- **With Parameters**: Creates YAML files, commits them, then deploys
+## Workflow Modes
+
+### 1. GitOps Workflow (Recommended)
+- **Repository-Based**: All cluster state stored in Git repositories
+- **Multi-Environment**: Separate repositories for dev/staging/prod
+- **Automatic Reconciliation**: Add/delete operations trigger immediate reconciliation  
+- **Version Controlled**: All changes committed and pushed to Git
+- **Audit Trail**: Complete history of all cluster configuration changes
+
+### 2. Manual Reconciliation
+- **Explicit Control**: Run `hyve reconcile` when desired
+- **Batch Operations**: Make multiple configuration changes before deploying
+- **Review Before Deploy**: Inspect changes in Git before reconciliation
+
+### 3. Multi-Repository Management
+- **Environment Isolation**: Completely separate state per environment
+- **Easy Switching**: `hyve git use <env>` to switch between environments  
+- **Independent Operations**: Changes in one repository don't affect others
 
 ## Master Cluster Dependencies
 
@@ -370,47 +440,79 @@ gh run watch
 
 ## Examples
 
-### Complete Workflow Example
+### Complete GitOps Workflow
 
-1. **Local Development**:
+1. **Initial Setup**:
    ```bash
-   # Create and test locally
-   ./hyve cluster add staging --region PHX1 --nodes g4s.kube.medium,g4s.kube.medium
-   ./hyve reconcile  # Deploy to test
+   # Add production repository
+   ./hyve git add production --repo-url https://github.com/company/hyve-prod.git
+   
+   # Add development repository  
+   ./hyve git add development --repo-url https://github.com/company/hyve-dev.git
+   
+   # List repositories
+   ./hyve git list
    ```
 
-2. **Commit to Repository**:
+2. **Development Environment**:
    ```bash
-   git add state/clusters/staging.yaml
-   git commit -m "Add staging cluster"
-   git push origin main  # Triggers automatic deployment
+   # Switch to development
+   ./hyve git use development
+   
+   # Add clusters (automatic reconciliation)
+   ./hyve cluster add dev-master --region PHX1 --nodes g4s.kube.small --master-cluster
+   ./hyve cluster add dev-app --region PHX1 --nodes g4s.kube.medium,g4s.kube.medium
    ```
 
-3. **Scale via GitHub CLI**:
+3. **Production Environment**:
    ```bash
-   gh workflow run "Deploy Civo Clusters" \
-     -f action=modify \
-     -f cluster-name=staging \
-     -f node-count=4
+   # Switch to production
+   ./hyve git use production
+   
+   # Add production clusters (automatic reconciliation)
+   ./hyve cluster add prod-master --region PHX1 --nodes g4s.kube.large --master-cluster
+   ./hyve cluster add prod-app --region PHX1 --nodes g4s.kube.large,g4s.kube.large,g4s.kube.large
    ```
 
-4. **Monitor Deployment**:
+4. **Scaling Operations**:
    ```bash
-   gh run watch
+   # Scale production app cluster (automatic reconciliation)
+   ./hyve cluster modify prod-app --nodes g4s.kube.large,g4s.kube.large,g4s.kube.large,g4s.kube.large,g4s.kube.large
    ```
 
 ### Multi-Region Setup
 
 ```bash
-# Master cluster in PHX1
-./hyve cluster add master-phx --region PHX1 --master-cluster
+# Set up production repository with master cluster
+./hyve git use production
+./hyve cluster add master-phx --region PHX1 --master-cluster --nodes g4s.kube.medium
 
-# Worker clusters in different regions  
+# Worker clusters in different regions (automatic reconciliation for each)
 ./hyve cluster add worker-nyc --region NYC1 --nodes g4s.kube.small,g4s.kube.small,g4s.kube.small
 ./hyve cluster add worker-fra --region FRA1 --nodes g4s.kube.small,g4s.kube.small
 
-# Deploy all
+# Manual reconciliation if needed
 ./hyve reconcile
+```
+
+### Repository Management
+
+```bash
+# List all environments
+./hyve git list
+
+# Check current environment  
+./hyve git status
+
+# Switch environments
+./hyve git use development
+./hyve cluster add test-feature --region PHX1 --nodes g4s.kube.small
+
+./hyve git use production  
+./hyve cluster delete old-cluster
+
+# Clean up old environment
+./hyve git remove development
 ```
 
 ## Contributing

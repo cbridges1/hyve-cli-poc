@@ -36,6 +36,6 @@ civo-cluster-deploy
 hyve
 
 # Test directories and repository states
-test-*-repo/
+test-*repo*/
 test-local-state/
 .hyve-state*/

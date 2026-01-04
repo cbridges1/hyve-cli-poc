@@ -81,8 +81,8 @@ func init() {
 	clusterCmd.AddCommand(deleteCmd)
 }
 
-// createStateManager creates appropriate state manager based on current repository
-func createStateManager(ctx context.Context) (*state.Manager, string, bool) {
+// createStateManager creates state manager from current repository
+func createStateManager(ctx context.Context) (*state.Manager, string) {
 	repoMgr, err := repository.NewManager()
 	if err != nil {
 		log.Fatalf("Failed to create repository manager: %v", err)
@@ -91,17 +91,19 @@ func createStateManager(ctx context.Context) (*state.Manager, string, bool) {
 
 	currentRepo, err := repoMgr.GetCurrentRepository()
 	if err != nil {
-		stateDir := "state/clusters"
-		log.Printf("Using local state directory: %s", stateDir)
-		log.Println("💡 Tip: Add Git repository with 'hyve git add <name> --repo-url <url>' for GitOps workflow")
-		return state.NewManager(stateDir), stateDir, false
+		log.Fatalf("❌ No Git repository configured. Hyve requires a Git repository for state management.\n\n" +
+			"To get started:\n" +
+			"  1. hyve git add <name> --repo-url <repository-url>\n" +
+			"  2. hyve cluster add <cluster-name> --region <region>\n\n" +
+			"Example:\n" +
+			"  hyve git add production --repo-url https://github.com/company/hyve-state.git")
 	}
 
 	log.Printf("Using Git repository '%s': %s", currentRepo.Name, currentRepo.RepoURL)
 
 	// Get token from environment
 	token := os.Getenv("HYVE_GIT_TOKEN")
-	stateMgr := state.NewManagerWithGit(currentRepo.RepoURL, currentRepo.LocalPath, currentRepo.Username, token)
+	stateMgr := state.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, currentRepo.Username, token)
 
 	// Initialize and sync Git repository
 	if err := stateMgr.InitializeGitRepo(ctx); err != nil {
@@ -116,23 +118,21 @@ func createStateManager(ctx context.Context) (*state.Manager, string, bool) {
 
 	// Get the state directory path
 	stateDir := filepath.Join(currentRepo.LocalPath, "clusters")
-	return stateMgr, stateDir, true
+	return stateMgr, stateDir
 }
 
-// commitStateChanges commits changes if using Git
-func commitStateChanges(ctx context.Context, stateMgr *state.Manager, message string, isGitConfigured bool) {
-	if isGitConfigured {
-		if err := stateMgr.CommitAndPush(ctx, message); err != nil {
-			log.Printf("Warning: Failed to commit changes to Git repository: %v", err)
-		} else {
-			log.Println("Changes committed and pushed to Git repository")
-		}
+// commitStateChanges commits changes to Git repository
+func commitStateChanges(ctx context.Context, stateMgr *state.Manager, message string) {
+	if err := stateMgr.CommitAndPush(ctx, message); err != nil {
+		log.Printf("Warning: Failed to commit changes to Git repository: %v", err)
+	} else {
+		log.Println("Changes committed and pushed to Git repository")
 	}
 }
 
 func addClusterFromCLI(clusterName, region, provider string, nodes []string, clusterType string, masterCluster bool) {
 	ctx := context.Background()
-	stateMgr, stateDir, isGitConfigured := createStateManager(ctx)
+	stateMgr, stateDir := createStateManager(ctx)
 
 	if err := os.MkdirAll(stateDir, 0755); err != nil {
 		log.Fatalf("Failed to create state directory: %v", err)
@@ -193,7 +193,7 @@ func addClusterFromCLI(clusterName, region, provider string, nodes []string, clu
 	log.Printf("  Master Cluster: %t", masterCluster)
 
 	// Commit changes to Git if configured
-	commitStateChanges(ctx, stateMgr, fmt.Sprintf("Add cluster %s", clusterName), isGitConfigured)
+	commitStateChanges(ctx, stateMgr, fmt.Sprintf("Add cluster %s", clusterName))
 
 	log.Printf("Exporting cluster information...")
 	configMgr := config.NewManager()
@@ -203,11 +203,13 @@ func addClusterFromCLI(clusterName, region, provider string, nodes []string, clu
 			log.Printf("Warning: Failed to export cluster info: %v", err)
 		}
 	}
+
+	runReconciliation()
 }
 
 func modifyClusterFromCLI(cmd *cobra.Command, clusterName string) {
 	ctx := context.Background()
-	stateMgr, stateDir, isGitConfigured := createStateManager(ctx)
+	stateMgr, stateDir := createStateManager(ctx)
 	filePath := filepath.Join(stateDir, clusterName+".yaml")
 
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
@@ -263,7 +265,7 @@ func modifyClusterFromCLI(cmd *cobra.Command, clusterName string) {
 	log.Printf("  Master Cluster: %t", clusterDef.Spec.MasterCluster)
 
 	// Commit changes to Git if configured
-	commitStateChanges(ctx, stateMgr, fmt.Sprintf("Modify cluster %s", clusterName), isGitConfigured)
+	commitStateChanges(ctx, stateMgr, fmt.Sprintf("Modify cluster %s", clusterName))
 
 	log.Printf("Exporting cluster information...")
 	configMgr := config.NewManager()
@@ -277,7 +279,7 @@ func modifyClusterFromCLI(cmd *cobra.Command, clusterName string) {
 
 func deleteClusterFromCLI(clusterName string) {
 	ctx := context.Background()
-	stateMgr, stateDir, isGitConfigured := createStateManager(ctx)
+	stateMgr, stateDir := createStateManager(ctx)
 	filePath := filepath.Join(stateDir, clusterName+".yaml")
 
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
@@ -289,8 +291,10 @@ func deleteClusterFromCLI(clusterName string) {
 	}
 
 	// Commit changes to Git if configured
-	commitStateChanges(ctx, stateMgr, fmt.Sprintf("Delete cluster %s", clusterName), isGitConfigured)
+	commitStateChanges(ctx, stateMgr, fmt.Sprintf("Delete cluster %s", clusterName))
 
 	log.Printf("Deleted cluster definition file: %s", filePath)
 	log.Printf("Cluster %s has been removed from configuration", clusterName)
+
+	runReconciliation()
 }

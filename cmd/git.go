@@ -175,8 +175,8 @@ func listGitRepositories() {
 
 	if len(repos) == 0 {
 		log.Println("❌ No Git repositories configured")
-		log.Println("Using local state directory: state/clusters")
-		log.Println("\nTo add a Git repository, use:")
+		log.Println("\nHyve requires at least one Git repository for state management.")
+		log.Println("To add a Git repository, use:")
 		log.Println("  hyve git add <name> --repo-url <repository-url>")
 		return
 	}
@@ -239,9 +239,9 @@ func showGitStatus() {
 
 	currentRepo, err := repoMgr.GetCurrentRepository()
 	if err != nil {
-		log.Println("❌ No current Git repository configured")
-		log.Println("Using local state directory: state/clusters")
-		log.Println("\nTo add a Git repository, use:")
+		log.Println("❌ No Git repository configured")
+		log.Println("\nHyve requires a Git repository for state management.")
+		log.Println("To add a Git repository, use:")
 		log.Println("  hyve git add <name> --repo-url <repository-url>")
 		return
 	}
@@ -294,7 +294,7 @@ func removeGitRepository(name string) {
 			log.Printf("Current repository is now: %s", current.Name)
 		}
 	} else {
-		log.Println("No repositories remaining. Using local state directory: state/clusters")
+		log.Println("No repositories remaining. Add a new repository to continue using Hyve.")
 	}
 }
 
@@ -324,5 +324,5 @@ func resetGitConfiguration() {
 	}
 
 	log.Println("✅ All Git configurations reset")
-	log.Println("Hyve will now use local state directory: state/clusters")
+	log.Println("Add a Git repository to continue using Hyve: hyve git add <name> --repo-url <url>")
 }

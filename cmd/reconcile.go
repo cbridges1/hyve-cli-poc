@@ -15,8 +15,8 @@ import (
 
 var reconcileCmd = &cobra.Command{
 	Use:   "reconcile",
-	Short: "Reconcile clusters based on YAML files",
-	Long: `Reconcile clusters by reading cluster definitions from YAML files in the state/clusters directory
+	Short: "Reconcile clusters based on YAML files in Git repository",
+	Long: `Reconcile clusters by reading cluster definitions from YAML files in the current Git repository
 and ensuring the actual infrastructure matches the desired state.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		runReconciliation()
@@ -32,8 +32,8 @@ func runReconciliation() {
 
 	ctx := context.Background()
 
-	// Create state manager based on current repository configuration
-	stateMgr, isGitConfigured := createStateManagerFromRepository(ctx)
+	// Create state manager from current repository configuration
+	stateMgr := createStateManagerFromRepository(ctx)
 
 	clusterDefs, err := stateMgr.LoadClusterDefinitions()
 	if err != nil {
@@ -53,20 +53,18 @@ func runReconciliation() {
 		log.Fatalf("Reconciliation failed: %v", err)
 	}
 
-	// If using Git, commit and push changes
-	if isGitConfigured {
-		if err := stateMgr.CommitAndPush(ctx, "Update cluster state after reconciliation"); err != nil {
-			log.Printf("Warning: Failed to commit changes to Git repository: %v", err)
-		} else {
-			log.Println("Changes committed and pushed to Git repository")
-		}
+	// Commit and push changes to Git repository
+	if err := stateMgr.CommitAndPush(ctx, "Update cluster state after reconciliation"); err != nil {
+		log.Printf("Warning: Failed to commit changes to Git repository: %v", err)
+	} else {
+		log.Println("Changes committed and pushed to Git repository")
 	}
 
 	log.Println("Cluster reconciliation completed")
 }
 
 // createStateManagerFromRepository creates state manager from current repository configuration
-func createStateManagerFromRepository(ctx context.Context) (*state.Manager, bool) {
+func createStateManagerFromRepository(ctx context.Context) *state.Manager {
 	repoMgr, err := repository.NewManager()
 	if err != nil {
 		log.Fatalf("Failed to create repository manager: %v", err)
@@ -75,16 +73,19 @@ func createStateManagerFromRepository(ctx context.Context) (*state.Manager, bool
 
 	currentRepo, err := repoMgr.GetCurrentRepository()
 	if err != nil {
-		log.Println("Using local state directory: state/clusters")
-		log.Println("💡 Tip: Add Git repository with 'hyve git add <name> --repo-url <url>' for GitOps workflow")
-		return state.NewManager("state/clusters"), false
+		log.Fatalf("❌ No Git repository configured. Hyve requires a Git repository for state management.\n\n" +
+			"To get started:\n" +
+			"  1. hyve git add <name> --repo-url <repository-url>\n" +
+			"  2. hyve reconcile\n\n" +
+			"Example:\n" +
+			"  hyve git add production --repo-url https://github.com/company/hyve-state.git")
 	}
 
 	log.Printf("Using Git repository '%s': %s", currentRepo.Name, currentRepo.RepoURL)
 
 	// Get token from environment
 	token := os.Getenv("HYVE_GIT_TOKEN")
-	stateMgr := state.NewManagerWithGit(currentRepo.RepoURL, currentRepo.LocalPath, currentRepo.Username, token)
+	stateMgr := state.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, currentRepo.Username, token)
 
 	// Initialize and sync Git repository
 	if err := stateMgr.InitializeGitRepo(ctx); err != nil {
@@ -96,5 +97,5 @@ func createStateManagerFromRepository(ctx context.Context) (*state.Manager, bool
 	}
 
 	log.Println("Git repository synchronized")
-	return stateMgr, true
+	return stateMgr
 }
