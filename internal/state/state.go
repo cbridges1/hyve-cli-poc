@@ -11,19 +11,59 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"civo-cluster-deploy/internal/cluster"
+	"civo-cluster-deploy/internal/git"
 	"civo-cluster-deploy/internal/types"
 )
 
 // Manager handles state file operations
 type Manager struct {
-	stateDir string
+	stateDir   string
+	gitManager *git.Manager
 }
 
-// NewManager creates a new state manager
+// NewManager creates a new state manager for local directory
 func NewManager(stateDir string) *Manager {
 	return &Manager{
 		stateDir: stateDir,
 	}
+}
+
+// NewManagerWithGit creates a new state manager with Git repository support
+func NewManagerWithGit(gitRepoURL, localPath, username, token string) *Manager {
+	gitMgr := git.NewManager(gitRepoURL, localPath, username, token)
+	return &Manager{
+		stateDir:   gitMgr.GetStateDir(),
+		gitManager: gitMgr,
+	}
+}
+
+// InitializeGitRepo initializes or clones the Git repository
+func (m *Manager) InitializeGitRepo(ctx context.Context) error {
+	if m.gitManager == nil {
+		return fmt.Errorf("Git manager not configured")
+	}
+	return m.gitManager.InitializeRepo(ctx)
+}
+
+// SyncWithRemote pulls latest changes from the remote repository
+func (m *Manager) SyncWithRemote(ctx context.Context) error {
+	if m.gitManager == nil {
+		return nil // No-op for local state manager
+	}
+	return m.gitManager.Pull(ctx)
+}
+
+// CommitAndPush commits changes and pushes to remote repository
+func (m *Manager) CommitAndPush(ctx context.Context, message string) error {
+	if m.gitManager == nil {
+		return nil // No-op for local state manager
+	}
+
+	if err := m.gitManager.Commit(ctx, message); err != nil {
+		return err
+	}
+
+	return m.gitManager.Push(ctx)
 }
 
 // LoadClusterDefinitions loads all cluster definitions from YAML files

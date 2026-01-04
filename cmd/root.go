@@ -22,4 +22,5 @@ func Execute() {
 func init() {
 	rootCmd.AddCommand(reconcileCmd)
 	rootCmd.AddCommand(clusterCmd)
+	rootCmd.AddCommand(gitCmd)
 }
