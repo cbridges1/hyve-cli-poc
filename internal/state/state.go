@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -123,14 +124,14 @@ func (m *Manager) FindMasterCluster(clusters []types.ClusterDefinition) *types.C
 }
 
 // IsMasterClusterReady checks if the master cluster exists and is in active state by querying the API
-func (m *Manager) IsMasterClusterReady(clusters []types.ClusterDefinition, clusterMgr *cluster.Manager) bool {
+func (m *Manager) IsMasterClusterReady(ctx context.Context, clusters []types.ClusterDefinition, clusterMgr *cluster.Manager) bool {
 	masterCluster := m.FindMasterCluster(clusters)
 	if masterCluster == nil {
 		return false
 	}
 
 	// Check if master cluster exists and is active via API
-	actualCluster, err := clusterMgr.FindByName(masterCluster.Metadata.Name)
+	actualCluster, err := clusterMgr.FindByName(ctx, masterCluster.Metadata.Name)
 	if err != nil || actualCluster == nil {
 		return false
 	}

@@ -1,6 +1,6 @@
-# Civo Cluster Deploy
+# Hyve - Kubernetes Cluster Management CLI
 
-A declarative Kubernetes cluster management tool for Civo Cloud that supports both local CLI usage and automated GitHub Actions deployment.
+A declarative Kubernetes cluster management tool for Civo Cloud built with Cobra CLI that supports both local CLI usage and automated GitHub Actions deployment.
 
 ## Overview
 
@@ -11,11 +11,12 @@ This application provides multiple ways to manage Civo Kubernetes clusters:
 
 ## Features
 
+- **Modern CLI Interface**: Built with Cobra CLI for intuitive command structure
 - **Declarative Configuration**: Define clusters using YAML files
 - **Master Cluster Dependencies**: Ensures master clusters are ready before deploying workers
 - **Idempotent Operations**: Safe to run multiple times without side effects
 - **Firewall Management**: Automatic creation and cleanup of cluster firewalls
-- **CLI and Web UI**: Multiple interfaces for cluster management
+- **Multiple Interfaces**: CLI commands, GitHub Actions, and direct API access
 - **GitOps Ready**: Full GitHub Actions integration with automated deployments
 
 ## Prerequisites
@@ -47,7 +48,7 @@ This application provides multiple ways to manage Civo Kubernetes clusters:
 
 2. **Build the application**:
    ```bash
-   go build -o civo-cluster-deploy .
+   go build -o hyve .
    ```
 
 3. **Configure environment**:
@@ -68,39 +69,66 @@ This application provides multiple ways to manage Civo Kubernetes clusters:
 
 ### Method 1: Local CLI
 
+Hyve provides a modern CLI interface built with Cobra that offers intuitive commands for cluster management.
+
+#### CLI Architecture
+
+The CLI follows a command-subcommand structure:
+- **Root command**: `hyve` - Shows help and available commands
+- **`reconcile`**: Processes all cluster configurations and reconciles with live state  
+- **`cluster`**: Parent command for cluster management operations
+  - **`add`**: Create new cluster configurations
+  - **`modify`**: Update existing configurations
+  - **`delete`**: Remove cluster configurations
+
+This replaces the previous flag-based approach with intuitive subcommands and named arguments.
+
 #### Basic Commands
 
 ```bash
 # Show help
-./civo-cluster-deploy --help
+./hyve --help
+
+# Show all available commands
+./hyve help
 
 # Run reconciliation (deploy all clusters defined in state/clusters/)
-./civo-cluster-deploy
+./hyve reconcile
+
+# Show cluster management commands
+./hyve cluster --help
 
 # Add a new cluster
-./civo-cluster-deploy -action=add -cluster-name=production -region=PHX1 -node-count=3 -size=g4s.kube.large
+./hyve cluster add production --region PHX1 --nodes g4s.kube.large,g4s.kube.large,g4s.kube.large
 
 # Add a master cluster
-./civo-cluster-deploy -action=add -cluster-name=master -region=PHX1 -node-count=1 -size=g4s.kube.small -master-cluster=true
+./hyve cluster add master --region PHX1 --nodes g4s.kube.small --master-cluster
 
-# Modify existing cluster
-./civo-cluster-deploy -action=modify -cluster-name=production -node-count=5
+# Modify existing cluster (update node sizes)
+./hyve cluster modify production --nodes g4s.kube.medium,g4s.kube.medium,g4s.kube.large,g4s.kube.large,g4s.kube.large
 
 # Delete a cluster configuration
-./civo-cluster-deploy -action=delete -cluster-name=production
+./hyve cluster delete production
 ```
 
-#### CLI Parameters
+#### CLI Commands
 
-| Parameter | Description | Default | Required |
-|-----------|-------------|---------|----------|
-| `-action` | Action to perform: add, modify, delete | | When managing clusters |
-| `-cluster-name` | Name of the cluster | | When using -action |
-| `-region` | Civo region | PHX1 | No |
-| `-node-count` | Number of nodes | 1 | No |
-| `-size` | Node size | g4s.kube.small | No |
-| `-cluster-type` | Kubernetes type | k3s | No |
-| `-master-cluster` | Is master cluster | false | No |
+| Command | Description | 
+|---------|-------------|
+| `hyve reconcile` | Deploy all clusters defined in state/clusters/ |
+| `hyve cluster add [name]` | Create a new cluster configuration |
+| `hyve cluster modify [name]` | Update an existing cluster configuration |
+| `hyve cluster delete [name]` | Remove a cluster configuration |
+
+#### CLI Flags
+
+| Flag | Short | Description | Default |
+|------|-------|-------------|---------|
+| `--region` | `-r` | Civo region | PHX1 |
+| `--provider` | `-p` | Cloud provider | civo |
+| `--nodes` | `-n` | Node sizes (comma-separated) | g4s.kube.small |
+| `--cluster-type` | `-t` | Kubernetes type | k3s |
+| `--master-cluster` | `-m` | Is master cluster | false |
 
 #### Available Regions
 - `PHX1` - Phoenix, USA
@@ -226,8 +254,11 @@ metadata:
   name: production
   region: PHX1
 spec:
-  nodeCount: 3
-  size: g4s.kube.large
+  provider: civo
+  nodes:
+    - g4s.kube.large
+    - g4s.kube.large
+    - g4s.kube.large
   clusterType: k3s
   masterCluster: false  # Set to true for master clusters
   firewall:
@@ -239,6 +270,9 @@ spec:
         cidr:
           - 0.0.0.0/0
         direction: ingress
+  ingress:
+    enabled: true
+    loadBalancer: true
 ```
 
 ### Environment Configuration
@@ -259,9 +293,9 @@ CIVO_TOKEN=your_civo_api_token_here
 - Ensures master cluster is ready before deploying workers
 
 ### 2. CLI Mode
-- Uses command-line parameters to create/modify/delete cluster YAML files
-- Operates on local filesystem only
-- Requires separate reconciliation run to deploy
+- **Interactive Commands**: Use `hyve cluster` commands to create/modify/delete cluster YAML files
+- **Local Operations**: Operates on local filesystem configuration files
+- **Explicit Deployment**: Requires separate `hyve reconcile` command to deploy changes
 
 ### 3. GitHub Actions Mode
 - **Automatic**: Triggered by push to main branch
@@ -282,7 +316,7 @@ The application enforces master cluster dependencies:
 ### Local Debugging
 ```bash
 # Run with verbose output
-./civo-cluster-deploy 2>&1 | tee deployment.log
+./hyve reconcile 2>&1 | tee deployment.log
 
 # Check cluster status directly via Civo CLI
 civo kubernetes list
@@ -341,8 +375,8 @@ gh run watch
 1. **Local Development**:
    ```bash
    # Create and test locally
-   ./civo-cluster-deploy -action=add -cluster-name=staging -region=PHX1 -node-count=2 -size=g4s.kube.medium
-   ./civo-cluster-deploy  # Deploy to test
+   ./hyve cluster add staging --region PHX1 --nodes g4s.kube.medium,g4s.kube.medium
+   ./hyve reconcile  # Deploy to test
    ```
 
 2. **Commit to Repository**:
@@ -369,14 +403,14 @@ gh run watch
 
 ```bash
 # Master cluster in PHX1
-./civo-cluster-deploy -action=add -cluster-name=master-phx -region=PHX1 -master-cluster=true
+./hyve cluster add master-phx --region PHX1 --master-cluster
 
 # Worker clusters in different regions  
-./civo-cluster-deploy -action=add -cluster-name=worker-nyc -region=NYC1 -node-count=3
-./civo-cluster-deploy -action=add -cluster-name=worker-fra -region=FRA1 -node-count=2
+./hyve cluster add worker-nyc --region NYC1 --nodes g4s.kube.small,g4s.kube.small,g4s.kube.small
+./hyve cluster add worker-fra --region FRA1 --nodes g4s.kube.small,g4s.kube.small
 
 # Deploy all
-./civo-cluster-deploy
+./hyve reconcile
 ```
 
 ## Contributing

@@ -33,3 +33,4 @@ go.work.sum
 # .vscode/
 
 civo-cluster-deploy
+hyve
