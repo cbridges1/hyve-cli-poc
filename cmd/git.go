@@ -2,9 +2,9 @@ package cmd
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -29,7 +29,6 @@ The repository name is used as a friendly identifier for switching between repos
 	Run: func(cmd *cobra.Command, args []string) {
 		repoName := args[0]
 		repoURL, _ := cmd.Flags().GetString("repo-url")
-		localPath, _ := cmd.Flags().GetString("local-path")
 		username, _ := cmd.Flags().GetString("username")
 		setCurrent, _ := cmd.Flags().GetBool("set-current")
 
@@ -37,7 +36,7 @@ The repository name is used as a friendly identifier for switching between repos
 			log.Fatal("Repository URL is required. Use --repo-url flag.")
 		}
 
-		addGitRepository(repoName, repoURL, localPath, username, setCurrent)
+		addGitRepository(repoName, repoURL, username, setCurrent)
 	},
 }
 
@@ -112,7 +111,6 @@ var gitCredentialsCmd = &cobra.Command{
 
 func init() {
 	gitAddCmd.Flags().StringP("repo-url", "r", "", "Git repository URL (required)")
-	gitAddCmd.Flags().StringP("local-path", "l", "", "Local path to clone/store the repository (default: .hyve-state-[repo-name])")
 	gitAddCmd.Flags().StringP("username", "u", "", "Git username for authentication (stored in repository config)")
 	gitAddCmd.Flags().BoolP("set-current", "c", false, "Set this repository as current after adding")
 
@@ -129,9 +127,19 @@ func init() {
 	gitCmd.AddCommand(gitCredentialsCmd)
 }
 
-func addGitRepository(name, repoURL, localPath, username string, setCurrent bool) {
-	if localPath == "" {
-		localPath = fmt.Sprintf(".hyve-state-%s", strings.ToLower(name))
+func addGitRepository(name, repoURL, username string, setCurrent bool) {
+	// Generate local path in centralized repositories directory
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		homeDir = "."
+	}
+
+	repositoriesDir := filepath.Join(homeDir, ".hyve", "repositories")
+	localPath := filepath.Join(repositoriesDir, strings.ToLower(name))
+
+	// Ensure repositories directory exists
+	if err := os.MkdirAll(repositoriesDir, 0755); err != nil {
+		log.Printf("Warning: Failed to create repositories directory: %v", err)
 	}
 
 	log.Printf("Adding Git repository '%s': %s", name, repoURL)
