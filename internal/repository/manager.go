@@ -18,25 +18,15 @@ import (
 
 // Repository represents a Git repository configuration
 type Repository struct {
-	ID                int       `json:"id"`
-	Name              string    `json:"name"`
-	RepoURL           string    `json:"repo_url"`
-	LocalPath         string    `json:"local_path"`
-	Username          string    `json:"username"`
-	Token             string    `json:"-"` // Not serialized for security (legacy)
-	EncryptedPassword string    `json:"-"` // Not serialized for security
-	IsCurrent         bool      `json:"is_current"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
-	manager           *Manager  `json:"-"` // Reference to manager for decryption
-}
-
-// GetPassword returns the decrypted password for this repository
-func (r *Repository) GetPassword() (string, error) {
-	if r.manager == nil {
-		return "", fmt.Errorf("repository manager not available for password decryption")
-	}
-	return r.manager.decryptPassword(r.EncryptedPassword)
+	ID        int       `json:"id"`
+	Name      string    `json:"name"`
+	RepoURL   string    `json:"repo_url"`
+	LocalPath string    `json:"local_path"`
+	Username  string    `json:"username"`
+	Token     string    `json:"-"` // Not serialized for security (legacy)
+	IsCurrent bool      `json:"is_current"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Manager handles repository configurations using SQLite
@@ -88,7 +78,6 @@ func (m *Manager) initializeDB() error {
 		repo_url TEXT NOT NULL,
 		local_path TEXT NOT NULL,
 		username TEXT,
-		encrypted_password TEXT,
 		is_current BOOLEAN DEFAULT FALSE,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -115,7 +104,7 @@ func (m *Manager) Close() error {
 }
 
 // AddRepository adds a new repository configuration
-func (m *Manager) AddRepository(name, repoURL, localPath, username, password string) (*Repository, error) {
+func (m *Manager) AddRepository(name, repoURL, localPath, username string) (*Repository, error) {
 	// Check if repository with this name already exists
 	if exists, err := m.repositoryExists(name); err != nil {
 		return nil, err
@@ -136,18 +125,12 @@ func (m *Manager) AddRepository(name, repoURL, localPath, username, password str
 		}
 	}
 
-	// Encrypt the password if provided
-	encryptedPassword, err := m.encryptPassword(password)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encrypt password: %w", err)
-	}
-
 	insertSQL := `
-	INSERT INTO repositories (name, repo_url, local_path, username, encrypted_password, is_current)
-	VALUES (?, ?, ?, ?, ?, ?)
+	INSERT INTO repositories (name, repo_url, local_path, username, is_current)
+	VALUES (?, ?, ?, ?, ?)
 	`
 
-	result, err := m.db.Exec(insertSQL, name, repoURL, localPath, username, encryptedPassword, isFirst)
+	result, err := m.db.Exec(insertSQL, name, repoURL, localPath, username, isFirst)
 	if err != nil {
 		return nil, fmt.Errorf("failed to insert repository: %w", err)
 	}
@@ -161,20 +144,14 @@ func (m *Manager) AddRepository(name, repoURL, localPath, username, password str
 }
 
 // UpdateRepository updates an existing repository configuration
-func (m *Manager) UpdateRepository(name, repoURL, localPath, username, password string) (*Repository, error) {
-	// Encrypt the password if provided
-	encryptedPassword, err := m.encryptPassword(password)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encrypt password: %w", err)
-	}
-
+func (m *Manager) UpdateRepository(name, repoURL, localPath, username string) (*Repository, error) {
 	updateSQL := `
 	UPDATE repositories 
-	SET repo_url = ?, local_path = ?, username = ?, encrypted_password = ?, updated_at = CURRENT_TIMESTAMP
+	SET repo_url = ?, local_path = ?, username = ?, updated_at = CURRENT_TIMESTAMP
 	WHERE name = ?
 	`
 
-	result, err := m.db.Exec(updateSQL, repoURL, localPath, username, encryptedPassword, name)
+	result, err := m.db.Exec(updateSQL, repoURL, localPath, username, name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update repository: %w", err)
 	}
@@ -233,7 +210,7 @@ func (m *Manager) DeleteRepository(name string) error {
 // ListRepositories returns all repository configurations
 func (m *Manager) ListRepositories() ([]*Repository, error) {
 	selectSQL := `
-	SELECT id, name, repo_url, local_path, username, encrypted_password, is_current, created_at, updated_at
+	SELECT id, name, repo_url, local_path, username, is_current, created_at, updated_at
 	FROM repositories
 	ORDER BY is_current DESC, name ASC
 	`
@@ -250,7 +227,7 @@ func (m *Manager) ListRepositories() ([]*Repository, error) {
 		var createdAt, updatedAt string
 
 		err := rows.Scan(&repo.ID, &repo.Name, &repo.RepoURL, &repo.LocalPath,
-			&repo.Username, &repo.EncryptedPassword, &repo.IsCurrent, &createdAt, &updatedAt)
+			&repo.Username, &repo.IsCurrent, &createdAt, &updatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan repository: %w", err)
 		}
@@ -263,8 +240,6 @@ func (m *Manager) ListRepositories() ([]*Repository, error) {
 			repo.UpdatedAt = time.Now()
 		}
 
-		// Set manager reference for password decryption
-		repo.manager = m
 		repositories = append(repositories, repo)
 	}
 
@@ -274,7 +249,7 @@ func (m *Manager) ListRepositories() ([]*Repository, error) {
 // GetRepositoryByName returns a repository by name
 func (m *Manager) GetRepositoryByName(name string) (*Repository, error) {
 	selectSQL := `
-	SELECT id, name, repo_url, local_path, username, encrypted_password, is_current, created_at, updated_at
+	SELECT id, name, repo_url, local_path, username, is_current, created_at, updated_at
 	FROM repositories
 	WHERE name = ?
 	`
@@ -283,7 +258,7 @@ func (m *Manager) GetRepositoryByName(name string) (*Repository, error) {
 	var createdAt, updatedAt string
 
 	err := m.db.QueryRow(selectSQL, name).Scan(&repo.ID, &repo.Name, &repo.RepoURL,
-		&repo.LocalPath, &repo.Username, &repo.EncryptedPassword, &repo.IsCurrent, &createdAt, &updatedAt)
+		&repo.LocalPath, &repo.Username, &repo.IsCurrent, &createdAt, &updatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("repository '%s' not found", name)
@@ -299,15 +274,13 @@ func (m *Manager) GetRepositoryByName(name string) (*Repository, error) {
 		repo.UpdatedAt = time.Now()
 	}
 
-	// Set manager reference for password decryption
-	repo.manager = m
 	return repo, nil
 }
 
 // GetRepositoryByID returns a repository by ID
 func (m *Manager) GetRepositoryByID(id int) (*Repository, error) {
 	selectSQL := `
-	SELECT id, name, repo_url, local_path, username, encrypted_password, is_current, created_at, updated_at
+	SELECT id, name, repo_url, local_path, username, is_current, created_at, updated_at
 	FROM repositories
 	WHERE id = ?
 	`
@@ -316,7 +289,7 @@ func (m *Manager) GetRepositoryByID(id int) (*Repository, error) {
 	var createdAt, updatedAt string
 
 	err := m.db.QueryRow(selectSQL, id).Scan(&repo.ID, &repo.Name, &repo.RepoURL,
-		&repo.LocalPath, &repo.Username, &repo.EncryptedPassword, &repo.IsCurrent, &createdAt, &updatedAt)
+		&repo.LocalPath, &repo.Username, &repo.IsCurrent, &createdAt, &updatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("repository with ID %d not found", id)
@@ -332,15 +305,13 @@ func (m *Manager) GetRepositoryByID(id int) (*Repository, error) {
 		repo.UpdatedAt = time.Now()
 	}
 
-	// Set manager reference for password decryption
-	repo.manager = m
 	return repo, nil
 }
 
 // GetCurrentRepository returns the currently selected repository
 func (m *Manager) GetCurrentRepository() (*Repository, error) {
 	selectSQL := `
-	SELECT id, name, repo_url, local_path, username, encrypted_password, is_current, created_at, updated_at
+	SELECT id, name, repo_url, local_path, username, is_current, created_at, updated_at
 	FROM repositories
 	WHERE is_current = TRUE
 	LIMIT 1
@@ -350,7 +321,7 @@ func (m *Manager) GetCurrentRepository() (*Repository, error) {
 	var createdAt, updatedAt string
 
 	err := m.db.QueryRow(selectSQL).Scan(&repo.ID, &repo.Name, &repo.RepoURL,
-		&repo.LocalPath, &repo.Username, &repo.EncryptedPassword, &repo.IsCurrent, &createdAt, &updatedAt)
+		&repo.LocalPath, &repo.Username, &repo.IsCurrent, &createdAt, &updatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("no current repository configured")
@@ -366,8 +337,6 @@ func (m *Manager) GetCurrentRepository() (*Repository, error) {
 		repo.UpdatedAt = time.Now()
 	}
 
-	// Set manager reference for password decryption
-	repo.manager = m
 	return repo, nil
 }
 

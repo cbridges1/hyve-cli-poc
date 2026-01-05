@@ -11,6 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"civo-cluster-deploy/internal/config"
+	"civo-cluster-deploy/internal/credentials"
 	"civo-cluster-deploy/internal/repository"
 	"civo-cluster-deploy/internal/state"
 	"civo-cluster-deploy/internal/types"
@@ -97,14 +98,28 @@ func createStateManager(ctx context.Context) (*state.Manager, string) {
 
 	log.Printf("Using Git repository '%s': %s", currentRepo.Name, currentRepo.RepoURL)
 
-	// Get authentication - prefer stored password, fallback to environment token
+	// Get authentication - prefer global credentials, fallback to environment token
+	credsMgr, err := credentials.NewManager()
 	var authToken string
-	if storedPassword, err := currentRepo.GetPassword(); err == nil && storedPassword != "" {
-		authToken = storedPassword
-	} else {
+	var authUsername = currentRepo.Username
+
+	if err == nil {
+		defer credsMgr.Close()
+		if creds, _ := credsMgr.GetCredentials(); creds != nil {
+			if password, err := creds.GetPassword(); err == nil && password != "" {
+				authToken = password
+				if authUsername == "" {
+					authUsername = creds.Username
+				}
+			}
+		}
+	}
+
+	if authToken == "" {
 		authToken = os.Getenv("HYVE_GIT_TOKEN")
 	}
-	stateMgr := state.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, currentRepo.Username, authToken)
+
+	stateMgr := state.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
 
 	// Initialize and sync Git repository
 	if err := stateMgr.InitializeGitRepo(ctx); err != nil {
