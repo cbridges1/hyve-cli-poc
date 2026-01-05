@@ -10,7 +10,6 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"civo-cluster-deploy/internal/cluster"
 	"civo-cluster-deploy/internal/git"
 	"civo-cluster-deploy/internal/types"
 )

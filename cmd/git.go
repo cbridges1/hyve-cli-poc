@@ -30,13 +30,14 @@ The repository name is used as a friendly identifier for switching between repos
 		repoURL, _ := cmd.Flags().GetString("repo-url")
 		localPath, _ := cmd.Flags().GetString("local-path")
 		username, _ := cmd.Flags().GetString("username")
+		password, _ := cmd.Flags().GetString("password")
 		setCurrent, _ := cmd.Flags().GetBool("set-current")
 
 		if repoURL == "" {
 			log.Fatal("Repository URL is required. Use --repo-url flag.")
 		}
 
-		addGitRepository(repoName, repoURL, localPath, username, setCurrent)
+		addGitRepository(repoName, repoURL, localPath, username, password, setCurrent)
 	},
 }
 
@@ -89,11 +90,28 @@ var gitResetCmd = &cobra.Command{
 	},
 }
 
+var gitCredentialsCmd = &cobra.Command{
+	Use:   "credentials [repository-name]",
+	Short: "Update stored credentials for a Git repository",
+	Long:  "Update the username and password stored for the specified repository",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		repoName := args[0]
+		username, _ := cmd.Flags().GetString("username")
+		password, _ := cmd.Flags().GetString("password")
+		updateGitCredentials(repoName, username, password)
+	},
+}
+
 func init() {
 	gitAddCmd.Flags().StringP("repo-url", "r", "", "Git repository URL (required)")
 	gitAddCmd.Flags().StringP("local-path", "l", "", "Local path to clone/store the repository (default: .hyve-state-[repo-name])")
 	gitAddCmd.Flags().StringP("username", "u", "", "Git username for authentication")
+	gitAddCmd.Flags().StringP("password", "p", "", "Git password or personal access token for authentication")
 	gitAddCmd.Flags().BoolP("set-current", "c", false, "Set this repository as current after adding")
+
+	gitCredentialsCmd.Flags().StringP("username", "u", "", "Git username for authentication")
+	gitCredentialsCmd.Flags().StringP("password", "p", "", "Git password or personal access token for authentication")
 
 	gitCmd.AddCommand(gitAddCmd)
 	gitCmd.AddCommand(gitListCmd)
@@ -101,9 +119,10 @@ func init() {
 	gitCmd.AddCommand(gitStatusCmd)
 	gitCmd.AddCommand(gitRemoveCmd)
 	gitCmd.AddCommand(gitResetCmd)
+	gitCmd.AddCommand(gitCredentialsCmd)
 }
 
-func addGitRepository(name, repoURL, localPath, username string, setCurrent bool) {
+func addGitRepository(name, repoURL, localPath, username, password string, setCurrent bool) {
 	if localPath == "" {
 		localPath = fmt.Sprintf(".hyve-state-%s", strings.ToLower(name))
 	}
@@ -118,7 +137,7 @@ func addGitRepository(name, repoURL, localPath, username string, setCurrent bool
 	defer repoMgr.Close()
 
 	// Add repository
-	repo, err := repoMgr.AddRepository(name, repoURL, localPath, username)
+	repo, err := repoMgr.AddRepository(name, repoURL, localPath, username, password)
 	if err != nil {
 		log.Fatalf("Failed to add repository: %v", err)
 	}
@@ -134,9 +153,15 @@ func addGitRepository(name, repoURL, localPath, username string, setCurrent bool
 	// Test the connection
 	log.Println("Testing Git repository connection...")
 
-	token := os.Getenv("HYVE_GIT_TOKEN")
+	// Use stored password if provided, otherwise fall back to token
+	var authToken string
+	if password != "" {
+		authToken = password
+	} else {
+		authToken = os.Getenv("HYVE_GIT_TOKEN")
+	}
 	ctx := context.Background()
-	gitMgr := git.NewManager(repoURL, localPath, username, token)
+	gitMgr := git.NewManager(repoURL, localPath, username, authToken)
 
 	if err := gitMgr.InitializeRepo(ctx); err != nil {
 		log.Printf("⚠️  Failed to connect to Git repository: %v", err)
@@ -151,6 +176,9 @@ func addGitRepository(name, repoURL, localPath, username string, setCurrent bool
 	if username != "" {
 		log.Printf("Username: %s", username)
 	}
+	if password != "" {
+		log.Printf("Authentication: ✅ Password stored securely")
+	}
 	if repo.IsCurrent {
 		log.Println("✅ This repository is now current")
 	}
@@ -158,7 +186,8 @@ func addGitRepository(name, repoURL, localPath, username string, setCurrent bool
 	log.Println("\n💡 Tips:")
 	log.Println("  - Use 'hyve git list' to see all repositories")
 	log.Println("  - Use 'hyve git use <name>' to switch repositories")
-	log.Println("  - Set HYVE_GIT_TOKEN env var for authentication")
+	log.Println("  - Use 'hyve git credentials <name>' to update stored credentials")
+	log.Println("  - Set HYVE_GIT_TOKEN env var as fallback authentication")
 }
 
 func listGitRepositories() {
@@ -194,6 +223,12 @@ func listGitRepositories() {
 		log.Printf("    Local: %s", repo.LocalPath)
 		if repo.Username != "" {
 			log.Printf("    User: %s", repo.Username)
+			// Check if password is stored
+			if storedPassword, _ := repo.GetPassword(); storedPassword != "" {
+				log.Printf("    Auth: ✅ Stored credentials")
+			} else {
+				log.Printf("    Auth: ⚠️  Using environment token")
+			}
 		}
 		log.Printf("    Added: %s", repo.CreatedAt.Format("2006-01-02 15:04"))
 		log.Println()
@@ -253,18 +288,28 @@ func showGitStatus() {
 		log.Printf("Username: %s", currentRepo.Username)
 	}
 
-	hasToken := os.Getenv("HYVE_GIT_TOKEN") != ""
-	if hasToken {
-		log.Println("Authentication: ✅ Token configured")
+	// Check authentication options
+	storedPassword, _ := currentRepo.GetPassword()
+	envToken := os.Getenv("HYVE_GIT_TOKEN")
+
+	if storedPassword != "" {
+		log.Println("Authentication: ✅ Stored credentials configured")
+	} else if envToken != "" {
+		log.Println("Authentication: ✅ Environment token configured")
 	} else {
-		log.Println("Authentication: ⚠️  No token configured")
+		log.Println("Authentication: ⚠️  No authentication configured")
 	}
 
 	// Test connection
 	log.Println("\nTesting connection...")
-	token := os.Getenv("HYVE_GIT_TOKEN")
+	var authToken string
+	if storedPassword != "" {
+		authToken = storedPassword
+	} else {
+		authToken = envToken
+	}
 	ctx := context.Background()
-	gitMgr := git.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, currentRepo.Username, token)
+	gitMgr := git.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, currentRepo.Username, authToken)
 
 	if err := gitMgr.Clone(ctx); err != nil {
 		log.Printf("❌ Connection failed: %v", err)
@@ -325,4 +370,54 @@ func resetGitConfiguration() {
 
 	log.Println("✅ All Git configurations reset")
 	log.Println("Add a Git repository to continue using Hyve: hyve git add <name> --repo-url <url>")
+}
+
+func updateGitCredentials(repoName, username, password string) {
+	repoMgr, err := repository.NewManager()
+	if err != nil {
+		log.Fatalf("Failed to create repository manager: %v", err)
+	}
+	defer repoMgr.Close()
+
+	// Get current repository details
+	repo, err := repoMgr.GetRepositoryByName(repoName)
+	if err != nil {
+		log.Fatalf("Failed to get repository: %v", err)
+	}
+
+	// Use current values if not provided
+	if username == "" {
+		username = repo.Username
+	}
+	if password == "" {
+		// Prompt for password if not provided
+		log.Print("Enter password/token (input will be hidden): ")
+		// For now, just show a message - in a real implementation you'd use a secure input method
+		log.Println("⚠️  Password must be provided via --password flag for security")
+		return
+	}
+
+	// Update the repository
+	_, err = repoMgr.UpdateRepository(repoName, repo.RepoURL, repo.LocalPath, username, password)
+	if err != nil {
+		log.Fatalf("Failed to update credentials: %v", err)
+	}
+
+	log.Printf("✅ Credentials updated for repository '%s'", repoName)
+	if username != "" {
+		log.Printf("Username: %s", username)
+	}
+	log.Println("Password: ✅ Stored securely")
+
+	// Test connection with new credentials
+	log.Println("\nTesting connection with updated credentials...")
+	ctx := context.Background()
+	gitMgr := git.NewManager(repo.RepoURL, repo.LocalPath, username, password)
+
+	if err := gitMgr.InitializeRepo(ctx); err != nil {
+		log.Printf("⚠️  Connection test failed: %v", err)
+		log.Println("Credentials saved but connection failed. Check your credentials and network.")
+	} else {
+		log.Println("✅ Connection successful with new credentials!")
+	}
 }

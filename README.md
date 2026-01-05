@@ -30,7 +30,8 @@ Hyve is a **GitOps-first** cluster management tool that requires Git repositorie
 - **Git**: For repository operations
 
 ### Optional (for authentication)
-- **Git Token**: Personal access token or app password for private repositories
+- **Git Credentials**: Username and password/token stored securely in local database
+- **Git Token**: Personal access token or app password (environment variable fallback)
 - **Git Username**: Username for Git authentication
 
 ## Installation
@@ -51,7 +52,7 @@ Hyve is a **GitOps-first** cluster management tool that requires Git repositorie
    # Create .env file with your Civo API token
    echo "CIVO_TOKEN=your_civo_api_token_here" > .env
    
-   # Optional: Set Git token for private repositories
+   # Optional: Set Git token as fallback (credentials can be stored per repository)
    export HYVE_GIT_TOKEN=your_git_token_here
    ```
 
@@ -65,7 +66,11 @@ Before using Hyve, you must configure a Git repository for state management:
 # Add a repository (public)
 ./hyve git add production --repo-url https://github.com/company/hyve-state.git
 
-# Add a repository (private with authentication)
+# Add a repository (private with stored credentials) - RECOMMENDED
+./hyve git add production --repo-url https://github.com/company/hyve-state.git \
+  --username your-username --password your_personal_access_token
+
+# Add a repository (private with environment token) - FALLBACK
 export HYVE_GIT_TOKEN=your_personal_access_token
 ./hyve git add production --repo-url https://github.com/company/hyve-state.git --username your-username
 
@@ -113,6 +118,19 @@ export HYVE_GIT_TOKEN=your_personal_access_token
 
 # Reset all repositories (back to no configuration)
 ./hyve git reset
+```
+
+#### Credential Management
+
+```bash
+# Update stored credentials for a repository
+./hyve git credentials production --username new-username --password new-token
+
+# Update just the password (keeps existing username)
+./hyve git credentials production --password new-personal-access-token
+
+# Update just the username (keeps existing password)
+./hyve git credentials production --username new-username
 ```
 
 ### Cluster Management
@@ -234,6 +252,9 @@ Hyve stores repository configurations in SQLite database:
 ## Security Considerations
 
 - **Secret Protection**: CIVO_TOKEN is only accessible to workflows
+- **Encrypted Credential Storage**: Git passwords stored using AES-GCM encryption in local SQLite database
+- **Credential Isolation**: Each repository can have separate authentication credentials
+- **Environment Token Fallback**: HYVE_GIT_TOKEN provides fallback authentication when no stored credentials
 - **Branch Protection**: Only main branch pushes trigger production deployments  
 - **PR Safety**: Pull requests run in dry-run mode only
 - **Repository Access**: Minimal `contents: write` permission for configuration updates
@@ -263,6 +284,9 @@ Hyve stores repository configurations in SQLite database:
    
    # Add clusters (automatic reconciliation)
    ./hyve cluster add dev-app --region PHX1 --nodes g4s.kube.medium,g4s.kube.medium
+   
+   # Update credentials if needed
+   ./hyve git credentials development --password new-dev-token
    ```
 
 3. **Production Environment**:

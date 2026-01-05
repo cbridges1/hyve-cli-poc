@@ -97,9 +97,14 @@ func createStateManager(ctx context.Context) (*state.Manager, string) {
 
 	log.Printf("Using Git repository '%s': %s", currentRepo.Name, currentRepo.RepoURL)
 
-	// Get token from environment
-	token := os.Getenv("HYVE_GIT_TOKEN")
-	stateMgr := state.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, currentRepo.Username, token)
+	// Get authentication - prefer stored password, fallback to environment token
+	var authToken string
+	if storedPassword, err := currentRepo.GetPassword(); err == nil && storedPassword != "" {
+		authToken = storedPassword
+	} else {
+		authToken = os.Getenv("HYVE_GIT_TOKEN")
+	}
+	stateMgr := state.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, currentRepo.Username, authToken)
 
 	// Initialize and sync Git repository
 	if err := stateMgr.InitializeGitRepo(ctx); err != nil {
