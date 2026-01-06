@@ -51,14 +51,29 @@ var kubeconfigListCmd = &cobra.Command{
 	},
 }
 
+var kubeconfigUseCmd = &cobra.Command{
+	Use:   "use [cluster-name]",
+	Short: "Set kubeconfig for current terminal session",
+	Long:  "Create a temporary kubeconfig and provide export command to use it in the current terminal session",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		clusterName := args[0]
+		evalMode, _ := cmd.Flags().GetBool("eval")
+		useKubeconfig(clusterName, evalMode)
+	},
+}
+
 func init() {
 	kubeconfigGetCmd.Flags().BoolP("save", "s", false, "Save kubeconfig to ~/.kube/config-<cluster-name>")
 	kubeconfigGetCmd.Flags().BoolP("merge", "m", false, "Merge kubeconfig into ~/.kube/config")
 	kubeconfigGetCmd.Flags().StringP("output", "o", "", "Output file path for kubeconfig")
 
+	kubeconfigUseCmd.Flags().BoolP("eval", "e", false, "Output shell commands for evaluation (use with eval)")
+
 	kubeconfigCmd.AddCommand(kubeconfigSyncCmd)
 	kubeconfigCmd.AddCommand(kubeconfigGetCmd)
 	kubeconfigCmd.AddCommand(kubeconfigListCmd)
+	kubeconfigCmd.AddCommand(kubeconfigUseCmd)
 }
 
 // createKubeconfigManager creates a kubeconfig manager for the current repository
@@ -284,7 +299,74 @@ func listKubeconfigs() {
 	}
 
 	log.Println("💡 Commands:")
+	log.Println("  eval $(hyve use <cluster-name>)              # Quickly set kubeconfig (recommended)")
 	log.Println("  hyve kubeconfig get <cluster-name>           # Display kubeconfig")
 	log.Println("  hyve kubeconfig get <cluster-name> --save    # Save to ~/.kube/config-<cluster-name>")
 	log.Println("  hyve kubeconfig get <cluster-name> -o <file> # Save to specific file")
+	log.Println("  hyve kubeconfig use <cluster-name>           # Set kubeconfig for current terminal session")
+}
+
+func useKubeconfig(clusterName string, evalMode bool) {
+	kubeconfigMgr, repoName, err := createKubeconfigManager()
+	if err != nil {
+		log.Fatalf("Failed to create kubeconfig manager: %v", err)
+	}
+	defer kubeconfigMgr.Close()
+
+	// Get kubeconfig
+	kc, err := kubeconfigMgr.GetKubeconfig(clusterName)
+	if err != nil {
+		log.Fatalf("Failed to get kubeconfig: %v", err)
+	}
+
+	if kc == nil {
+		log.Fatalf("Kubeconfig not found for cluster %s. Run 'hyve kubeconfig sync' first.", clusterName)
+	}
+
+	config, err := kc.GetConfig()
+	if err != nil {
+		log.Fatalf("Failed to decrypt kubeconfig: %v", err)
+	}
+
+	// Create temporary kubeconfig file in ~/.hyve/temp/
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatalf("Failed to get user home directory: %v", err)
+	}
+
+	tempDir := fmt.Sprintf("%s/.hyve/temp", homeDir)
+	if err := os.MkdirAll(tempDir, 0755); err != nil {
+		log.Fatalf("Failed to create temp directory: %v", err)
+	}
+
+	// Create a unique temporary file for this cluster and repository
+	tempFile := fmt.Sprintf("%s/kubeconfig-%s-%s", tempDir, repoName, clusterName)
+	err = os.WriteFile(tempFile, []byte(config), 0600)
+	if err != nil {
+		log.Fatalf("Failed to write temporary kubeconfig: %v", err)
+	}
+
+	if evalMode {
+		// Output only the shell commands for evaluation
+		fmt.Printf("export KUBECONFIG='%s'", tempFile)
+		fmt.Printf("; echo '✅ Kubeconfig set for cluster %s (repository: %s)'", clusterName, repoName)
+		fmt.Printf("; echo '💡 Use \"unset KUBECONFIG\" to revert'")
+	} else {
+		// Regular informational output
+		log.Printf("✅ Temporary kubeconfig created for cluster '%s' (repository: %s)", clusterName, repoName)
+		log.Printf("📁 Temporary file: %s", tempFile)
+		log.Println()
+		log.Println("🔧 To use this kubeconfig in your current terminal session, run:")
+		log.Printf("   export KUBECONFIG='%s'", tempFile)
+		log.Println()
+		log.Println("💡 This will only affect your current terminal session.")
+		log.Println("💡 To revert, use: unset KUBECONFIG")
+		log.Println()
+		log.Println("🧪 Test your connection:")
+		log.Printf("   export KUBECONFIG='%s' && kubectl get nodes", tempFile)
+		log.Println()
+		log.Println()
+		log.Println("⚡ For automatic setup, use:")
+		log.Printf("   eval $(./hyve kubeconfig use %s --eval)", clusterName)
+	}
 }

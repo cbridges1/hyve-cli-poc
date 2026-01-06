@@ -158,6 +158,9 @@ The CLI follows a command-subcommand structure:
   - **`sync`**: Manually sync kubeconfigs from active clusters
   - **`list`**: List all stored kubeconfigs for current repository
   - **`get`**: Retrieve and display/save kubeconfig for specific cluster
+  - **`use`**: Set kubeconfig for current terminal session (temporary)
+- **`hyve use`**: Convenience command to quickly set kubeconfig (equivalent to `hyve kubeconfig use --eval`)
+- **`hyve install`**: Install shell integration for seamless kubeconfig switching (no eval needed)
 
 #### Basic Commands
 
@@ -176,6 +179,9 @@ The CLI follows a command-subcommand structure:
 
 # Delete a cluster (automatically runs reconciliation)
 ./hyve cluster delete production
+
+# Quickly set kubeconfig for current terminal session
+eval $(./hyve use production)
 ```
 
 #### CLI Commands
@@ -193,6 +199,9 @@ The CLI follows a command-subcommand structure:
 | `hyve kubeconfig sync` | Sync kubeconfigs from all active clusters | No |
 | `hyve kubeconfig list` | List all stored kubeconfigs | No |
 | `hyve kubeconfig get [name]` | Get kubeconfig for specific cluster | No |
+| `hyve kubeconfig use [name]` | Set kubeconfig for current terminal session | No |
+| `hyve use [name]` | Convenience command to quickly set kubeconfig | No |
+| `hyve install` | Install shell integration for seamless switching | No |
 
 #### CLI Flags
 
@@ -278,6 +287,61 @@ kubectl get nodes
 ./hyve kubeconfig get production | kubectl --kubeconfig=/dev/stdin get nodes
 ```
 
+#### Set Kubeconfig for Terminal Session
+
+##### Method 1: Shell Integration (Recommended - No eval needed!)
+
+```bash
+# One-time setup: Install shell integration
+./hyve install
+
+# After installation, restart your terminal or run:
+source ~/.bashrc  # or ~/.zshrc
+
+# Now you can directly switch clusters without eval commands:
+hyve-use production    # Instantly switches to production cluster
+hyve-use development   # Instantly switches to development cluster
+hyve-status           # Shows current cluster
+hyve-unset            # Reverts to default kubeconfig
+hyve-list             # Lists available clusters
+```
+
+##### Method 2: Manual eval (when shell integration isn't available)
+
+```bash
+# Convenience command
+eval $(./hyve use production)
+
+# With kubeconfig subcommand
+eval $(./hyve kubeconfig use production --eval)
+
+# Traditional approach
+./hyve kubeconfig use production
+# Then copy and execute the provided export command
+```
+
+##### Method 3: Custom shell function
+
+```bash
+# Add to ~/.bashrc or ~/.zshrc
+hyve-use() {
+    eval $(./hyve use "$1")
+}
+
+# Usage:
+hyve-use production
+```
+
+After switching clusters:
+```bash
+# Now kubectl uses the selected cluster by default
+kubectl get nodes
+kubectl get pods
+
+# To revert back to your original kubeconfig
+unset KUBECONFIG  # or hyve-unset if using shell integration
+```
+
 #### Kubeconfig Storage
 
 ```
@@ -285,6 +349,9 @@ kubectl get nodes
 ├── repositories.db              # Repository configurations
 ├── credentials.db               # Global Git credentials (encrypted)
 ├── kubeconfigs.db              # Cluster kubeconfigs (encrypted per repository)
+├── temp/                       # Temporary kubeconfig files for terminal sessions
+│   ├── kubeconfig-production-cluster1
+│   └── kubeconfig-development-test-app
 └── repositories/               # Centralized repository storage
     ├── production/
     └── development/
@@ -316,6 +383,7 @@ Hyve stores repository, credential, and kubeconfig data in SQLite databases:
 ├── repositories.db              # SQLite database with repository configs
 ├── credentials.db               # SQLite database with encrypted global credentials
 ├── kubeconfigs.db              # SQLite database with encrypted cluster kubeconfigs
+├── temp/                       # Temporary kubeconfig files for terminal sessions
 ├── repositories/               # Centralized repository storage directory
 └── config.yaml                 # Legacy config (unused in current version)
 ```

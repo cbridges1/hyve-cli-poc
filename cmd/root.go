@@ -24,4 +24,6 @@ func init() {
 	rootCmd.AddCommand(clusterCmd)
 	rootCmd.AddCommand(gitCmd)
 	rootCmd.AddCommand(kubeconfigCmd)
+	rootCmd.AddCommand(useCmd)
+	rootCmd.AddCommand(installCmd)
 }
