@@ -23,4 +23,5 @@ func init() {
 	rootCmd.AddCommand(reconcileCmd)
 	rootCmd.AddCommand(clusterCmd)
 	rootCmd.AddCommand(gitCmd)
+	rootCmd.AddCommand(kubeconfigCmd)
 }

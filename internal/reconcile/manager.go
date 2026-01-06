@@ -7,7 +7,9 @@ import (
 
 	"civo-cluster-deploy/internal/cluster"
 	"civo-cluster-deploy/internal/ingress"
+	"civo-cluster-deploy/internal/kubeconfig"
 	"civo-cluster-deploy/internal/provider"
+	"civo-cluster-deploy/internal/repository"
 	"civo-cluster-deploy/internal/state"
 	"civo-cluster-deploy/internal/types"
 )
@@ -51,6 +53,13 @@ func (r *Reconciler) ReconcileAll(ctx context.Context, clusterDefs []types.Clust
 
 	log.Println("Exporting cluster information...")
 	r.exportAllClusterInfo(ctx, clusterDefs)
+
+	log.Println("Syncing kubeconfigs...")
+	err := r.syncKubeconfigs(ctx, clusterDefs)
+	if err != nil {
+		log.Printf("Failed to sync kubeconfigs: %v", err)
+	}
+
 	return nil
 }
 
@@ -232,4 +241,59 @@ func (r *Reconciler) exportClusterInfo(ctx context.Context, clusterDef types.Clu
 
 	clusterMgr := cluster.NewManager(prov)
 	return exportClusterInfoToEnv(ctx, clusterMgr, clusterDef.Metadata.Name)
+}
+
+// syncKubeconfigs syncs kubeconfigs for all active clusters
+func (r *Reconciler) syncKubeconfigs(ctx context.Context, clusterDefs []types.ClusterDefinition) error {
+	// Get current repository name
+	repoMgr, err := repository.NewManager()
+	if err != nil {
+		return fmt.Errorf("failed to create repository manager: %w", err)
+	}
+	defer repoMgr.Close()
+
+	currentRepo, err := repoMgr.GetCurrentRepository()
+	if err != nil {
+		return fmt.Errorf("failed to get current repository: %w", err)
+	}
+
+	// Create kubeconfig manager
+	kubeconfigMgr, err := kubeconfig.NewManager(currentRepo.Name)
+	if err != nil {
+		return fmt.Errorf("failed to create kubeconfig manager: %w", err)
+	}
+	defer kubeconfigMgr.Close()
+
+	// Group clusters by region to minimize provider creation
+	regionClusters := make(map[string][]types.ClusterDefinition)
+	for _, clusterDef := range clusterDefs {
+		region := clusterDef.Metadata.Region
+		regionClusters[region] = append(regionClusters[region], clusterDef)
+	}
+
+	// Sync kubeconfigs for each region
+	for region, clusters := range regionClusters {
+		// Get provider name from first cluster (assuming all clusters in region use same provider)
+		providerName := "civo" // default
+		if len(clusters) > 0 {
+			providerName = clusters[0].Spec.Provider
+		}
+
+		// Create provider for this region
+		prov, err := r.providerFactory.CreateProvider(providerName, r.apiKey, region)
+		if err != nil {
+			log.Printf("Failed to create provider for region %s: %v", region, err)
+			continue
+		}
+
+		// Create syncer and sync kubeconfigs for this region
+		syncer := kubeconfig.NewSyncer(kubeconfigMgr, prov)
+		err = syncer.SyncKubeconfigs(ctx, clusters)
+		if err != nil {
+			log.Printf("Failed to sync kubeconfigs for region %s: %v", region, err)
+			continue
+		}
+	}
+
+	return nil
 }

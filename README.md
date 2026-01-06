@@ -154,6 +154,10 @@ The CLI follows a command-subcommand structure:
   - **`add`**: Create cluster + reconcile
   - **`modify`**: Update cluster + reconcile  
   - **`delete`**: Remove cluster + reconcile
+- **`hyve kubeconfig`**: Kubeconfig management (automatically synced after reconcile)
+  - **`sync`**: Manually sync kubeconfigs from active clusters
+  - **`list`**: List all stored kubeconfigs for current repository
+  - **`get`**: Retrieve and display/save kubeconfig for specific cluster
 
 #### Basic Commands
 
@@ -186,6 +190,9 @@ The CLI follows a command-subcommand structure:
 | `hyve cluster add [name]` | Create cluster configuration | Automatic |
 | `hyve cluster modify [name]` | Update cluster configuration | Automatic |
 | `hyve cluster delete [name]` | Remove cluster configuration | Automatic |
+| `hyve kubeconfig sync` | Sync kubeconfigs from all active clusters | No |
+| `hyve kubeconfig list` | List all stored kubeconfigs | No |
+| `hyve kubeconfig get [name]` | Get kubeconfig for specific cluster | No |
 
 #### CLI Flags
 
@@ -230,6 +237,66 @@ spec:
     loadBalancer: true
 ```
 
+### Kubeconfig Management
+
+Hyve automatically syncs kubeconfigs from active clusters after every reconciliation and stores them encrypted in SQLite. This provides secure, repository-specific access to your Kubernetes clusters.
+
+#### Automatic Sync
+
+```bash
+# Kubeconfigs are automatically synced after reconciliation
+./hyve reconcile
+
+# Manual sync if needed
+./hyve kubeconfig sync
+```
+
+#### List Stored Kubeconfigs
+
+```bash
+# List all kubeconfigs for current repository
+./hyve kubeconfig list
+```
+
+#### Get Kubeconfig
+
+```bash
+# Display kubeconfig (for use with kubectl)
+./hyve kubeconfig get production
+
+# Save to ~/.kube/config-production
+./hyve kubeconfig get production --save
+
+# Save to specific file
+./hyve kubeconfig get production -o ./my-cluster.yaml
+
+# Use with kubectl directly
+export KUBECONFIG=$(./hyve kubeconfig get production -o /tmp/kubeconfig)
+kubectl get nodes
+
+# Or pipe directly
+./hyve kubeconfig get production | kubectl --kubeconfig=/dev/stdin get nodes
+```
+
+#### Kubeconfig Storage
+
+```
+~/.hyve/
+├── repositories.db              # Repository configurations
+├── credentials.db               # Global Git credentials (encrypted)
+├── kubeconfigs.db              # Cluster kubeconfigs (encrypted per repository)
+└── repositories/               # Centralized repository storage
+    ├── production/
+    └── development/
+```
+
+#### Security Features
+
+- **Repository Isolation**: Each repository has its own set of kubeconfigs
+- **AES-GCM Encryption**: All kubeconfigs stored with strong encryption
+- **Automatic Cleanup**: Orphaned kubeconfigs removed when clusters are deleted
+- **Key Derivation**: Encryption keys derived from system info + repository name
+
 ### Local Environment Configuration
 
 ```bash
@@ -242,12 +309,14 @@ export HYVE_GIT_TOKEN=your_personal_access_token
 
 ### Repository Configuration Storage
 
-Hyve stores repository and credential configurations in SQLite databases:
+Hyve stores repository, credential, and kubeconfig data in SQLite databases:
 
 ```
 ~/.hyve/
 ├── repositories.db              # SQLite database with repository configs
 ├── credentials.db               # SQLite database with encrypted global credentials
+├── kubeconfigs.db              # SQLite database with encrypted cluster kubeconfigs
+├── repositories/               # Centralized repository storage directory
 └── config.yaml                 # Legacy config (unused in current version)
 ```
 
@@ -255,8 +324,10 @@ Hyve stores repository and credential configurations in SQLite databases:
 
 - **Secret Protection**: CIVO_TOKEN is only accessible to workflows
 - **Encrypted Credential Storage**: Git passwords stored using AES-GCM encryption in local SQLite database
+- **Encrypted Kubeconfig Storage**: Cluster kubeconfigs stored with AES-GCM encryption, isolated per repository
 - **Global Authentication**: Single set of credentials used across all repositories for simplicity
 - **Environment Token Fallback**: HYVE_GIT_TOKEN provides fallback authentication when no global credentials stored
+- **Repository Isolation**: Kubeconfigs are isolated per repository for security boundaries
 - **Branch Protection**: Only main branch pushes trigger production deployments  
 - **PR Safety**: Pull requests run in dry-run mode only
 - **Repository Access**: Minimal `contents: write` permission for configuration updates
