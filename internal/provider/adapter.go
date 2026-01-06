@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"log"
 
 	"civo-cluster-deploy/internal/provider/civo"
 	"civo-cluster-deploy/internal/types"
@@ -72,6 +73,7 @@ func (a *ProviderAdapter) CreateCluster(ctx context.Context, config *ClusterConf
 		Applications: config.Applications,
 	}
 
+	log.Printf("Creating cluster with configuration: %+v", civoConfig)
 	civoCluster, err := a.civo.CreateCluster(ctx, civoConfig)
 	if err != nil {
 		return nil, err

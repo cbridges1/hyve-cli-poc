@@ -1,20 +1,5 @@
 package types
 
-// FirewallRule represents a firewall rule configuration
-type FirewallRule struct {
-	Protocol  string   `yaml:"protocol"`
-	StartPort string   `yaml:"startPort"`
-	EndPort   string   `yaml:"endPort"`
-	Cidr      []string `yaml:"cidr"`
-	Direction string   `yaml:"direction"`
-}
-
-// FirewallSpec represents firewall configuration
-type FirewallSpec struct {
-	Enabled bool           `yaml:"enabled"`
-	Rules   []FirewallRule `yaml:"rules"`
-}
-
 // IngressSpec represents nginx ingress controller configuration
 type IngressSpec struct {
 	Enabled      bool   `yaml:"enabled"`
@@ -24,11 +9,10 @@ type IngressSpec struct {
 
 // ClusterSpec represents the desired cluster configuration
 type ClusterSpec struct {
-	Provider    string       `yaml:"provider"`
-	Nodes       []string     `yaml:"nodes"`
-	ClusterType string       `yaml:"clusterType"`
-	Firewall    FirewallSpec `yaml:"firewall"`
-	Ingress     IngressSpec  `yaml:"ingress"`
+	Provider    string      `yaml:"provider"`
+	Nodes       []string    `yaml:"nodes"`
+	ClusterType string      `yaml:"clusterType"`
+	Ingress     IngressSpec `yaml:"ingress"`
 }
 
 // ClusterMetadata represents cluster metadata

@@ -66,13 +66,12 @@ func (m *Manager) FindByName(ctx context.Context, name string) (*provider.Cluste
 }
 
 // Create creates a new cluster
-func (m *Manager) Create(ctx context.Context, clusterDef types.ClusterDefinition, firewallID string) (*provider.Cluster, error) {
+func (m *Manager) Create(ctx context.Context, clusterDef types.ClusterDefinition) (*provider.Cluster, error) {
 	config := &provider.ClusterConfig{
 		Name:        clusterDef.Metadata.Name,
 		Region:      clusterDef.Metadata.Region,
 		Nodes:       clusterDef.Spec.Nodes,
 		ClusterType: clusterDef.Spec.ClusterType,
-		FirewallID:  firewallID,
 	}
 
 	return m.provider.CreateCluster(ctx, config)

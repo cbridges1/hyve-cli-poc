@@ -6,7 +6,6 @@ import (
 	"log"
 
 	"civo-cluster-deploy/internal/cluster"
-	"civo-cluster-deploy/internal/firewall"
 	"civo-cluster-deploy/internal/ingress"
 	"civo-cluster-deploy/internal/provider"
 	"civo-cluster-deploy/internal/state"
@@ -73,19 +72,18 @@ func (r *Reconciler) reconcileRegion(ctx context.Context, region string, cluster
 
 	// Initialize managers for this region
 	clusterMgr := cluster.NewManager(prov)
-	firewallMgr := firewall.NewManager(prov)
 	ingressMgr := ingress.NewManager(prov)
 
 	// Reconcile all desired clusters
 	for _, clusterDef := range clusters {
-		err := r.reconcileCluster(ctx, clusterMgr, firewallMgr, ingressMgr, clusterDef)
+		err := r.reconcileCluster(ctx, clusterMgr, ingressMgr, clusterDef)
 		if err != nil {
 			log.Printf("Failed to reconcile cluster %s: %v", clusterDef.Metadata.Name, err)
 		}
 	}
 
 	// Then, cleanup orphaned resources
-	err = r.cleanupOrphanedResources(ctx, clusterMgr, firewallMgr, clusters)
+	err = r.cleanupOrphanedResources(ctx, clusterMgr, clusters)
 	if err != nil {
 		log.Printf("Failed to cleanup orphaned resources in region %s: %v", region, err)
 	}
@@ -94,16 +92,16 @@ func (r *Reconciler) reconcileRegion(ctx context.Context, region string, cluster
 }
 
 // reconcileCluster handles the reconciliation of a single cluster
-func (r *Reconciler) reconcileCluster(ctx context.Context, clusterMgr *cluster.Manager, firewallMgr *firewall.Manager, ingressMgr *ingress.Manager, clusterDef types.ClusterDefinition) error {
+func (r *Reconciler) reconcileCluster(ctx context.Context, clusterMgr *cluster.Manager, ingressMgr *ingress.Manager, clusterDef types.ClusterDefinition) error {
 	action := clusterMgr.DetermineAction(ctx, clusterDef)
 
 	switch action {
 	case types.ActionCreate:
-		return r.createCluster(ctx, clusterMgr, firewallMgr, ingressMgr, clusterDef)
+		return r.createCluster(ctx, clusterMgr, ingressMgr, clusterDef)
 	case types.ActionUpdate:
 		return r.updateCluster(ctx, clusterMgr, ingressMgr, clusterDef)
 	case types.ActionDelete:
-		return r.deleteCluster(ctx, clusterMgr, firewallMgr, ingressMgr, clusterDef)
+		return r.deleteCluster(ctx, clusterMgr, ingressMgr, clusterDef)
 	case types.ActionNone:
 		log.Printf("Cluster %s is up to date, no action needed", clusterDef.Metadata.Name)
 		return nil
@@ -113,8 +111,8 @@ func (r *Reconciler) reconcileCluster(ctx context.Context, clusterMgr *cluster.M
 	}
 }
 
-// createCluster creates a new cluster with optional firewall and ingress controller
-func (r *Reconciler) createCluster(ctx context.Context, clusterMgr *cluster.Manager, firewallMgr *firewall.Manager, ingressMgr *ingress.Manager, clusterDef types.ClusterDefinition) error {
+// createCluster creates a new cluster with optional ingress controller
+func (r *Reconciler) createCluster(ctx context.Context, clusterMgr *cluster.Manager, ingressMgr *ingress.Manager, clusterDef types.ClusterDefinition) error {
 	existingCluster, err := clusterMgr.FindByName(ctx, clusterDef.Metadata.Name)
 	if err != nil {
 		return err
@@ -127,17 +125,8 @@ func (r *Reconciler) createCluster(ctx context.Context, clusterMgr *cluster.Mana
 		return nil
 	}
 
-	var firewallID string
-	if clusterDef.Spec.Firewall.Enabled && len(clusterDef.Spec.Firewall.Rules) > 0 {
-		fw, err := firewallMgr.CreateFromDefinition(ctx, clusterDef)
-		if err != nil {
-			return err
-		}
-		firewallID = fw.ID
-		log.Printf("Created/reused firewall with ID: %s", firewallID)
-	}
-
-	createdCluster, err := clusterMgr.Create(ctx, clusterDef, firewallID)
+	log.Printf("Creating cluster with definition: %+v", clusterDef)
+	createdCluster, err := clusterMgr.Create(ctx, clusterDef)
 	if err != nil {
 		return err
 	}
@@ -169,7 +158,7 @@ func (r *Reconciler) updateCluster(ctx context.Context, clusterMgr *cluster.Mana
 }
 
 // deleteCluster deletes a cluster and its associated resources
-func (r *Reconciler) deleteCluster(ctx context.Context, clusterMgr *cluster.Manager, firewallMgr *firewall.Manager, ingressMgr *ingress.Manager, clusterDef types.ClusterDefinition) error {
+func (r *Reconciler) deleteCluster(ctx context.Context, clusterMgr *cluster.Manager, ingressMgr *ingress.Manager, clusterDef types.ClusterDefinition) error {
 	existingCluster, err := clusterMgr.FindByName(ctx, clusterDef.Metadata.Name)
 	if err != nil {
 		return err
@@ -194,33 +183,18 @@ func (r *Reconciler) deleteCluster(ctx context.Context, clusterMgr *cluster.Mana
 		return err
 	}
 
-	err = firewallMgr.DeleteForCluster(ctx, clusterDef, existingCluster.FirewallID)
-	if err != nil {
-		log.Printf("Failed to delete firewall: %v", err)
-	}
-
 	log.Printf("Cluster %s deleted successfully!", clusterDef.Metadata.Name)
 	return nil
 }
 
-// cleanupOrphanedResources removes clusters and firewalls that are no longer defined
-func (r *Reconciler) cleanupOrphanedResources(ctx context.Context, clusterMgr *cluster.Manager, firewallMgr *firewall.Manager, clusters []types.ClusterDefinition) error {
+// cleanupOrphanedResources removes clusters that are no longer defined
+func (r *Reconciler) cleanupOrphanedResources(ctx context.Context, clusterMgr *cluster.Manager, clusters []types.ClusterDefinition) error {
 	orphanedClusters, err := clusterMgr.FindOrphaned(ctx, clusters)
 	if err != nil {
 		return err
 	}
 
-	err = clusterMgr.CleanupOrphaned(ctx, orphanedClusters)
-	if err != nil {
-		return err
-	}
-
-	orphanedFirewalls, err := firewallMgr.FindOrphaned(ctx, clusters)
-	if err != nil {
-		return err
-	}
-
-	return firewallMgr.CleanupOrphaned(ctx, orphanedFirewalls)
+	return clusterMgr.CleanupOrphaned(ctx, orphanedClusters)
 }
 
 // cleanupAllRegions handles cleanup when no clusters are defined
@@ -232,9 +206,8 @@ func (r *Reconciler) cleanupAllRegions(ctx context.Context, clusterDefs []types.
 	}
 
 	clusterMgr := cluster.NewManager(prov)
-	firewallMgr := firewall.NewManager(prov)
 
-	err = r.cleanupOrphanedResources(ctx, clusterMgr, firewallMgr, clusterDefs)
+	err = r.cleanupOrphanedResources(ctx, clusterMgr, clusterDefs)
 	if err != nil {
 		log.Printf("Failed to cleanup orphaned resources: %v", err)
 	}

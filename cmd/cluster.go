@@ -171,18 +171,6 @@ func addClusterFromCLI(clusterName, region, provider string, nodes []string, clu
 			Provider:    provider,
 			Nodes:       nodes,
 			ClusterType: clusterType,
-			Firewall: types.FirewallSpec{
-				Enabled: true,
-				Rules: []types.FirewallRule{
-					{
-						Protocol:  "tcp",
-						StartPort: "6443",
-						EndPort:   "6443",
-						Cidr:      []string{"0.0.0.0/0"},
-						Direction: "ingress",
-					},
-				},
-			},
 			Ingress: types.IngressSpec{
 				Enabled:      true,
 				LoadBalancer: true,

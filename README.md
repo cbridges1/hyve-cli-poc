@@ -18,7 +18,6 @@ Hyve is a **GitOps-first** cluster management tool that requires Git repositorie
 - **Modern CLI Interface**: Built with Cobra CLI for intuitive command structure
 - **Declarative Configuration**: Define clusters using YAML files in Git repositories
 - **Idempotent Operations**: Safe to run multiple times without side effects
-- **Firewall Management**: Automatic creation and cleanup of cluster firewalls
 - **SQLite Database**: Persistent storage for repository configurations
 
 ## Prerequisites
@@ -226,15 +225,6 @@ spec:
     - g4s.kube.large
     - g4s.kube.large
   clusterType: k3s
-  firewall:
-    enabled: true
-    rules:
-      - protocol: tcp
-        startPort: "6443"
-        endPort: "6443"
-        cidr:
-          - 0.0.0.0/0
-        direction: ingress
   ingress:
     enabled: true
     loadBalancer: true

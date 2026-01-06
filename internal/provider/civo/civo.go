@@ -153,17 +153,19 @@ func (p *Provider) CreateCluster(ctx context.Context, config *ClusterConfig) (*C
 	log.Printf("Creating cluster %s in region %s", config.Name, config.Region)
 
 	clusterConfig := &civogo.KubernetesClusterConfig{
-		Name:              config.Name,
-		Region:            config.Region,
-		NumTargetNodes:    len(config.Nodes),
-		TargetNodesSize:   config.Nodes[0], // Use first node size
-		KubernetesVersion: config.ClusterType,
-		NodeDestroy:       "",
-		NetworkID:         "",
-		Tags:              "",
-		Applications:      "",
-		FirewallID:        config.FirewallID,
+		Name:            config.Name,
+		Region:          config.Region,
+		NumTargetNodes:  len(config.Nodes),
+		TargetNodesSize: config.Nodes[0], // Use first node size
+		//KubernetesVersion: config.ClusterType,
+		NodeDestroy:  "",
+		NetworkID:    "",
+		Tags:         "",
+		Applications: "",
+		//FirewallID:        config.FirewallID,
 	}
+
+	log.Printf("Creating cluster %v", clusterConfig)
 
 	if len(config.Applications) > 0 {
 		clusterConfig.Applications = config.Applications[0]
