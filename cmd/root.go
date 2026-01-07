@@ -26,4 +26,5 @@ func init() {
 	rootCmd.AddCommand(kubeconfigCmd)
 	rootCmd.AddCommand(useCmd)
 	rootCmd.AddCommand(installCmd)
+	rootCmd.AddCommand(runCmd)
 }

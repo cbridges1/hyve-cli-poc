@@ -10,8 +10,11 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
+	"civo-cluster-deploy/internal/cluster"
 	"civo-cluster-deploy/internal/config"
 	"civo-cluster-deploy/internal/credentials"
+	"civo-cluster-deploy/internal/ingress"
+	"civo-cluster-deploy/internal/provider"
 	"civo-cluster-deploy/internal/repository"
 	"civo-cluster-deploy/internal/state"
 	"civo-cluster-deploy/internal/types"
@@ -54,11 +57,36 @@ var modifyCmd = &cobra.Command{
 var deleteCmd = &cobra.Command{
 	Use:   "delete [cluster-name]",
 	Short: "Delete a cluster",
-	Long:  "Remove a cluster configuration YAML file",
-	Args:  cobra.ExactArgs(1),
+	Long: `Delete a cluster both from the cloud provider and from configuration.
+This command will:
+1. Explicitly search for and delete the cluster from the cloud provider
+2. Remove the cluster configuration YAML file (if it exists)
+3. Run reconciliation to clean up any remaining resources
+
+Use --config-only to only remove the configuration file without touching the cloud resources.
+Use --force-cloud to delete from cloud even if no configuration file exists.`,
+	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		clusterName := args[0]
-		deleteClusterFromCLI(clusterName)
+		configOnly, _ := cmd.Flags().GetBool("config-only")
+		forceCloud, _ := cmd.Flags().GetBool("force-cloud")
+		deleteClusterFromCLI(clusterName, configOnly, forceCloud)
+	},
+}
+
+var forceDeleteCmd = &cobra.Command{
+	Use:   "force-delete [cluster-name]",
+	Short: "Force delete a cluster by name from cloud provider",
+	Long: `Force delete a cluster by name directly from the cloud provider without requiring a configuration file.
+This command will search all regions for the cluster and delete it if found.
+Useful when configuration files are lost or corrupted.
+
+Note: This command does not remove configuration files or run reconciliation.`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		clusterName := args[0]
+		region, _ := cmd.Flags().GetString("region")
+		forceDeleteClusterFromCloud(clusterName, region)
 	},
 }
 
@@ -73,9 +101,15 @@ func init() {
 	modifyCmd.Flags().StringSliceP("nodes", "n", nil, "Node sizes")
 	modifyCmd.Flags().StringP("cluster-type", "t", "", "Type of Kubernetes cluster")
 
+	deleteCmd.Flags().Bool("config-only", false, "Only remove configuration file, skip cloud provider deletion")
+	deleteCmd.Flags().Bool("force-cloud", false, "Delete from cloud even if no configuration file exists")
+
+	forceDeleteCmd.Flags().StringP("region", "r", "", "Specific region to search (optional, will search common regions if not provided)")
+
 	clusterCmd.AddCommand(addCmd)
 	clusterCmd.AddCommand(modifyCmd)
 	clusterCmd.AddCommand(deleteCmd)
+	clusterCmd.AddCommand(forceDeleteCmd)
 }
 
 // createStateManager creates state manager from current repository
@@ -274,24 +308,184 @@ func modifyClusterFromCLI(cmd *cobra.Command, clusterName string) {
 	}
 }
 
-func deleteClusterFromCLI(clusterName string) {
+func deleteClusterFromCLI(clusterName string, configOnly bool, forceCloud bool) {
 	ctx := context.Background()
 	stateMgr, stateDir := createStateManager(ctx)
 	filePath := filepath.Join(stateDir, clusterName+".yaml")
 
+	var clusterDef types.ClusterDefinition
+	configExists := false
+
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		log.Fatalf("Cluster %s does not exist.", clusterName)
+		if !forceCloud {
+			log.Fatalf("Cluster %s configuration does not exist. Use --force-cloud to delete from cloud provider anyway.", clusterName)
+		}
+		log.Printf("⚠️ Configuration file not found, but --force-cloud specified")
+		// Use default region for force cloud deletion
+		clusterDef.Metadata.Region = "PHX1" // Default region
+	} else {
+		configExists = true
+		// Read the cluster definition to get the region for proper provider initialization
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			log.Fatalf("Failed to read cluster definition: %v", err)
+		}
+
+		if err := yaml.Unmarshal(data, &clusterDef); err != nil {
+			log.Fatalf("Failed to parse cluster definition: %v", err)
+		}
 	}
 
-	if err := os.Remove(filePath); err != nil {
-		log.Fatalf("Failed to delete cluster definition file: %v", err)
+	// Explicitly delete the cluster by name before removing the YAML file (unless config-only mode)
+	if !configOnly {
+		log.Printf("🗑️ Deleting cluster '%s' from cloud provider...", clusterName)
+		err := deleteClusterExplicitly(ctx, clusterName, clusterDef.Metadata.Region)
+		if err != nil {
+			log.Printf("Warning: Failed to delete cluster %s from cloud provider: %v", clusterName, err)
+			log.Printf("Continuing with configuration file removal...")
+		}
+	} else {
+		log.Printf("📝 Skipping cloud provider deletion (config-only mode)")
 	}
 
-	// Commit changes to Git if configured
-	commitStateChanges(ctx, stateMgr, fmt.Sprintf("Delete cluster %s", clusterName))
+	// Remove configuration file if it exists
+	if configExists {
+		if err := os.Remove(filePath); err != nil {
+			log.Fatalf("Failed to delete cluster definition file: %v", err)
+		}
 
-	log.Printf("Deleted cluster definition file: %s", filePath)
-	log.Printf("Cluster %s has been removed from configuration", clusterName)
+		// Commit changes to Git if configured
+		commitStateChanges(ctx, stateMgr, fmt.Sprintf("Delete cluster %s", clusterName))
 
+		log.Printf("Deleted cluster definition file: %s", filePath)
+		log.Printf("Cluster %s has been removed from configuration", clusterName)
+	} else {
+		log.Printf("📝 No configuration file to remove")
+	}
+
+	// Run reconciliation to clean up any remaining resources
 	runReconciliation()
+}
+
+// deleteClusterExplicitly deletes a cluster by name directly from the provider
+// This ensures deletion even if the cluster doesn't appear in provider API listings
+func deleteClusterExplicitly(ctx context.Context, clusterName, region string) error {
+	configMgr := config.NewManager()
+	apiKey := configMgr.GetCivoToken()
+	if apiKey == "" {
+		return fmt.Errorf("CIVO_TOKEN not found in environment")
+	}
+
+	// Create provider factory and provider for the cluster's region
+	providerFactory := provider.NewFactory()
+	prov, err := providerFactory.CreateProvider("civo", apiKey, region)
+	if err != nil {
+		return fmt.Errorf("failed to create provider: %w", err)
+	}
+
+	// Create cluster and ingress managers
+	clusterMgr := cluster.NewManager(prov)
+	ingressMgr := ingress.NewManager(prov)
+
+	log.Printf("🔍 Explicitly searching for cluster '%s' in region %s...", clusterName, region)
+
+	// Try to find the cluster by name
+	existingCluster, err := clusterMgr.FindByName(ctx, clusterName)
+	if err != nil {
+		return fmt.Errorf("failed to search for cluster: %w", err)
+	}
+
+	if existingCluster == nil {
+		log.Printf("✅ Cluster '%s' not found in cloud provider, may already be deleted", clusterName)
+		return nil
+	}
+
+	log.Printf("🗑️ Found cluster '%s' with ID %s, explicitly deleting...", clusterName, existingCluster.ID)
+
+	// If cluster has ingress enabled, try to remove it first
+	// We assume it might have ingress based on common patterns
+	log.Printf("🔌 Attempting to remove any ingress controllers...")
+	err = ingressMgr.RemoveIngressController(ctx, existingCluster.ID)
+	if err != nil {
+		log.Printf("Warning: Failed to remove ingress controller (may not exist): %v", err)
+	}
+
+	// Delete the cluster explicitly by ID
+	err = clusterMgr.Delete(ctx, existingCluster.ID)
+	if err != nil {
+		return fmt.Errorf("failed to delete cluster %s (ID: %s): %w", clusterName, existingCluster.ID, err)
+	}
+
+	log.Printf("✅ Successfully deleted cluster '%s' from cloud provider", clusterName)
+	return nil
+}
+
+// forceDeleteClusterFromCloud deletes a cluster by name from the cloud provider across multiple regions
+func forceDeleteClusterFromCloud(clusterName, region string) {
+	ctx := context.Background()
+
+	configMgr := config.NewManager()
+	apiKey := configMgr.GetCivoToken()
+	if apiKey == "" {
+		log.Fatalf("CIVO_TOKEN not found in environment")
+	}
+
+	regions := []string{region}
+	if region == "" {
+		// Search common regions if none specified
+		regions = []string{"PHX1", "NYC1", "FRA1", "LON1"}
+		log.Printf("🔍 No region specified, searching common regions: %v", regions)
+	}
+
+	providerFactory := provider.NewFactory()
+	found := false
+
+	for _, r := range regions {
+		log.Printf("🔍 Searching for cluster '%s' in region %s...", clusterName, r)
+
+		prov, err := providerFactory.CreateProvider("civo", apiKey, r)
+		if err != nil {
+			log.Printf("Failed to create provider for region %s: %v", r, err)
+			continue
+		}
+
+		clusterMgr := cluster.NewManager(prov)
+		ingressMgr := ingress.NewManager(prov)
+
+		existingCluster, err := clusterMgr.FindByName(ctx, clusterName)
+		if err != nil {
+			log.Printf("Failed to search for cluster in region %s: %v", r, err)
+			continue
+		}
+
+		if existingCluster == nil {
+			log.Printf("❌ Cluster '%s' not found in region %s", clusterName, r)
+			continue
+		}
+
+		found = true
+		log.Printf("✅ Found cluster '%s' in region %s with ID %s", clusterName, r, existingCluster.ID)
+		log.Printf("🗑️ Force deleting cluster '%s'...", clusterName)
+
+		// Remove ingress controller if present
+		log.Printf("🔌 Attempting to remove any ingress controllers...")
+		err = ingressMgr.RemoveIngressController(ctx, existingCluster.ID)
+		if err != nil {
+			log.Printf("Warning: Failed to remove ingress controller (may not exist): %v", err)
+		}
+
+		// Delete the cluster
+		err = clusterMgr.Delete(ctx, existingCluster.ID)
+		if err != nil {
+			log.Fatalf("Failed to delete cluster %s (ID: %s): %v", clusterName, existingCluster.ID, err)
+		}
+
+		log.Printf("✅ Successfully force deleted cluster '%s' from region %s", clusterName, r)
+		break
+	}
+
+	if !found {
+		log.Printf("❌ Cluster '%s' not found in any searched regions", clusterName)
+		log.Printf("💡 Try specifying a specific region with --region flag")
+	}
 }

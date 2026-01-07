@@ -160,6 +160,7 @@ The CLI follows a command-subcommand structure:
   - **`get`**: Retrieve and display/save kubeconfig for specific cluster
   - **`use`**: Set kubeconfig for current terminal session (temporary)
 - **`hyve use`**: Convenience command to quickly set kubeconfig (equivalent to `hyve kubeconfig use --eval`)
+- **`hyve run`**: Execute commands with specific cluster kubeconfig
 - **`hyve install`**: Install shell integration for seamless kubeconfig switching (no eval needed)
 
 #### Basic Commands
@@ -182,6 +183,12 @@ The CLI follows a command-subcommand structure:
 
 # Quickly set kubeconfig for current terminal session
 eval $(./hyve use production)
+
+# Run kubectl commands with specific cluster
+./hyve run --cluster production kubectl get nodes
+
+# Run any command with cluster context
+./hyve run --cluster staging kubectl get pods
 ```
 
 #### CLI Commands
@@ -201,6 +208,7 @@ eval $(./hyve use production)
 | `hyve kubeconfig get [name]` | Get kubeconfig for specific cluster | No |
 | `hyve kubeconfig use [name]` | Set kubeconfig for current terminal session | No |
 | `hyve use [name]` | Convenience command to quickly set kubeconfig | No |
+| `hyve run [cmd] [args...]` | Execute command with cluster kubeconfig | No |
 | `hyve install` | Install shell integration for seamless switching | No |
 
 #### CLI Flags
@@ -211,6 +219,7 @@ eval $(./hyve use production)
 | `--provider` | `-p` | Cloud provider | civo |
 | `--nodes` | `-n` | Node sizes (comma-separated) | g4s.kube.small |
 | `--cluster-type` | `-t` | Kubernetes type | k3s |
+| `--cluster` | `-c` | Cluster name (for run command) | current/prompt |
 
 #### Available Regions
 - `PHX1` - Phoenix, USA
@@ -340,6 +349,53 @@ kubectl get pods
 
 # To revert back to your original kubeconfig
 unset KUBECONFIG  # or hyve-unset if using shell integration
+```
+
+### Command Execution with Kubeconfig
+
+The `hyve run` command provides a clean way to execute commands with a specific cluster's kubeconfig without modifying your terminal environment.
+
+#### Basic Usage
+
+```bash
+# Run kubectl with specific cluster
+./hyve run --cluster production kubectl get nodes
+
+# Run any command with cluster context
+./hyve run --cluster staging kubectl get pods -A
+
+# Interactive mode (prompts for cluster selection)
+./hyve run kubectl get services
+
+# Complex commands with shell
+./hyve run --cluster production sh -c "kubectl get pods | grep nginx"
+
+# Run non-kubectl commands that use kubeconfig
+./hyve run --cluster dev helm list
+```
+
+#### Automatic Cluster Selection
+
+```bash
+# If only one cluster exists, it's automatically selected
+./hyve run kubectl get namespaces
+
+# If multiple clusters exist, you'll see a list and need to specify --cluster
+./hyve run kubectl get nodes
+# Output: Available clusters:
+#   1. production
+#   2. staging
+# Please specify a cluster with --cluster flag
+```
+
+#### Command Exit Codes
+
+The `run` command preserves the exit code of the executed command:
+
+```bash
+# If kubectl fails, hyve run will exit with the same code
+./hyve run --cluster production kubectl get invalid-resource
+echo $?  # Will show kubectl's exit code
 ```
 
 #### Kubeconfig Storage
