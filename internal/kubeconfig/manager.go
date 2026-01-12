@@ -268,10 +268,18 @@ func (m *Manager) CleanupOrphanedKubeconfigs(activeClusterNames []string) error 
 	return nil
 }
 
-// getEncryptionKey generates a deterministic encryption key based on system info
+// getEncryptionKey generates a deterministic encryption key based on database path and repository
 func (m *Manager) getEncryptionKey() []byte {
 	// Use a combination of database path and repository name for key derivation
-	hostname, _ := os.Hostname()
+	// Note: Hostname is intentionally excluded to make the database portable across machines
+	keyMaterial := fmt.Sprintf("%s:%s", m.dbPath, m.repositoryName)
+	hash := sha256.Sum256([]byte(keyMaterial))
+	return hash[:]
+}
+
+// getEncryptionKeyWithHostname generates the old encryption key that included hostname
+// This is used for migrating data encrypted with the old key format
+func (m *Manager) getEncryptionKeyWithHostname(hostname string) []byte {
 	keyMaterial := fmt.Sprintf("%s:%s:%s", m.dbPath, m.repositoryName, hostname)
 	hash := sha256.Sum256([]byte(keyMaterial))
 	return hash[:]
@@ -339,4 +347,107 @@ func (m *Manager) decryptConfig(encryptedConfig string) (string, error) {
 	}
 
 	return string(plaintext), nil
+}
+
+// decryptConfigWithHostname decrypts a kubeconfig using the old hostname-based key
+func (m *Manager) decryptConfigWithHostname(encryptedConfig string, hostname string) (string, error) {
+	if encryptedConfig == "" {
+		return "", nil
+	}
+
+	key := m.getEncryptionKeyWithHostname(hostname)
+
+	ciphertext, err := base64.StdEncoding.DecodeString(encryptedConfig)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode encrypted kubeconfig: %w", err)
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", fmt.Errorf("failed to create cipher: %w", err)
+	}
+
+	aesGCM, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("failed to create GCM: %w", err)
+	}
+
+	nonceSize := aesGCM.NonceSize()
+	if len(ciphertext) < nonceSize {
+		return "", fmt.Errorf("ciphertext too short")
+	}
+
+	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
+	plaintext, err := aesGCM.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to decrypt kubeconfig with hostname: %w", err)
+	}
+
+	return string(plaintext), nil
+}
+
+// MigrateEncryption migrates all kubeconfigs from hostname-based encryption to portable encryption
+func (m *Manager) MigrateEncryption(oldHostname string) error {
+	db, err := sql.Open("sqlite3", m.dbPath)
+	if err != nil {
+		return fmt.Errorf("failed to open database: %w", err)
+	}
+	defer db.Close()
+
+	// Get all kubeconfigs for this repository
+	rows, err := db.Query(`
+		SELECT id, cluster_name, encrypted_config
+		FROM kubeconfigs
+		WHERE repository_name = ?
+	`, m.repositoryName)
+	if err != nil {
+		return fmt.Errorf("failed to query kubeconfigs: %w", err)
+	}
+	defer rows.Close()
+
+	type kubeconfig struct {
+		id              int
+		clusterName     string
+		encryptedConfig string
+	}
+
+	var kubeconfigs []kubeconfig
+	for rows.Next() {
+		var kc kubeconfig
+		if err := rows.Scan(&kc.id, &kc.clusterName, &kc.encryptedConfig); err != nil {
+			return fmt.Errorf("failed to scan kubeconfig: %w", err)
+		}
+		kubeconfigs = append(kubeconfigs, kc)
+	}
+
+	if len(kubeconfigs) == 0 {
+		return fmt.Errorf("no kubeconfigs found for repository %s", m.repositoryName)
+	}
+
+	// Migrate each kubeconfig
+	for _, kc := range kubeconfigs {
+		// Decrypt with old hostname-based key
+		plaintext, err := m.decryptConfigWithHostname(kc.encryptedConfig, oldHostname)
+		if err != nil {
+			return fmt.Errorf("failed to decrypt kubeconfig for cluster %s: %w", kc.clusterName, err)
+		}
+
+		// Re-encrypt with new portable key
+		newEncrypted, err := m.encryptConfig(plaintext)
+		if err != nil {
+			return fmt.Errorf("failed to re-encrypt kubeconfig for cluster %s: %w", kc.clusterName, err)
+		}
+
+		// Update the database
+		_, err = db.Exec(`
+			UPDATE kubeconfigs
+			SET encrypted_config = ?, updated_at = CURRENT_TIMESTAMP
+			WHERE id = ?
+		`, newEncrypted, kc.id)
+		if err != nil {
+			return fmt.Errorf("failed to update kubeconfig for cluster %s: %w", kc.clusterName, err)
+		}
+	}
+
+	return nil
 }

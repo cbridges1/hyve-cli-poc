@@ -63,6 +63,24 @@ var kubeconfigUseCmd = &cobra.Command{
 	},
 }
 
+var kubeconfigMigrateCmd = &cobra.Command{
+	Use:   "migrate [old-hostname]",
+	Short: "Migrate kubeconfig encryption to new portable format",
+	Long: `Migrate kubeconfig encryption from hostname-based keys to portable keys.
+
+This command re-encrypts all kubeconfigs using a key that doesn't include the hostname,
+making the database portable across machines. You need to provide the hostname that was
+used when the kubeconfigs were originally encrypted.
+
+Example:
+  hyve kubeconfig migrate "old-macbook.local"`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		oldHostname := args[0]
+		return migrateKubeconfigEncryption(oldHostname)
+	},
+}
+
 func init() {
 	kubeconfigGetCmd.Flags().BoolP("save", "s", false, "Save kubeconfig to ~/.kube/config-<cluster-name>")
 	kubeconfigGetCmd.Flags().BoolP("merge", "m", false, "Merge kubeconfig into ~/.kube/config")
@@ -74,6 +92,7 @@ func init() {
 	kubeconfigCmd.AddCommand(kubeconfigGetCmd)
 	kubeconfigCmd.AddCommand(kubeconfigListCmd)
 	kubeconfigCmd.AddCommand(kubeconfigUseCmd)
+	kubeconfigCmd.AddCommand(kubeconfigMigrateCmd)
 }
 
 // createKubeconfigManager creates a kubeconfig manager for the current repository
@@ -369,4 +388,31 @@ func useKubeconfig(clusterName string, evalMode bool) {
 		log.Println("⚡ For automatic setup, use:")
 		log.Printf("   eval $(./hyve kubeconfig use %s --eval)", clusterName)
 	}
+}
+
+// migrateKubeconfigEncryption migrates kubeconfig encryption from hostname-based to portable
+func migrateKubeconfigEncryption(oldHostname string) error {
+	// Create kubeconfig manager
+	kubeconfigMgr, repoName, err := createKubeconfigManager()
+	if err != nil {
+		return err
+	}
+
+	log.Printf("🔄 Starting migration for repository: %s", repoName)
+	log.Printf("🔑 Old hostname: %s", oldHostname)
+	log.Println()
+
+	// Perform migration
+	if err := kubeconfigMgr.MigrateEncryption(oldHostname); err != nil {
+		log.Printf("❌ Migration failed: %v", err)
+		return err
+	}
+
+	log.Println("✅ Migration completed successfully!")
+	log.Println()
+	log.Println("📝 All kubeconfigs have been re-encrypted with the new portable key format.")
+	log.Println("💡 Your kubeconfigs will now work across different machines without hostname dependencies.")
+	log.Println()
+
+	return nil
 }
