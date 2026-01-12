@@ -161,6 +161,7 @@ The CLI follows a command-subcommand structure:
   - **`use`**: Set kubeconfig for current terminal session (temporary)
 - **`hyve use`**: Convenience command to quickly set kubeconfig (equivalent to `hyve kubeconfig use --eval`)
 - **`hyve run`**: Execute commands with specific cluster kubeconfig
+- **`hyve workflow`**: Manage and execute workflows for automated task execution
 - **`hyve install`**: Install shell integration for seamless kubeconfig switching (no eval needed)
 
 #### Basic Commands
@@ -209,6 +210,10 @@ eval $(./hyve use production)
 | `hyve kubeconfig use [name]` | Set kubeconfig for current terminal session | No |
 | `hyve use [name]` | Convenience command to quickly set kubeconfig | No |
 | `hyve run [cmd] [args...]` | Execute command with cluster kubeconfig | No |
+| `hyve workflow create [name]` | Create a new workflow definition | No |
+| `hyve workflow list` | List all available workflows | No |
+| `hyve workflow run [name]` | Execute a workflow | No |
+| `hyve workflow delete [name]` | Delete a workflow definition | No |
 | `hyve install` | Install shell integration for seamless switching | No |
 
 #### CLI Flags
@@ -396,6 +401,182 @@ The `run` command preserves the exit code of the executed command:
 # If kubectl fails, hyve run will exit with the same code
 ./hyve run --cluster production kubectl get invalid-resource
 echo $?  # Will show kubectl's exit code
+```
+
+### Workflow Management
+
+Hyve includes a powerful workflow system for automating deployment pipelines and operational tasks. Workflows are defined in YAML files stored in the `workflows/` directory of your repository and can execute commands both locally and on specific Kubernetes clusters.
+
+#### Workflow Features
+
+- **YAML-based definitions**: Simple, version-controlled workflow definitions
+- **Dependency management**: Jobs can depend on other jobs for execution order
+- **Multi-cluster support**: Run workflows on specific clusters or locally
+- **Environment variables**: Support for workflow, job, and step-level variables
+- **Pre-defined actions**: Built-in actions for common Kubernetes operations
+- **Detailed logging**: Comprehensive execution logs and step outputs
+- **Variable substitution**: Dynamic variable expansion in commands and scripts
+
+#### Creating Workflows
+
+```bash
+# Create a workflow from template
+./hyve workflow create --template my-deployment --description "Application deployment pipeline"
+
+# Create from existing YAML file
+./hyve workflow create --file ./my-workflow.yaml
+
+# List all workflows
+./hyve workflow list
+
+# Show workflow details
+./hyve workflow show my-deployment
+```
+
+#### Workflow Structure
+
+```yaml
+apiVersion: v1
+kind: Workflow
+metadata:
+  name: deployment-pipeline
+  description: Complete deployment pipeline
+  labels:
+    environment: production
+    team: platform
+spec:
+  env:
+    APP_NAME: my-application
+    NAMESPACE: default
+  jobs:
+    - name: pre-checks
+      description: Pre-deployment validation
+      steps:
+        - name: check-cluster-health
+          command: kubectl get nodes
+        - name: verify-namespace
+          command: kubectl get namespace ${NAMESPACE}
+
+    - name: deploy-app
+      description: Deploy the application
+      dependsOn: ["pre-checks"]
+      cluster: production
+      steps:
+        - name: apply-manifests
+          action: kubectl-apply
+          with:
+            file: k8s/deployment.yaml
+        - name: wait-for-rollout
+          command: kubectl rollout status deployment/${APP_NAME} -n ${NAMESPACE}
+
+    - name: post-deploy-tests
+      description: Post-deployment testing
+      dependsOn: ["deploy-app"]
+      steps:
+        - name: health-check
+          script: |
+            echo "Running health checks..."
+            kubectl exec deployment/${APP_NAME} -- curl -f http://localhost:8080/health
+        - name: smoke-tests
+          command: kubectl get pods -n ${NAMESPACE} -l app=${APP_NAME}
+```
+
+#### Running Workflows
+
+```bash
+# Run workflow locally (no cluster context)
+./hyve workflow run my-workflow
+
+# Run workflow on specific cluster
+./hyve workflow run my-workflow --cluster production
+
+# Run with detailed output
+./hyve workflow run my-workflow --output
+
+# Run without logs
+./hyve workflow run my-workflow --logs=false
+```
+
+#### Workflow Components
+
+**Jobs**: Independent units of work that can run in parallel or sequence
+- Support job dependencies with `dependsOn`
+- Can target specific clusters with `cluster`
+- Support conditional execution with `if`
+
+**Steps**: Individual tasks within a job
+- **Commands**: Single shell commands
+- **Scripts**: Multi-line shell scripts
+- **Actions**: Pre-defined operations (kubectl-apply, kubectl-delete)
+
+**Environment Variables**: Available at workflow, job, and step levels
+- Automatic variables: `WORKFLOW_NAME`, `WORKFLOW_CLUSTER`, `KUBECONFIG`
+- Custom variables with `${VARIABLE}` substitution
+
+**Pre-defined Actions**:
+- `kubectl-apply`: Apply Kubernetes manifests
+- `kubectl-delete`: Delete Kubernetes resources
+
+#### Workflow Management
+
+```bash
+# Validate workflow syntax
+./hyve workflow validate my-workflow
+
+# Delete workflow
+./hyve workflow delete my-workflow
+
+# Force delete without confirmation
+./hyve workflow delete my-workflow --force
+```
+
+#### Example: Simple CI/CD Pipeline
+
+```yaml
+apiVersion: v1
+kind: Workflow
+metadata:
+  name: cicd-pipeline
+  description: Simple CI/CD pipeline
+spec:
+  env:
+    PROJECT_NAME: my-app
+    BUILD_VERSION: "1.0.0"
+  jobs:
+    - name: build
+      description: Build and test
+      steps:
+        - name: compile
+          command: echo "Building ${PROJECT_NAME} v${BUILD_VERSION}"
+        - name: test
+          script: |
+            echo "Running tests..."
+            # Add your test commands here
+            echo "✅ Tests passed"
+
+    - name: deploy-staging
+      description: Deploy to staging
+      dependsOn: ["build"]
+      cluster: staging
+      steps:
+        - name: deploy
+          action: kubectl-apply
+          with:
+            file: k8s/staging/
+        - name: verify
+          command: kubectl rollout status deployment/${PROJECT_NAME}
+
+    - name: deploy-production
+      description: Deploy to production
+      dependsOn: ["deploy-staging"]
+      cluster: production
+      steps:
+        - name: deploy
+          action: kubectl-apply
+          with:
+            file: k8s/production/
+        - name: verify
+          command: kubectl rollout status deployment/${PROJECT_NAME}
 ```
 
 #### Kubeconfig Storage

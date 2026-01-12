@@ -27,4 +27,5 @@ func init() {
 	rootCmd.AddCommand(useCmd)
 	rootCmd.AddCommand(installCmd)
 	rootCmd.AddCommand(runCmd)
+	rootCmd.AddCommand(workflowCmd)
 }
