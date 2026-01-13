@@ -109,6 +109,24 @@ var gitCredentialsCmd = &cobra.Command{
 	},
 }
 
+var gitCredentialsMigrateCmd = &cobra.Command{
+	Use:   "credentials-migrate [old-hostname]",
+	Short: "Migrate credentials encryption to new portable format",
+	Long: `Migrate credentials encryption from hostname-based keys to portable keys.
+
+This command re-encrypts your stored credentials using a key that doesn't include the hostname,
+making the database portable across machines. You need to provide the hostname that was
+used when the credentials were originally encrypted.
+
+Example:
+  hyve git credentials-migrate "old-macbook.local"`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		oldHostname := args[0]
+		return migrateGitCredentialsEncryption(oldHostname)
+	},
+}
+
 func init() {
 	gitAddCmd.Flags().StringP("repo-url", "r", "", "Git repository URL (required)")
 	gitAddCmd.Flags().StringP("username", "u", "", "Git username for authentication (stored in repository config)")
@@ -125,6 +143,7 @@ func init() {
 	gitCmd.AddCommand(gitRemoveCmd)
 	gitCmd.AddCommand(gitResetCmd)
 	gitCmd.AddCommand(gitCredentialsCmd)
+	gitCmd.AddCommand(gitCredentialsMigrateCmd)
 }
 
 func addGitRepository(name, repoURL, username string, setCurrent bool) {
@@ -508,4 +527,31 @@ func clearGitCredentials() {
 
 	log.Println("✅ All Git credentials cleared")
 	log.Println("\n💡 You can still use HYVE_GIT_TOKEN environment variable for authentication")
+}
+
+// migrateGitCredentialsEncryption migrates credentials encryption from hostname-based to portable
+func migrateGitCredentialsEncryption(oldHostname string) error {
+	credsMgr, err := credentials.NewManager()
+	if err != nil {
+		return err
+	}
+	defer credsMgr.Close()
+
+	log.Println("🔄 Starting credentials encryption migration")
+	log.Printf("🔑 Old hostname: %s", oldHostname)
+	log.Println()
+
+	// Perform migration
+	if err := credsMgr.MigrateEncryption(oldHostname); err != nil {
+		log.Printf("❌ Migration failed: %v", err)
+		return err
+	}
+
+	log.Println("✅ Migration completed successfully!")
+	log.Println()
+	log.Println("📝 Your credentials have been re-encrypted with the new portable key format.")
+	log.Println("💡 Your credentials will now work across different machines without hostname dependencies.")
+	log.Println()
+
+	return nil
 }

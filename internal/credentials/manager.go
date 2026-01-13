@@ -194,10 +194,18 @@ func (m *Manager) ClearCredentials() error {
 	return nil
 }
 
-// getEncryptionKey generates a deterministic encryption key based on system info
+// getEncryptionKey generates a deterministic encryption key based on database path
 func (m *Manager) getEncryptionKey() []byte {
-	// Use a combination of database path and hostname for key derivation
-	hostname, _ := os.Hostname()
+	// Use database path for key derivation
+	// Note: Hostname is intentionally excluded to make the database portable across machines
+	keyMaterial := m.dbPath
+	hash := sha256.Sum256([]byte(keyMaterial))
+	return hash[:]
+}
+
+// getEncryptionKeyWithHostname generates the old encryption key that included hostname
+// This is used for migrating data encrypted with the old key format
+func (m *Manager) getEncryptionKeyWithHostname(hostname string) []byte {
 	keyMaterial := fmt.Sprintf("%s:%s", m.dbPath, hostname)
 	hash := sha256.Sum256([]byte(keyMaterial))
 	return hash[:]
@@ -265,4 +273,75 @@ func (m *Manager) decryptPassword(encryptedPassword string) (string, error) {
 	}
 
 	return string(plaintext), nil
+}
+
+// decryptPasswordWithHostname decrypts a password using the old hostname-based key
+func (m *Manager) decryptPasswordWithHostname(encryptedPassword string, hostname string) (string, error) {
+	if encryptedPassword == "" {
+		return "", nil
+	}
+
+	key := m.getEncryptionKeyWithHostname(hostname)
+
+	ciphertext, err := base64.StdEncoding.DecodeString(encryptedPassword)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode encrypted password: %w", err)
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", fmt.Errorf("failed to create cipher: %w", err)
+	}
+
+	aesGCM, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("failed to create GCM: %w", err)
+	}
+
+	nonceSize := aesGCM.NonceSize()
+	if len(ciphertext) < nonceSize {
+		return "", fmt.Errorf("ciphertext too short")
+	}
+
+	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
+	plaintext, err := aesGCM.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to decrypt password with hostname: %w", err)
+	}
+
+	return string(plaintext), nil
+}
+
+// MigrateEncryption migrates credentials from hostname-based encryption to portable encryption
+func (m *Manager) MigrateEncryption(oldHostname string) error {
+	// Get current credentials
+	creds, err := m.GetCredentials()
+	if err != nil {
+		return fmt.Errorf("no credentials found to migrate: %w", err)
+	}
+
+	// Decrypt with old hostname-based key
+	plainPassword, err := m.decryptPasswordWithHostname(creds.EncryptedPassword, oldHostname)
+	if err != nil {
+		return fmt.Errorf("failed to decrypt password: %w", err)
+	}
+
+	// Re-encrypt with new portable key
+	newEncrypted, err := m.encryptPassword(plainPassword)
+	if err != nil {
+		return fmt.Errorf("failed to re-encrypt password: %w", err)
+	}
+
+	// Update the database
+	updateSQL := `
+	UPDATE credentials
+	SET encrypted_password = ?, updated_at = CURRENT_TIMESTAMP
+	WHERE id = ?
+	`
+	_, err = m.db.Exec(updateSQL, newEncrypted, creds.ID)
+	if err != nil {
+		return fmt.Errorf("failed to update credentials: %w", err)
+	}
+
+	return nil
 }
