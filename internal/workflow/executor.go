@@ -299,6 +299,14 @@ func (e *Executor) executeStep(ctx context.Context, step *WorkflowStep, job *Wor
 	result.EndTime = &endTime
 	result.Duration = endTime.Sub(result.StartTime)
 
+	// Print command output to user
+	if len(output) > 0 {
+		fmt.Print(string(output))
+		if !strings.HasSuffix(string(output), "\n") {
+			fmt.Println()
+		}
+	}
+
 	if err != nil {
 		result.Status = JobStatusFailed
 		result.Error = err.Error()
@@ -333,6 +341,15 @@ func (e *Executor) executeAction(ctx context.Context, action string, params map[
 		cmd.Env = os.Environ()
 		output, err := cmd.CombinedOutput()
 		result.Output = string(output)
+
+		// Print command output to user
+		if len(output) > 0 {
+			fmt.Print(string(output))
+			if !strings.HasSuffix(string(output), "\n") {
+				fmt.Println()
+			}
+		}
+
 		if err != nil {
 			result.Status = JobStatusFailed
 			result.Error = err.Error()
@@ -353,6 +370,15 @@ func (e *Executor) executeAction(ctx context.Context, action string, params map[
 		cmd.Env = os.Environ()
 		output, err := cmd.CombinedOutput()
 		result.Output = string(output)
+
+		// Print command output to user
+		if len(output) > 0 {
+			fmt.Print(string(output))
+			if !strings.HasSuffix(string(output), "\n") {
+				fmt.Println()
+			}
+		}
+
 		if err != nil {
 			result.Status = JobStatusFailed
 			result.Error = err.Error()
