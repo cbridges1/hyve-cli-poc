@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"os/exec"
@@ -11,7 +12,12 @@ import (
 	"syscall"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
+	"civo-cluster-deploy/internal/cluster"
 	"civo-cluster-deploy/internal/kubeconfig"
+	"civo-cluster-deploy/internal/provider"
+	"civo-cluster-deploy/internal/types"
 )
 
 // Executor handles workflow execution
@@ -87,7 +93,11 @@ func (e *Executor) RunWorkflow(ctx context.Context, workflowName string, cluster
 	}
 
 	// Set up environment variables
-	e.setupEnvironmentVariables(workflow, kubeconfigPath)
+	if err := e.setupEnvironmentVariables(ctx, workflow, targetCluster, kubeconfigPath); err != nil {
+		e.execution.Status = StatusFailed
+		e.addLog("ERROR", "", "", fmt.Sprintf("Failed to setup environment variables: %v", err))
+		return execution, fmt.Errorf("failed to setup environment variables: %w", err)
+	}
 
 	// Execute jobs
 	if err := e.executeJobs(ctx, workflow); err != nil {
@@ -436,7 +446,7 @@ func (e *Executor) cleanupKubeconfig(kubeconfigPath string) {
 }
 
 // setupEnvironmentVariables sets up environment variables for the workflow
-func (e *Executor) setupEnvironmentVariables(workflow *Workflow, kubeconfigPath string) {
+func (e *Executor) setupEnvironmentVariables(ctx context.Context, workflow *Workflow, targetCluster string, kubeconfigPath string) error {
 	e.variables["WORKFLOW_NAME"] = workflow.Metadata.Name
 	e.variables["WORKFLOW_CLUSTER"] = e.currentCluster
 	e.variables["WORKFLOW_EXECUTION_ID"] = e.execution.ID
@@ -447,6 +457,124 @@ func (e *Executor) setupEnvironmentVariables(workflow *Workflow, kubeconfigPath 
 		e.variables["KUBECONFIG"] = kubeconfigPath
 		os.Setenv("KUBECONFIG", kubeconfigPath)
 	}
+
+	// Export cluster-specific environment variables if cluster is specified
+	if targetCluster != "" {
+		if err := e.exportClusterEnvironmentVariables(ctx, targetCluster); err != nil {
+			log.Printf("Warning: Failed to export cluster environment variables: %v", err)
+			// Don't fail the workflow if we can't get cluster info
+		}
+	}
+
+	return nil
+}
+
+// exportClusterEnvironmentVariables exports cluster-specific environment variables
+func (e *Executor) exportClusterEnvironmentVariables(ctx context.Context, clusterName string) error {
+	// Load cluster definitions from YAML files
+	clusterDef, err := e.loadClusterDefinition(clusterName)
+	if err != nil {
+		return fmt.Errorf("failed to load cluster definition: %w", err)
+	}
+
+	// Get API key from environment
+	apiKey := os.Getenv("CIVO_TOKEN")
+	if apiKey == "" {
+		return fmt.Errorf("CIVO_TOKEN environment variable not set")
+	}
+
+	// Create provider for this cluster
+	factory := provider.NewFactory()
+	prov, err := factory.CreateProvider(clusterDef.Spec.Provider, apiKey, clusterDef.Metadata.Region)
+	if err != nil {
+		return fmt.Errorf("failed to create provider: %w", err)
+	}
+
+	// Create cluster manager
+	clusterMgr := cluster.NewManager(prov)
+
+	// Get cluster information
+	clusterInfo, err := clusterMgr.GetClusterInfo(ctx, clusterName)
+	if err != nil {
+		return fmt.Errorf("failed to get cluster info: %w", err)
+	}
+
+	if clusterInfo == nil {
+		return fmt.Errorf("cluster info not found")
+	}
+
+	// Set HYVE_CLUSTER_* environment variables
+	e.variables["HYVE_CLUSTER_NAME"] = clusterInfo.Name
+	e.variables["HYVE_CLUSTER_IP_ADDRESS"] = clusterInfo.IPAddress
+	e.variables["HYVE_CLUSTER_ACCESS_PORT"] = clusterInfo.AccessPort
+	e.variables["HYVE_CLUSTER_ID"] = clusterInfo.ID
+	e.variables["HYVE_CLUSTER_STATUS"] = clusterInfo.Status
+	e.variables["HYVE_CLUSTER_KUBECONFIG"] = clusterInfo.Kubeconfig
+
+	// Also export to process environment so they're available in scripts
+	os.Setenv("HYVE_CLUSTER_NAME", clusterInfo.Name)
+	os.Setenv("HYVE_CLUSTER_IP_ADDRESS", clusterInfo.IPAddress)
+	os.Setenv("HYVE_CLUSTER_ACCESS_PORT", clusterInfo.AccessPort)
+	os.Setenv("HYVE_CLUSTER_ID", clusterInfo.ID)
+	os.Setenv("HYVE_CLUSTER_STATUS", clusterInfo.Status)
+	os.Setenv("HYVE_CLUSTER_KUBECONFIG", clusterInfo.Kubeconfig)
+
+	log.Printf("✅ Exported cluster information to environment:")
+	log.Printf("  HYVE_CLUSTER_NAME=%s", clusterInfo.Name)
+	log.Printf("  HYVE_CLUSTER_IP_ADDRESS=%s", clusterInfo.IPAddress)
+	log.Printf("  HYVE_CLUSTER_ACCESS_PORT=%s", clusterInfo.AccessPort)
+	log.Printf("  HYVE_CLUSTER_ID=%s", clusterInfo.ID)
+	log.Printf("  HYVE_CLUSTER_STATUS=%s", clusterInfo.Status)
+
+	return nil
+}
+
+// loadClusterDefinition loads a cluster definition from YAML file
+func (e *Executor) loadClusterDefinition(clusterName string) (*types.ClusterDefinition, error) {
+	clustersDir := filepath.Join(e.manager.currentRepo.LocalPath, "clusters")
+	var clusterDef *types.ClusterDefinition
+
+	// Check if clusters directory exists
+	if _, err := os.Stat(clustersDir); os.IsNotExist(err) {
+		return nil, fmt.Errorf("clusters directory not found at %s", clustersDir)
+	}
+
+	err := filepath.WalkDir(clustersDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if d.IsDir() || (!strings.HasSuffix(path, ".yaml") && !strings.HasSuffix(path, ".yml")) {
+			return nil
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("failed to read file %s: %w", path, err)
+		}
+
+		var cluster types.ClusterDefinition
+		if err := yaml.Unmarshal(data, &cluster); err != nil {
+			return fmt.Errorf("failed to unmarshal cluster definition from %s: %w", path, err)
+		}
+
+		if cluster.Metadata.Name == clusterName {
+			clusterDef = &cluster
+			return filepath.SkipAll
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	if clusterDef == nil {
+		return nil, fmt.Errorf("cluster %s not found in clusters directory", clusterName)
+	}
+
+	return clusterDef, nil
 }
 
 // evaluateCondition evaluates a condition string
