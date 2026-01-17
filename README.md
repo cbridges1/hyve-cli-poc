@@ -152,17 +152,16 @@ The CLI follows a command-subcommand structure:
 - **`hyve reconcile`**: Manual reconciliation of all clusters in current repository
 - **`hyve cluster`**: Cluster operations (with automatic reconciliation)
   - **`add`**: Create cluster + reconcile
-  - **`modify`**: Update cluster + reconcile  
+  - **`modify`**: Update cluster + reconcile
   - **`delete`**: Remove cluster + reconcile
 - **`hyve kubeconfig`**: Kubeconfig management (automatically synced after reconcile)
   - **`sync`**: Manually sync kubeconfigs from active clusters
   - **`list`**: List all stored kubeconfigs for current repository
   - **`get`**: Retrieve and display/save kubeconfig for specific cluster
-  - **`use`**: Set kubeconfig for current terminal session (temporary)
-- **`hyve use`**: Convenience command to quickly set kubeconfig (equivalent to `hyve kubeconfig use --eval`)
+  - **`merge`**: Merge cluster context into local ~/.kube/config
+  - **`remove`**: Remove cluster context from local ~/.kube/config
 - **`hyve run`**: Execute commands with specific cluster kubeconfig
 - **`hyve workflow`**: Manage and execute workflows for automated task execution
-- **`hyve install`**: Install shell integration for seamless kubeconfig switching (no eval needed)
 
 #### Basic Commands
 
@@ -182,10 +181,16 @@ The CLI follows a command-subcommand structure:
 # Delete a cluster (automatically runs reconciliation)
 ./hyve cluster delete production
 
-# Quickly set kubeconfig for current terminal session
-eval $(./hyve use production)
+# Merge cluster context into local ~/.kube/config
+./hyve kubeconfig merge production
 
-# Run kubectl commands with specific cluster
+# Switch to merged cluster context
+kubectl config use-context production
+
+# Remove cluster context from local ~/.kube/config
+./hyve kubeconfig remove production
+
+# Run kubectl commands with specific cluster (without modifying local kubeconfig)
 ./hyve run --cluster production kubectl get nodes
 
 # Run any command with cluster context
@@ -207,14 +212,13 @@ eval $(./hyve use production)
 | `hyve kubeconfig sync` | Sync kubeconfigs from all active clusters | No |
 | `hyve kubeconfig list` | List all stored kubeconfigs | No |
 | `hyve kubeconfig get [name]` | Get kubeconfig for specific cluster | No |
-| `hyve kubeconfig use [name]` | Set kubeconfig for current terminal session | No |
-| `hyve use [name]` | Convenience command to quickly set kubeconfig | No |
+| `hyve kubeconfig merge [name]` | Merge cluster context into ~/.kube/config | No |
+| `hyve kubeconfig remove [name]` | Remove cluster context from ~/.kube/config | No |
 | `hyve run [cmd] [args...]` | Execute command with cluster kubeconfig | No |
 | `hyve workflow create [name]` | Create a new workflow definition | No |
 | `hyve workflow list` | List all available workflows | No |
 | `hyve workflow run [name]` | Execute a workflow | No |
 | `hyve workflow delete [name]` | Delete a workflow definition | No |
-| `hyve install` | Install shell integration for seamless switching | No |
 
 #### CLI Flags
 
@@ -301,59 +305,56 @@ kubectl get nodes
 ./hyve kubeconfig get production | kubectl --kubeconfig=/dev/stdin get nodes
 ```
 
-#### Set Kubeconfig for Terminal Session
+#### Merge Cluster Context into Local Kubeconfig
 
-##### Method 1: Shell Integration (Recommended - No eval needed!)
-
-```bash
-# One-time setup: Install shell integration
-./hyve install
-
-# After installation, restart your terminal or run:
-source ~/.bashrc  # or ~/.zshrc
-
-# Now you can directly switch clusters without eval commands:
-hyve-use production    # Instantly switches to production cluster
-hyve-use development   # Instantly switches to development cluster
-hyve-status           # Shows current cluster
-hyve-unset            # Reverts to default kubeconfig
-hyve-list             # Lists available clusters
-```
-
-##### Method 2: Manual eval (when shell integration isn't available)
+The recommended way to use Hyve clusters is to merge their context into your local `~/.kube/config` file. This is simple, maintainable, and works across all platforms.
 
 ```bash
-# Convenience command
-eval $(./hyve use production)
+# Merge cluster context into ~/.kube/config
+./hyve kubeconfig merge production
 
-# With kubeconfig subcommand
-eval $(./hyve kubeconfig use production --eval)
+# Switch to the merged cluster context
+kubectl config use-context production
 
-# Traditional approach
-./hyve kubeconfig use production
-# Then copy and execute the provided export command
-```
+# Verify you're using the correct context
+kubectl config current-context
 
-##### Method 3: Custom shell function
-
-```bash
-# Add to ~/.bashrc or ~/.zshrc
-hyve-use() {
-    eval $(./hyve use "$1")
-}
-
-# Usage:
-hyve-use production
-```
-
-After switching clusters:
-```bash
-# Now kubectl uses the selected cluster by default
+# Use kubectl normally
 kubectl get nodes
 kubectl get pods
 
-# To revert back to your original kubeconfig
-unset KUBECONFIG  # or hyve-unset if using shell integration
+# Switch back to another context
+kubectl config use-context minikube
+
+# List all available contexts
+kubectl config get-contexts
+```
+
+#### Remove Cluster Context from Local Kubeconfig
+
+When you no longer need a cluster context in your local kubeconfig:
+
+```bash
+# Remove cluster context from ~/.kube/config
+./hyve kubeconfig remove production
+
+# This removes the context, cluster, and user entries
+# Your other contexts remain intact
+```
+
+#### Alternative: Temporary Kubeconfig Access
+
+If you don't want to modify your local kubeconfig, use `hyve run`:
+
+```bash
+# Run commands with cluster context (no local kubeconfig modification)
+./hyve run --cluster production kubectl get nodes
+./hyve run --cluster staging kubectl get pods -A
+
+# Or use temporary KUBECONFIG environment variable
+export KUBECONFIG=$(./hyve kubeconfig get production -o /tmp/production-kubeconfig)
+kubectl get nodes
+unset KUBECONFIG
 ```
 
 ### Command Execution with Kubeconfig
@@ -586,9 +587,8 @@ spec:
 ├── repositories.db              # Repository configurations
 ├── credentials.db               # Global Git credentials (encrypted)
 ├── kubeconfigs.db              # Cluster kubeconfigs (encrypted per repository)
-├── temp/                       # Temporary kubeconfig files for terminal sessions
-│   ├── kubeconfig-production-cluster1
-│   └── kubeconfig-development-test-app
+├── temp/                       # Temporary kubeconfig files (used by hyve run)
+│   └── kubeconfig-workflow-*
 └── repositories/               # Centralized repository storage
     ├── production/
     └── development/
@@ -620,7 +620,7 @@ Hyve stores repository, credential, and kubeconfig data in SQLite databases:
 ├── repositories.db              # SQLite database with repository configs
 ├── credentials.db               # SQLite database with encrypted global credentials
 ├── kubeconfigs.db              # SQLite database with encrypted cluster kubeconfigs
-├── temp/                       # Temporary kubeconfig files for terminal sessions
+├── temp/                       # Temporary kubeconfig files (used by hyve run and workflows)
 ├── repositories/               # Centralized repository storage directory
 └── config.yaml                 # Legacy config (unused in current version)
 ```
@@ -702,18 +702,46 @@ Hyve stores repository, credential, and kubeconfig data in SQLite databases:
 # List all environments
 ./hyve git list
 
-# Check current environment  
+# Check current environment
 ./hyve git status
 
 # Switch environments
 ./hyve git use development
 ./hyve cluster add test-feature --region PHX1 --nodes g4s.kube.small
 
-./hyve git use production  
+./hyve git use production
 ./hyve cluster delete old-cluster
 
 # Clean up old environment
 ./hyve git remove development
+```
+
+### Kubeconfig Workflow Example
+
+```bash
+# Add clusters to your repository
+./hyve cluster add staging --region PHX1 --nodes g4s.kube.medium
+./hyve cluster add production --region NYC1 --nodes g4s.kube.large,g4s.kube.large,g4s.kube.large
+
+# Merge both clusters into your local kubeconfig
+./hyve kubeconfig merge staging
+./hyve kubeconfig merge production
+
+# Now you can easily switch between clusters
+kubectl config use-context staging
+kubectl get nodes
+
+kubectl config use-context production
+kubectl get nodes
+
+# View all available contexts
+kubectl config get-contexts
+
+# When you're done with a cluster, remove it
+./hyve kubeconfig remove staging
+
+# Or use hyve run without modifying local kubeconfig
+./hyve run --cluster production kubectl get pods -A
 ```
 
 ## Contributing

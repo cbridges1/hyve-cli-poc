@@ -63,6 +63,28 @@ var kubeconfigUseCmd = &cobra.Command{
 	},
 }
 
+var kubeconfigMergeCmd = &cobra.Command{
+	Use:   "merge [cluster-name]",
+	Short: "Merge cluster context into local ~/.kube/config",
+	Long:  "Merge the cluster's kubeconfig context into your local ~/.kube/config file for easy kubectl access",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		clusterName := args[0]
+		mergeKubeconfig(clusterName)
+	},
+}
+
+var kubeconfigRemoveCmd = &cobra.Command{
+	Use:   "remove [cluster-name]",
+	Short: "Remove cluster context from local ~/.kube/config",
+	Long:  "Remove the cluster's context, cluster, and user entries from your local ~/.kube/config file",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		clusterName := args[0]
+		removeKubeconfig(clusterName)
+	},
+}
+
 var kubeconfigMigrateCmd = &cobra.Command{
 	Use:   "migrate [old-hostname]",
 	Short: "Migrate kubeconfig encryption to new portable format",
@@ -92,6 +114,8 @@ func init() {
 	kubeconfigCmd.AddCommand(kubeconfigGetCmd)
 	kubeconfigCmd.AddCommand(kubeconfigListCmd)
 	kubeconfigCmd.AddCommand(kubeconfigUseCmd)
+	kubeconfigCmd.AddCommand(kubeconfigMergeCmd)
+	kubeconfigCmd.AddCommand(kubeconfigRemoveCmd)
 	kubeconfigCmd.AddCommand(kubeconfigMigrateCmd)
 }
 
@@ -387,6 +411,134 @@ func useKubeconfig(clusterName string, evalMode bool) {
 		log.Println()
 		log.Println("⚡ For automatic setup, use:")
 		log.Printf("   eval $(./hyve kubeconfig use %s --eval)", clusterName)
+	}
+}
+
+func mergeKubeconfig(clusterName string) {
+	kubeconfigMgr, _, err := createKubeconfigManager()
+	if err != nil {
+		log.Fatalf("Failed to create kubeconfig manager: %v", err)
+	}
+	defer kubeconfigMgr.Close()
+
+	// Get kubeconfig from Hyve storage
+	kc, err := kubeconfigMgr.GetKubeconfig(clusterName)
+	if err != nil {
+		log.Fatalf("Failed to get kubeconfig: %v", err)
+	}
+
+	if kc == nil {
+		log.Fatalf("Kubeconfig not found for cluster %s. Run 'hyve kubeconfig sync' first.", clusterName)
+	}
+
+	config, err := kc.GetConfig()
+	if err != nil {
+		log.Fatalf("Failed to decrypt kubeconfig: %v", err)
+	}
+
+	// Get ~/.kube/config path
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatalf("Failed to get user home directory: %v", err)
+	}
+
+	kubeDir := fmt.Sprintf("%s/.kube", homeDir)
+	if err := os.MkdirAll(kubeDir, 0755); err != nil {
+		log.Fatalf("Failed to create .kube directory: %v", err)
+	}
+
+	kubeConfigPath := fmt.Sprintf("%s/config", kubeDir)
+
+	// Merge kubeconfig
+	log.Printf("🔀 Merging cluster '%s' into %s", clusterName, kubeConfigPath)
+
+	// Read existing config if it exists
+	existingConfig := ""
+	if existingData, err := os.ReadFile(kubeConfigPath); err == nil {
+		existingConfig = string(existingData)
+	}
+
+	// Merge configs
+	if existingConfig == "" {
+		// No existing config, just use the new one
+		if err := os.WriteFile(kubeConfigPath, []byte(config), 0600); err != nil {
+			log.Fatalf("Failed to write kubeconfig: %v", err)
+		}
+	} else {
+		// Create backup
+		backupPath := fmt.Sprintf("%s.backup", kubeConfigPath)
+		if err := os.WriteFile(backupPath, []byte(existingConfig), 0600); err != nil {
+			log.Printf("⚠️  Warning: Failed to create backup at %s", backupPath)
+		} else {
+			log.Printf("📦 Backup created at %s", backupPath)
+		}
+
+		// Merge the kubeconfigs
+		mergedContent, err := kubeconfig.MergeKubeconfigs(existingConfig, config)
+		if err != nil {
+			log.Fatalf("Failed to merge kubeconfigs: %v", err)
+		}
+
+		if err := os.WriteFile(kubeConfigPath, []byte(mergedContent), 0600); err != nil {
+			log.Fatalf("Failed to write merged kubeconfig: %v", err)
+		}
+	}
+
+	log.Printf("✅ Successfully merged cluster '%s' into %s", clusterName, kubeConfigPath)
+	log.Println()
+	log.Println("💡 Next steps:")
+	log.Printf("   kubectl config use-context %s", clusterName)
+	log.Println("   kubectl get nodes")
+}
+
+func removeKubeconfig(clusterName string) {
+	// Get ~/.kube/config path
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatalf("Failed to get user home directory: %v", err)
+	}
+
+	kubeConfigPath := fmt.Sprintf("%s/.kube/config", homeDir)
+
+	// Check if config file exists
+	if _, err := os.Stat(kubeConfigPath); os.IsNotExist(err) {
+		log.Printf("❌ No kubeconfig found at %s", kubeConfigPath)
+		return
+	}
+
+	// Read existing config
+	existingData, err := os.ReadFile(kubeConfigPath)
+	if err != nil {
+		log.Fatalf("Failed to read kubeconfig: %v", err)
+	}
+
+	// Create backup
+	backupPath := fmt.Sprintf("%s.backup", kubeConfigPath)
+	if err := os.WriteFile(backupPath, existingData, 0600); err != nil {
+		log.Printf("⚠️  Warning: Failed to create backup at %s", backupPath)
+	} else {
+		log.Printf("📦 Backup created at %s", backupPath)
+	}
+
+	log.Printf("🗑️  Removing cluster '%s' from %s", clusterName, kubeConfigPath)
+
+	// Remove using kubectl commands
+	removed := false
+
+	// Try to delete context
+	if err := kubeconfig.RemoveKubeconfigContext(string(existingData), clusterName, kubeConfigPath); err != nil {
+		log.Printf("⚠️  Warning: Failed to remove context: %v", err)
+	} else {
+		removed = true
+	}
+
+	if removed {
+		log.Printf("✅ Successfully removed cluster '%s' from %s", clusterName, kubeConfigPath)
+		log.Println()
+		log.Println("💡 View remaining contexts:")
+		log.Println("   kubectl config get-contexts")
+	} else {
+		log.Printf("⚠️  Context '%s' not found in kubeconfig", clusterName)
 	}
 }
 
