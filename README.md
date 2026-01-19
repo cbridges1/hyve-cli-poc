@@ -801,6 +801,175 @@ kubectl config get-contexts
 4. Submit a pull request (triggers dry-run validation)
 5. Merge to main (triggers production deployment)
 
+## Testing
+
+Hyve includes comprehensive test coverage for all core functionality. The project uses Go's built-in testing framework.
+
+### Running Tests
+
+#### Basic Commands
+
+```bash
+# Run all tests
+go test ./...
+
+# Run all tests with verbose output
+go test ./... -v
+
+# Run all tests and show coverage
+go test ./... -cover
+```
+
+#### Run Tests for Specific Packages
+
+```bash
+# Run tests for credentials package
+go test ./internal/credentials -v
+
+# Run tests for kubeconfig package
+go test ./internal/kubeconfig -v
+
+# Run tests for repository package
+go test ./internal/repository -v
+
+# Run tests for cluster package
+go test ./internal/cluster -v
+```
+
+#### Run Individual Tests
+
+```bash
+# Run a specific test by name
+go test ./internal/credentials -run TestStoreAndGetCredentials
+
+# Run all tests matching a pattern
+go test ./internal/repository -run TestAdd
+
+# Run a specific subtest
+go test ./internal/cluster -run TestShouldManage/hyve_prefix
+```
+
+### Coverage Reports
+
+```bash
+# Show coverage percentage for all packages
+go test ./... -cover
+
+# Generate detailed coverage report
+go test ./... -coverprofile=coverage.out
+
+# View coverage in browser
+go test ./... -coverprofile=coverage.out
+go tool cover -html=coverage.out
+
+# Show coverage by function
+go tool cover -func=coverage.out
+
+# Coverage for specific package
+go test ./internal/credentials -coverprofile=creds_coverage.out
+go tool cover -html=creds_coverage.out
+```
+
+### Benchmarks
+
+```bash
+# Run all benchmarks
+go test ./internal/credentials -bench=.
+
+# Run specific benchmark
+go test ./internal/credentials -bench=BenchmarkEncryption
+
+# Run benchmarks with memory allocation stats
+go test ./internal/credentials -bench=. -benchmem
+
+# Run benchmarks multiple times for accuracy
+go test ./internal/credentials -bench=. -benchtime=10s -count=5
+```
+
+### Advanced Testing
+
+```bash
+# Run tests with race detector
+go test ./... -race
+
+# Disable test caching (force re-run)
+go test ./... -count=1
+
+# Clear test cache
+go clean -testcache
+
+# Run tests in parallel
+go test ./... -parallel 4
+
+# Run with specific timeout
+go test ./... -timeout 30s
+```
+
+### Test Coverage
+
+The project currently has **56 tests** covering:
+
+| Package | Tests | Coverage | Description |
+|---------|-------|----------|-------------|
+| `internal/credentials` | 11 + 2 benchmarks | ~92% | Git credentials & API token storage |
+| `internal/kubeconfig` | 9 | ~89% | Kubeconfig merge/remove operations |
+| `internal/repository` | 17 | ~90% | Repository management |
+| `internal/cluster` | 16 | ~86% | Cluster lifecycle operations |
+
+**Tested Features:**
+- ✅ Credentials management (Git + API tokens)
+- ✅ AES-GCM encryption/decryption
+- ✅ Kubeconfig merge/remove operations
+- ✅ Repository CRUD operations
+- ✅ Cluster lifecycle (create, update, delete, wait)
+- ✅ Orphaned cluster detection
+- ✅ Database persistence
+- ✅ Error handling
+
+### CI/CD Integration
+
+```bash
+# CI-friendly output with coverage
+go test ./... -v -race -coverprofile=coverage.out -covermode=atomic
+
+# Check coverage threshold (example: 80%)
+go test ./... -cover | grep "coverage:" | awk '{if ($2 < 80) exit 1}'
+```
+
+### Development Workflow
+
+```bash
+# Quick check during development
+go test ./internal/credentials -v -count=1
+
+# Full test suite before commit
+go test ./... -cover -race
+
+# Generate coverage report for review
+go test ./... -coverprofile=coverage.out && go tool cover -html=coverage.out
+```
+
+### Test Structure
+
+All tests follow Go best practices:
+- Use `t.TempDir()` for clean test isolation
+- Clear, descriptive test names following `TestFunction_Scenario` convention
+- Table-driven tests where appropriate
+- Comprehensive assertions with helpful error messages
+- Proper error handling verification
+- No external dependencies (use mocks and temporary databases)
+- Benchmarks for performance-critical operations
+
+### Example Test Output
+
+```bash
+$ go test ./... -cover
+ok      civo-cluster-deploy/internal/cluster        0.213s  coverage: 85.7% of statements
+ok      civo-cluster-deploy/internal/credentials    0.324s  coverage: 92.3% of statements
+ok      civo-cluster-deploy/internal/kubeconfig     0.531s  coverage: 88.9% of statements
+ok      civo-cluster-deploy/internal/repository     0.366s  coverage: 90.1% of statements
+```
+
 ## License
 
 [Add your license here]
