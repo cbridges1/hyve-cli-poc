@@ -87,7 +87,22 @@ func (m *Manager) initializeDB() error {
 	`
 
 	if _, err := db.Exec(createTableSQL); err != nil {
-		return fmt.Errorf("failed to create tables: %w", err)
+		return fmt.Errorf("failed to create credentials table: %w", err)
+	}
+
+	// Create API tokens table
+	createAPITokensSQL := `
+	CREATE TABLE IF NOT EXISTS api_tokens (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		provider TEXT NOT NULL UNIQUE,
+		encrypted_token TEXT NOT NULL,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	`
+
+	if _, err := db.Exec(createAPITokensSQL); err != nil {
+		return fmt.Errorf("failed to create api_tokens table: %w", err)
 	}
 
 	return nil
@@ -344,4 +359,115 @@ func (m *Manager) MigrateEncryption(oldHostname string) error {
 	}
 
 	return nil
+}
+
+// StoreAPIToken stores or updates an API token for a provider (e.g., "civo")
+func (m *Manager) StoreAPIToken(provider, token string) error {
+	if provider == "" || token == "" {
+		return fmt.Errorf("provider and token are required")
+	}
+
+	// Encrypt the token
+	encryptedToken, err := m.encryptPassword(token)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt token: %w", err)
+	}
+
+	// Try to update existing token first
+	updateSQL := `
+	UPDATE api_tokens
+	SET encrypted_token = ?, updated_at = CURRENT_TIMESTAMP
+	WHERE provider = ?
+	`
+	result, err := m.db.Exec(updateSQL, encryptedToken, provider)
+	if err != nil {
+		return fmt.Errorf("failed to update token: %w", err)
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		// Insert new token if update didn't affect any rows
+		insertSQL := `
+		INSERT INTO api_tokens (provider, encrypted_token)
+		VALUES (?, ?)
+		`
+		_, err := m.db.Exec(insertSQL, provider, encryptedToken)
+		if err != nil {
+			return fmt.Errorf("failed to insert token: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// GetAPIToken retrieves and decrypts an API token for a provider
+func (m *Manager) GetAPIToken(provider string) (string, error) {
+	selectSQL := `
+	SELECT encrypted_token
+	FROM api_tokens
+	WHERE provider = ?
+	LIMIT 1
+	`
+
+	var encryptedToken string
+	err := m.db.QueryRow(selectSQL, provider).Scan(&encryptedToken)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", nil // No token stored
+		}
+		return "", fmt.Errorf("failed to get token: %w", err)
+	}
+
+	// Decrypt the token
+	token, err := m.decryptPassword(encryptedToken)
+	if err != nil {
+		return "", fmt.Errorf("failed to decrypt token: %w", err)
+	}
+
+	return token, nil
+}
+
+// HasAPIToken checks if a token is stored for the given provider
+func (m *Manager) HasAPIToken(provider string) (bool, error) {
+	token, err := m.GetAPIToken(provider)
+	if err != nil {
+		return false, err
+	}
+	return token != "", nil
+}
+
+// ClearAPIToken removes the stored API token for a provider
+func (m *Manager) ClearAPIToken(provider string) error {
+	deleteSQL := `DELETE FROM api_tokens WHERE provider = ?`
+	_, err := m.db.Exec(deleteSQL, provider)
+	if err != nil {
+		return fmt.Errorf("failed to clear token: %w", err)
+	}
+	return nil
+}
+
+// ListAPITokens returns a list of providers that have tokens stored
+func (m *Manager) ListAPITokens() ([]string, error) {
+	selectSQL := `
+	SELECT provider
+	FROM api_tokens
+	ORDER BY provider
+	`
+
+	rows, err := m.db.Query(selectSQL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list tokens: %w", err)
+	}
+	defer rows.Close()
+
+	var providers []string
+	for rows.Next() {
+		var provider string
+		if err := rows.Scan(&provider); err != nil {
+			return nil, fmt.Errorf("failed to scan provider: %w", err)
+		}
+		providers = append(providers, provider)
+	}
+
+	return providers, nil
 }

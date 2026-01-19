@@ -46,11 +46,18 @@ Hyve is a **GitOps-first** cluster management tool that requires Git repositorie
    go build -o hyve .
    ```
 
-3. **Configure environment**:
+3. **Configure API token**:
    ```bash
-   # Create .env file with your Civo API token
+   # Recommended: Store encrypted token in database
+   ./hyve config set-token civo
+   # Enter your Civo API token when prompted
+
+   # Alternative: Create .env file
    echo "CIVO_TOKEN=your_civo_api_token_here" > .env
-   
+
+   # Alternative: Set environment variable
+   export CIVO_TOKEN=your_civo_api_token_here
+
    # Optional: Set Git token as fallback (global credentials are preferred)
    export HYVE_GIT_TOKEN=your_git_token_here
    ```
@@ -127,13 +134,13 @@ export HYVE_GIT_TOKEN=your_personal_access_token
 # Store global Git credentials (used for all repositories)
 ./hyve git credentials --username your-username --password your-token
 
-# Update global credentials 
+# Update global credentials
 ./hyve git credentials --username new-username --password new-token
 
 # Update just the password (keeps existing username)
 ./hyve git credentials --password new-personal-access-token
 
-# Update just the username (keeps existing password)  
+# Update just the username (keeps existing password)
 ./hyve git credentials --username new-username
 
 # View current global credentials
@@ -143,12 +150,50 @@ export HYVE_GIT_TOKEN=your_personal_access_token
 ./hyve git credentials --clear
 ```
 
+#### API Token Management
+
+Hyve can securely store your cloud provider API tokens in an encrypted database, eliminating the need for `.env` files or environment variables.
+
+```bash
+# Store Civo API token (recommended)
+./hyve config set-token civo
+# Enter token when prompted (input will be hidden)
+
+# Or provide token directly
+./hyve config set-token civo --token YOUR_TOKEN_HERE
+
+# View stored token
+./hyve config get-token civo
+
+# List all stored provider tokens
+./hyve config list-tokens
+
+# Remove stored token
+./hyve config clear-token civo
+```
+
+**Token Priority:**
+1. Database (encrypted storage via `hyve config set-token`)
+2. Environment variable (`CIVO_TOKEN`)
+3. `.env` file
+
+**Security:**
+- Tokens are encrypted using AES-GCM before storage
+- Stored in `~/.hyve/credentials.db`
+- Portable across machines (no hostname dependency)
+- Same encryption as Git credentials
+
 ### Cluster Management
 
 #### CLI Architecture
 
 The CLI follows a command-subcommand structure:
 - **`hyve git`**: Git repository management
+- **`hyve config`**: Configuration management (API tokens, settings)
+  - **`set-token`**: Store encrypted provider API token
+  - **`get-token`**: Retrieve stored API token
+  - **`list-tokens`**: List providers with stored tokens
+  - **`clear-token`**: Remove stored API token
 - **`hyve reconcile`**: Manual reconciliation of all clusters in current repository
 - **`hyve cluster`**: Cluster operations (with automatic reconciliation)
   - **`add`**: Create cluster + reconcile
@@ -205,6 +250,10 @@ kubectl config use-context production
 | `hyve git list` | List all configured repositories | No |
 | `hyve git use [name]` | Switch to different repository | No |
 | `hyve git status` | Show current repository status | No |
+| `hyve config set-token [provider]` | Store encrypted API token in database | No |
+| `hyve config get-token [provider]` | Retrieve stored API token | No |
+| `hyve config list-tokens` | List providers with stored tokens | No |
+| `hyve config clear-token [provider]` | Remove stored API token | No |
 | `hyve reconcile` | Deploy all clusters in current repository | Manual |
 | `hyve cluster add [name]` | Create cluster configuration | Automatic |
 | `hyve cluster modify [name]` | Update cluster configuration | Automatic |

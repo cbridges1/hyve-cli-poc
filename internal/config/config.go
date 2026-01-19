@@ -2,12 +2,13 @@ package config
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
+
+	"civo-cluster-deploy/internal/credentials"
 )
 
 // GitConfig represents Git repository configuration
@@ -115,14 +116,32 @@ func (m *Manager) IsGitConfigured() bool {
 }
 
 // GetCivoToken loads the Civo API token from configuration
+// Priority: 1) Database 2) Environment variable 3) .env file
 func (m *Manager) GetCivoToken() string {
+	// First, try to get from database
+	credsMgr, err := credentials.NewManager()
+	if err == nil {
+		defer credsMgr.Close()
+		token, err := credsMgr.GetAPIToken("civo")
+		if err == nil && token != "" {
+			return token
+		}
+	}
+
+	// Second, try environment variable
+	if token := os.Getenv("CIVO_TOKEN"); token != "" {
+		return token
+	}
+
+	// Third, try .env file
 	viper.SetConfigName(".env")
 	viper.SetConfigType("env")
 	viper.AddConfigPath(".")
 	viper.AutomaticEnv()
 
 	if err := viper.ReadInConfig(); err != nil {
-		log.Printf("Warning: Could not read .env file: %v", err)
+		// Don't log warning if both database and environment variable are empty
+		// This makes the error message cleaner
 	}
 
 	return viper.GetString("CIVO_TOKEN")
