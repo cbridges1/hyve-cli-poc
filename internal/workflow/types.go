@@ -23,9 +23,31 @@ type WorkflowMetadata struct {
 
 // WorkflowSpec defines the workflow specification
 type WorkflowSpec struct {
-	Triggers []WorkflowTrigger `yaml:"triggers,omitempty"`
-	Jobs     []WorkflowJob     `yaml:"jobs"`
-	Env      map[string]string `yaml:"env,omitempty"`
+	Requirements *WorkflowRequirements `yaml:"requirements,omitempty"`
+	Triggers     []WorkflowTrigger     `yaml:"triggers,omitempty"`
+	Jobs         []WorkflowJob         `yaml:"jobs"`
+	Env          map[string]string     `yaml:"env,omitempty"`
+}
+
+// WorkflowRequirements defines prerequisites for workflow execution
+type WorkflowRequirements struct {
+	Tools   []ToolRequirement   `yaml:"tools,omitempty"`   // CLI tools that must be available
+	Secrets []SecretRequirement `yaml:"secrets,omitempty"` // Secrets that must be configured
+}
+
+// ToolRequirement specifies a required CLI tool
+type ToolRequirement struct {
+	Name        string `yaml:"name"`                  // Tool name (e.g., "kubectl", "helm", "docker")
+	Version     string `yaml:"version,omitempty"`     // Minimum version (optional)
+	Description string `yaml:"description,omitempty"` // Human-readable description
+}
+
+// SecretRequirement specifies a required secret or credential
+type SecretRequirement struct {
+	Name        string `yaml:"name"`                  // Environment variable name (e.g., "DOCKER_TOKEN")
+	Provider    string `yaml:"provider,omitempty"`    // Provider name for database lookup (e.g., "docker", "github")
+	Required    bool   `yaml:"required"`              // Whether this secret is mandatory
+	Description string `yaml:"description,omitempty"` // Human-readable description
 }
 
 // WorkflowTrigger defines when the workflow should run

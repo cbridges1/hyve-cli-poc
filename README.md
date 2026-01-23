@@ -466,6 +466,59 @@ Hyve includes a powerful workflow system for automating deployment pipelines and
 - **Pre-defined actions**: Built-in actions for common Kubernetes operations
 - **Detailed logging**: Comprehensive execution logs and step outputs
 - **Variable substitution**: Dynamic variable expansion in commands and scripts
+- **Requirements validation**: Automatic verification of CLI tools and secrets before execution
+
+#### Workflow Requirements
+
+Workflows can specify requirements that are validated before execution. This ensures all necessary tools and secrets are available, preventing runtime failures.
+
+**Tool Requirements**: Validate CLI tools are installed and optionally check minimum versions
+```yaml
+spec:
+  requirements:
+    tools:
+      - name: kubectl
+        version: "1.28"
+        description: Kubernetes CLI for cluster operations
+      - name: helm
+        version: "3.12"
+        description: Helm package manager
+      - name: docker
+        description: Docker CLI (version check optional)
+```
+
+**Secret Requirements**: Validate secrets are available from database or environment
+```yaml
+spec:
+  requirements:
+    secrets:
+      - name: DOCKER_TOKEN
+        provider: docker
+        required: true
+        description: Docker Hub authentication token
+      - name: GITHUB_TOKEN
+        provider: github
+        required: false
+        description: GitHub token (optional)
+```
+
+**How It Works**:
+1. **Tool Validation**: Checks if tools exist in PATH and validates version if specified
+2. **Secret Loading**: Automatically loads secrets from credentials database into environment
+3. **Environment Fallback**: Checks environment variables if secret not in database
+4. **Helpful Errors**: Provides clear instructions when requirements not met
+
+**Secret Priority**:
+1. Environment variable (if already set)
+2. Credentials database via provider name (`hyve config set-token <provider>`)
+
+**Example Error Message**:
+```
+Requirements validation failed:
+  - Required tool 'helm' not found in PATH (Helm package manager)
+  - Required secret 'DOCKER_TOKEN' not found (Docker Hub authentication token)
+    Set via: hyve config set-token docker OR export DOCKER_TOKEN=your-secret
+```
 
 #### Creating Workflows
 
@@ -627,6 +680,86 @@ spec:
             file: k8s/production/
         - name: verify
           command: kubectl rollout status deployment/${PROJECT_NAME}
+```
+
+#### Example: Docker Build with Requirements
+
+```yaml
+apiVersion: v1
+kind: Workflow
+metadata:
+  name: docker-build
+  description: Build and push Docker images with validation
+spec:
+  requirements:
+    tools:
+      - name: docker
+        version: "20.10"
+        description: Docker CLI for building and pushing images
+      - name: git
+        description: Git CLI for source control operations
+    secrets:
+      - name: DOCKER_TOKEN
+        provider: docker
+        required: true
+        description: Docker Hub authentication token
+      - name: GITHUB_TOKEN
+        provider: github
+        required: false
+        description: GitHub token for private repos (optional)
+
+  env:
+    IMAGE_NAME: my-application
+    IMAGE_TAG: latest
+    DOCKER_REGISTRY: docker.io
+
+  jobs:
+    - name: validate-environment
+      description: Validate build environment
+      steps:
+        - name: check-docker
+          command: docker --version
+        - name: verify-auth
+          script: |
+            if [ -z "$DOCKER_TOKEN" ]; then
+              echo "❌ DOCKER_TOKEN not available"
+              exit 1
+            fi
+            echo "✅ Docker authentication configured"
+
+    - name: build-image
+      description: Build Docker image
+      dependsOn: ["validate-environment"]
+      steps:
+        - name: docker-build
+          script: |
+            docker build -t ${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} .
+            echo "✅ Build complete"
+
+    - name: push-image
+      description: Push to registry
+      dependsOn: ["build-image"]
+      steps:
+        - name: docker-login
+          script: |
+            echo "$DOCKER_TOKEN" | docker login -u myuser --password-stdin
+        - name: docker-push
+          command: docker push ${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
+```
+
+**Usage**:
+```bash
+# Set required token
+./hyve config set-token docker
+# Enter your Docker Hub token when prompted
+
+# Run the workflow
+./hyve workflow run docker-build
+
+# Output shows:
+# ✅ All requirements validated successfully
+# ✅ Docker authentication configured
+# ✅ Build complete
 ```
 
 #### Kubeconfig Storage

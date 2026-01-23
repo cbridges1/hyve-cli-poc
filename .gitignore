@@ -32,10 +32,4 @@ go.work.sum
 # .idea/
 # .vscode/
 
-civo-cluster-deploy
 hyve
-
-# Test directories and repository states
-test-*repo*/
-test-local-state/
-.hyve-state*/

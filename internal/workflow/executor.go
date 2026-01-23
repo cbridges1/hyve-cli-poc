@@ -80,6 +80,34 @@ func (e *Executor) RunWorkflow(ctx context.Context, workflowName string, cluster
 	e.execution = execution
 	e.addLog("INFO", "", "", fmt.Sprintf("Starting workflow '%s'", workflowName))
 
+	// Validate workflow requirements
+	if workflow.Spec.Requirements != nil {
+		e.addLog("INFO", "", "", "Validating workflow requirements...")
+		validator, err := NewRequirementValidator()
+		if err != nil {
+			e.execution.Status = StatusFailed
+			e.addLog("ERROR", "", "", fmt.Sprintf("Failed to create requirement validator: %v", err))
+			return execution, fmt.Errorf("failed to create requirement validator: %w", err)
+		}
+		defer validator.Close()
+
+		// Validate all requirements
+		if err := validator.ValidateRequirements(workflow.Spec.Requirements); err != nil {
+			e.execution.Status = StatusFailed
+			e.addLog("ERROR", "", "", fmt.Sprintf("Requirements validation failed: %v", err))
+			return execution, fmt.Errorf("requirements validation failed: %w", err)
+		}
+
+		// Load secrets into environment
+		if err := validator.LoadSecretsIntoEnvironment(workflow.Spec.Requirements); err != nil {
+			e.execution.Status = StatusFailed
+			e.addLog("ERROR", "", "", fmt.Sprintf("Failed to load secrets: %v", err))
+			return execution, fmt.Errorf("failed to load secrets: %w", err)
+		}
+
+		e.addLog("INFO", "", "", "✅ All requirements validated successfully")
+	}
+
 	// Set up kubeconfig if cluster specified
 	var kubeconfigPath string
 	if targetCluster != "" {
