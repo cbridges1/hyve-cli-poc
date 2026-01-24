@@ -205,6 +205,99 @@ Manage Git branches within your current repository for organizing cluster config
 - Collaborate on infrastructure changes without affecting main branch
 - Experiment with workflow changes in isolated branches
 
+#### Synchronization Commands
+
+Hyve provides convenient commands for syncing your local repository with remote changes.
+
+```bash
+# Pull latest changes from remote
+./hyve git pull
+
+# Stage, commit, and push changes in one command
+./hyve git push "Updated cluster configuration"
+
+# Sync with remote (pull + commit + push)
+./hyve git sync
+# Or with commit message
+./hyve git sync "Synced infrastructure changes"
+```
+
+**Pull Command:**
+- Pulls latest changes from the current branch's remote
+- Updates your local working directory
+- Safe to run anytime to stay up-to-date
+
+**Push Command:**
+- Automatically stages all changes (`git add .`)
+- Commits with your provided message
+- Pushes to remote in one operation
+- Uses default message based on changes if not provided
+- Shows summary of changes before committing
+
+**Sync Command:**
+- Combines pull and push in one operation
+- First pulls latest changes from remote
+- Then prompts to commit and push local changes
+- Perfect for keeping branch synchronized
+- Can skip push by pressing Enter when prompted
+
+**Example Workflow:**
+
+```bash
+# Start your work day - sync with team's changes
+./hyve git pull
+
+# Make changes to cluster configurations
+./hyve cluster add new-cluster --region NYC1 --nodes g4s.kube.medium
+
+# Hyve automatically commits cluster changes, now push them
+./hyve git push "Added new-cluster for NYC region"
+
+# Or use sync for both pull and push
+./hyve git sync "Updated infrastructure"
+
+# Output:
+# 🔄 Syncing branch 'main' with remote...
+# 1. Pulling latest changes from remote...
+# ✅ Pulled latest changes
+# 2. Local changes detected: 2 modified, 1 untracked
+# 3. Committing local changes...
+# ✅ Changes committed
+# 4. Pushing to remote...
+# ✅ Changes pushed
+# ✅ Branch 'main' is now fully synchronized
+```
+
+**Change Detection:**
+
+The push and sync commands automatically detect changes:
+```bash
+$ ./hyve git push "Update config"
+📝 Changes detected: 3 modified, 2 untracked
+Committing changes to 'main'...
+✅ Changes committed successfully
+Pushing to remote 'main'...
+✅ Changes pushed successfully
+```
+
+If no message is provided, a default is used:
+```bash
+$ ./hyve git push
+📝 Changes detected: 2 modified
+Using default commit message: Update: 2 modified
+Committing changes to 'main'...
+✅ Changes committed successfully
+Pushing to remote 'main'...
+✅ Changes pushed successfully
+```
+
+If no changes exist:
+```bash
+$ ./hyve git push
+No changes to commit
+💡 Working tree is clean
+```
+
 #### API Token Management
 
 Hyve can securely store your cloud provider API tokens in an encrypted database, eliminating the need for `.env` files or environment variables.
@@ -309,6 +402,9 @@ kubectl config use-context production
 | `hyve git branch create [name]` | Create a new branch | No |
 | `hyve git branch switch [name]` | Switch to a different branch | No |
 | `hyve git branch delete [name]` | Delete a branch | No |
+| `hyve git pull` | Pull latest changes from remote | No |
+| `hyve git push [message]` | Stage, commit, and push changes | No |
+| `hyve git sync [message]` | Pull and push changes (full sync) | No |
 | `hyve config set-token [provider]` | Store encrypted API token in database | No |
 | `hyve config get-token [provider]` | Retrieve stored API token | No |
 | `hyve config list-tokens` | List providers with stored tokens | No |

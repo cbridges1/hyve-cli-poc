@@ -383,3 +383,88 @@ func (m *Manager) PushBranch(ctx context.Context, branchName string) error {
 
 	return nil
 }
+
+// HasUncommittedChanges checks if there are uncommitted changes in the repository
+func (m *Manager) HasUncommittedChanges(ctx context.Context) (bool, error) {
+	if m.repo == nil {
+		return false, fmt.Errorf("repository not initialized")
+	}
+
+	workTree, err := m.repo.Worktree()
+	if err != nil {
+		return false, fmt.Errorf("failed to get worktree: %w", err)
+	}
+
+	status, err := workTree.Status()
+	if err != nil {
+		return false, fmt.Errorf("failed to get status: %w", err)
+	}
+
+	return !status.IsClean(), nil
+}
+
+// GetStatusSummary returns a summary of uncommitted changes
+func (m *Manager) GetStatusSummary(ctx context.Context) (string, error) {
+	if m.repo == nil {
+		return "", fmt.Errorf("repository not initialized")
+	}
+
+	workTree, err := m.repo.Worktree()
+	if err != nil {
+		return "", fmt.Errorf("failed to get worktree: %w", err)
+	}
+
+	status, err := workTree.Status()
+	if err != nil {
+		return "", fmt.Errorf("failed to get status: %w", err)
+	}
+
+	if status.IsClean() {
+		return "Working tree clean", nil
+	}
+
+	var summary string
+	modified := 0
+	added := 0
+	deleted := 0
+	untracked := 0
+
+	for _, fileStatus := range status {
+		switch fileStatus.Staging {
+		case git.Modified:
+			modified++
+		case git.Added:
+			added++
+		case git.Deleted:
+			deleted++
+		}
+		switch fileStatus.Worktree {
+		case git.Modified:
+			modified++
+		case git.Untracked:
+			untracked++
+		case git.Deleted:
+			deleted++
+		}
+	}
+
+	if modified > 0 {
+		summary += fmt.Sprintf("%d modified, ", modified)
+	}
+	if added > 0 {
+		summary += fmt.Sprintf("%d added, ", added)
+	}
+	if deleted > 0 {
+		summary += fmt.Sprintf("%d deleted, ", deleted)
+	}
+	if untracked > 0 {
+		summary += fmt.Sprintf("%d untracked, ", untracked)
+	}
+
+	// Remove trailing comma and space
+	if len(summary) > 2 {
+		summary = summary[:len(summary)-2]
+	}
+
+	return summary, nil
+}

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -179,6 +180,53 @@ var gitBranchSwitchCmd = &cobra.Command{
 	},
 }
 
+var gitPullCmd = &cobra.Command{
+	Use:   "pull",
+	Short: "Pull changes from remote",
+	Long:  "Pull the latest changes from the remote repository for the current branch",
+	Run: func(cmd *cobra.Command, args []string) {
+		pullGitChanges()
+	},
+}
+
+var gitPushCmd = &cobra.Command{
+	Use:   "push [commit-message]",
+	Short: "Stage, commit, and push changes",
+	Long: `Stage all changes, commit with a message, and push to remote.
+
+This is a convenience command that combines:
+  - git add .
+  - git commit -m "message"
+  - git push
+
+If no commit message is provided, a default message based on the changes will be used.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		var message string
+		if len(args) > 0 {
+			message = args[0]
+		}
+		pushGitChanges(message)
+	},
+}
+
+var gitSyncCmd = &cobra.Command{
+	Use:   "sync",
+	Short: "Sync with remote (pull and push)",
+	Long: `Pull latest changes from remote and push any local changes.
+
+This command:
+  1. Pulls latest changes from remote
+  2. If there are local changes, prompts for commit message
+  3. Commits and pushes local changes`,
+	Run: func(cmd *cobra.Command, args []string) {
+		var message string
+		if len(args) > 0 {
+			message = args[0]
+		}
+		syncGitChanges(message)
+	},
+}
+
 func init() {
 	gitAddCmd.Flags().StringP("repo-url", "r", "", "Git repository URL (required)")
 	gitAddCmd.Flags().StringP("username", "u", "", "Git username for authentication (stored in repository config)")
@@ -209,6 +257,9 @@ func init() {
 	gitCmd.AddCommand(gitCredentialsCmd)
 	gitCmd.AddCommand(gitCredentialsMigrateCmd)
 	gitCmd.AddCommand(gitBranchCmd)
+	gitCmd.AddCommand(gitPullCmd)
+	gitCmd.AddCommand(gitPushCmd)
+	gitCmd.AddCommand(gitSyncCmd)
 }
 
 func addGitRepository(name, repoURL, username string, setCurrent bool) {
@@ -851,4 +902,201 @@ func getGitAuth(repo *repository.Repository) (token, username string) {
 	}
 
 	return token, username
+}
+
+func pullGitChanges() {
+	repoMgr, err := repository.NewManager()
+	if err != nil {
+		log.Fatalf("Failed to create repository manager: %v", err)
+	}
+	defer repoMgr.Close()
+
+	currentRepo, err := repoMgr.GetCurrentRepository()
+	if err != nil {
+		log.Println("❌ No Git repository configured")
+		return
+	}
+
+	authToken, authUsername := getGitAuth(currentRepo)
+
+	ctx := context.Background()
+	gitMgr := git.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
+
+	if err := gitMgr.InitializeRepo(ctx); err != nil {
+		log.Fatalf("Failed to initialize repository: %v", err)
+	}
+
+	// Get current branch
+	currentBranch, err := gitMgr.GetCurrentBranch(ctx)
+	if err != nil {
+		log.Fatalf("Failed to get current branch: %v", err)
+	}
+
+	log.Printf("Pulling latest changes from '%s'...", currentBranch)
+
+	// Pull changes
+	if err := gitMgr.Pull(ctx); err != nil {
+		log.Fatalf("Failed to pull changes: %v", err)
+	}
+
+	log.Println("✅ Successfully pulled latest changes")
+	log.Println("\n💡 Your local branch is now up to date with remote")
+}
+
+func pushGitChanges(message string) {
+	repoMgr, err := repository.NewManager()
+	if err != nil {
+		log.Fatalf("Failed to create repository manager: %v", err)
+	}
+	defer repoMgr.Close()
+
+	currentRepo, err := repoMgr.GetCurrentRepository()
+	if err != nil {
+		log.Println("❌ No Git repository configured")
+		return
+	}
+
+	authToken, authUsername := getGitAuth(currentRepo)
+
+	ctx := context.Background()
+	gitMgr := git.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
+
+	if err := gitMgr.InitializeRepo(ctx); err != nil {
+		log.Fatalf("Failed to initialize repository: %v", err)
+	}
+
+	// Check if there are uncommitted changes
+	hasChanges, err := gitMgr.HasUncommittedChanges(ctx)
+	if err != nil {
+		log.Fatalf("Failed to check for changes: %v", err)
+	}
+
+	if !hasChanges {
+		log.Println("No changes to commit")
+		log.Println("\n💡 Working tree is clean")
+		return
+	}
+
+	// Get status summary
+	statusSummary, err := gitMgr.GetStatusSummary(ctx)
+	if err != nil {
+		log.Fatalf("Failed to get status: %v", err)
+	}
+
+	log.Printf("📝 Changes detected: %s", statusSummary)
+
+	// Use default message if not provided
+	if message == "" {
+		message = fmt.Sprintf("Update: %s", statusSummary)
+		log.Printf("Using default commit message: %s", message)
+	}
+
+	// Get current branch
+	currentBranch, err := gitMgr.GetCurrentBranch(ctx)
+	if err != nil {
+		log.Fatalf("Failed to get current branch: %v", err)
+	}
+
+	// Stage, commit, and push
+	log.Printf("Committing changes to '%s'...", currentBranch)
+	if err := gitMgr.Commit(ctx, message); err != nil {
+		log.Fatalf("Failed to commit changes: %v", err)
+	}
+
+	log.Println("✅ Changes committed successfully")
+
+	log.Printf("Pushing to remote '%s'...", currentBranch)
+	if err := gitMgr.Push(ctx); err != nil {
+		log.Fatalf("Failed to push changes: %v", err)
+	}
+
+	log.Println("✅ Changes pushed successfully")
+	log.Printf("\n💡 Branch '%s' is now synchronized with remote", currentBranch)
+}
+
+func syncGitChanges(message string) {
+	repoMgr, err := repository.NewManager()
+	if err != nil {
+		log.Fatalf("Failed to create repository manager: %v", err)
+	}
+	defer repoMgr.Close()
+
+	currentRepo, err := repoMgr.GetCurrentRepository()
+	if err != nil {
+		log.Println("❌ No Git repository configured")
+		return
+	}
+
+	authToken, authUsername := getGitAuth(currentRepo)
+
+	ctx := context.Background()
+	gitMgr := git.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
+
+	if err := gitMgr.InitializeRepo(ctx); err != nil {
+		log.Fatalf("Failed to initialize repository: %v", err)
+	}
+
+	// Get current branch
+	currentBranch, err := gitMgr.GetCurrentBranch(ctx)
+	if err != nil {
+		log.Fatalf("Failed to get current branch: %v", err)
+	}
+
+	log.Printf("🔄 Syncing branch '%s' with remote...", currentBranch)
+
+	// First, pull changes
+	log.Println("1. Pulling latest changes from remote...")
+	if err := gitMgr.Pull(ctx); err != nil {
+		log.Printf("⚠️  Failed to pull changes: %v", err)
+	} else {
+		log.Println("✅ Pulled latest changes")
+	}
+
+	// Check if there are uncommitted changes
+	hasChanges, err := gitMgr.HasUncommittedChanges(ctx)
+	if err != nil {
+		log.Fatalf("Failed to check for changes: %v", err)
+	}
+
+	if !hasChanges {
+		log.Println("\n✅ Repository is synchronized")
+		log.Println("💡 No local changes to push")
+		return
+	}
+
+	// Get status summary
+	statusSummary, err := gitMgr.GetStatusSummary(ctx)
+	if err != nil {
+		log.Fatalf("Failed to get status: %v", err)
+	}
+
+	log.Printf("\n2. Local changes detected: %s", statusSummary)
+
+	// Prompt for commit message if not provided
+	if message == "" {
+		log.Print("Enter commit message (or press Enter to skip push): ")
+		var input string
+		fmt.Scanln(&input)
+		if input == "" {
+			log.Println("⏭️  Skipping commit and push")
+			return
+		}
+		message = input
+	}
+
+	// Commit changes
+	log.Println("3. Committing local changes...")
+	if err := gitMgr.Commit(ctx, message); err != nil {
+		log.Fatalf("Failed to commit changes: %v", err)
+	}
+	log.Println("✅ Changes committed")
+
+	// Push changes
+	log.Println("4. Pushing to remote...")
+	if err := gitMgr.Push(ctx); err != nil {
+		log.Fatalf("Failed to push changes: %v", err)
+	}
+	log.Println("✅ Changes pushed")
+
+	log.Printf("\n✅ Branch '%s' is now fully synchronized", currentBranch)
 }
