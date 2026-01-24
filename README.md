@@ -150,6 +150,61 @@ export HYVE_GIT_TOKEN=your_personal_access_token
 ./hyve git credentials --clear
 ```
 
+#### Branch Management
+
+Manage Git branches within your current repository for organizing cluster configurations and feature development.
+
+```bash
+# List all branches
+./hyve git branch list
+
+# Create a new branch
+./hyve git branch create feature/new-cluster
+
+# Create and switch to a new branch
+./hyve git branch create feature/staging --switch
+
+# Create and push to remote
+./hyve git branch create feature/updates --switch --push
+
+# Switch to an existing branch
+./hyve git branch switch develop
+
+# Switch and pull latest changes
+./hyve git branch switch main --pull
+
+# Delete a branch
+./hyve git branch delete feature/old-config
+
+# Force delete a branch
+./hyve git branch delete feature/experimental --force
+```
+
+**Branch Workflows:**
+
+```bash
+# Create a feature branch for new cluster configuration
+./hyve git branch create feature/add-staging-cluster --switch
+
+# Make changes to cluster files
+./hyve cluster add staging --region NYC1 --nodes g4s.kube.medium
+
+# Switch back to main branch
+./hyve git branch switch main
+
+# View all branches
+./hyve git branch list
+# Output:
+#   feature/add-staging-cluster (abc1234)
+# * main (def5678)
+```
+
+**Use Cases:**
+- Create feature branches for testing new cluster configurations
+- Maintain separate branches for different environments (dev/staging/prod)
+- Collaborate on infrastructure changes without affecting main branch
+- Experiment with workflow changes in isolated branches
+
 #### API Token Management
 
 Hyve can securely store your cloud provider API tokens in an encrypted database, eliminating the need for `.env` files or environment variables.
@@ -250,6 +305,10 @@ kubectl config use-context production
 | `hyve git list` | List all configured repositories | No |
 | `hyve git use [name]` | Switch to different repository | No |
 | `hyve git status` | Show current repository status | No |
+| `hyve git branch list` | List all branches in current repository | No |
+| `hyve git branch create [name]` | Create a new branch | No |
+| `hyve git branch switch [name]` | Switch to a different branch | No |
+| `hyve git branch delete [name]` | Delete a branch | No |
 | `hyve config set-token [provider]` | Store encrypted API token in database | No |
 | `hyve config get-token [provider]` | Retrieve stored API token | No |
 | `hyve config list-tokens` | List providers with stored tokens | No |

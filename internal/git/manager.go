@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
 )
@@ -224,4 +225,161 @@ All cluster YAML files are stored in the clusters/ directory.
 
 	// Create initial commit
 	return m.Commit(ctx, "Initialize Hyve state repository")
+}
+
+// BranchInfo represents information about a Git branch
+type BranchInfo struct {
+	Name      string
+	IsCurrent bool
+	Hash      string
+}
+
+// ListBranches lists all branches in the repository
+func (m *Manager) ListBranches(ctx context.Context) ([]BranchInfo, error) {
+	if m.repo == nil {
+		return nil, fmt.Errorf("repository not initialized")
+	}
+
+	// Get current branch
+	head, err := m.repo.Head()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get HEAD: %w", err)
+	}
+	currentBranch := head.Name().Short()
+
+	// List all branches
+	branches, err := m.repo.Branches()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list branches: %w", err)
+	}
+
+	var branchInfos []BranchInfo
+	err = branches.ForEach(func(ref *plumbing.Reference) error {
+		branchName := ref.Name().Short()
+		branchInfos = append(branchInfos, BranchInfo{
+			Name:      branchName,
+			IsCurrent: branchName == currentBranch,
+			Hash:      ref.Hash().String()[:8],
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to iterate branches: %w", err)
+	}
+
+	return branchInfos, nil
+}
+
+// GetCurrentBranch returns the current branch name
+func (m *Manager) GetCurrentBranch(ctx context.Context) (string, error) {
+	if m.repo == nil {
+		return "", fmt.Errorf("repository not initialized")
+	}
+
+	head, err := m.repo.Head()
+	if err != nil {
+		return "", fmt.Errorf("failed to get HEAD: %w", err)
+	}
+
+	return head.Name().Short(), nil
+}
+
+// CreateBranch creates a new branch from the current HEAD
+func (m *Manager) CreateBranch(ctx context.Context, branchName string) error {
+	if m.repo == nil {
+		return fmt.Errorf("repository not initialized")
+	}
+
+	// Get current HEAD
+	head, err := m.repo.Head()
+	if err != nil {
+		return fmt.Errorf("failed to get HEAD: %w", err)
+	}
+
+	// Create new branch reference
+	refName := plumbing.NewBranchReferenceName(branchName)
+	ref := plumbing.NewHashReference(refName, head.Hash())
+
+	err = m.repo.Storer.SetReference(ref)
+	if err != nil {
+		return fmt.Errorf("failed to create branch: %w", err)
+	}
+
+	return nil
+}
+
+// SwitchBranch switches to a different branch (checkout)
+func (m *Manager) SwitchBranch(ctx context.Context, branchName string) error {
+	if m.repo == nil {
+		return fmt.Errorf("repository not initialized")
+	}
+
+	workTree, err := m.repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to get worktree: %w", err)
+	}
+
+	// Checkout the branch
+	err = workTree.Checkout(&git.CheckoutOptions{
+		Branch: plumbing.NewBranchReferenceName(branchName),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to switch to branch: %w", err)
+	}
+
+	return nil
+}
+
+// DeleteBranch deletes a branch
+func (m *Manager) DeleteBranch(ctx context.Context, branchName string, force bool) error {
+	if m.repo == nil {
+		return fmt.Errorf("repository not initialized")
+	}
+
+	// Check if trying to delete current branch
+	currentBranch, err := m.GetCurrentBranch(ctx)
+	if err != nil {
+		return err
+	}
+
+	if currentBranch == branchName {
+		return fmt.Errorf("cannot delete current branch '%s'; switch to another branch first", branchName)
+	}
+
+	// Delete the branch reference
+	refName := plumbing.NewBranchReferenceName(branchName)
+	err = m.repo.Storer.RemoveReference(refName)
+	if err != nil {
+		return fmt.Errorf("failed to delete branch: %w", err)
+	}
+
+	return nil
+}
+
+// PushBranch pushes a specific branch to remote
+func (m *Manager) PushBranch(ctx context.Context, branchName string) error {
+	if m.repo == nil {
+		return fmt.Errorf("repository not initialized")
+	}
+
+	var auth *http.BasicAuth
+	if m.username != "" && m.token != "" {
+		auth = &http.BasicAuth{
+			Username: m.username,
+			Password: m.token,
+		}
+	}
+
+	// Push the specific branch
+	refSpec := fmt.Sprintf("refs/heads/%s:refs/heads/%s", branchName, branchName)
+	err := m.repo.Push(&git.PushOptions{
+		RemoteName: "origin",
+		RefSpecs:   []config.RefSpec{config.RefSpec(refSpec)},
+		Auth:       auth,
+	})
+	if err != nil && err != git.NoErrAlreadyUpToDate {
+		return fmt.Errorf("failed to push branch: %w", err)
+	}
+
+	return nil
 }

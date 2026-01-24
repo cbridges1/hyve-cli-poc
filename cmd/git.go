@@ -127,6 +127,58 @@ Example:
 	},
 }
 
+var gitBranchCmd = &cobra.Command{
+	Use:   "branch",
+	Short: "Manage Git branches",
+	Long:  "Create, list, delete, and switch between Git branches in the current repository",
+}
+
+var gitBranchListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List all branches",
+	Long:  "List all branches in the current Git repository",
+	Run: func(cmd *cobra.Command, args []string) {
+		listGitBranches()
+	},
+}
+
+var gitBranchCreateCmd = &cobra.Command{
+	Use:   "create [branch-name]",
+	Short: "Create a new branch",
+	Long:  "Create a new branch from the current HEAD",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		branchName := args[0]
+		switchToBranch, _ := cmd.Flags().GetBool("switch")
+		push, _ := cmd.Flags().GetBool("push")
+		createGitBranch(branchName, switchToBranch, push)
+	},
+}
+
+var gitBranchDeleteCmd = &cobra.Command{
+	Use:   "delete [branch-name]",
+	Short: "Delete a branch",
+	Long:  "Delete a branch from the local repository",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		branchName := args[0]
+		force, _ := cmd.Flags().GetBool("force")
+		deleteGitBranch(branchName, force)
+	},
+}
+
+var gitBranchSwitchCmd = &cobra.Command{
+	Use:   "switch [branch-name]",
+	Short: "Switch to a branch",
+	Long:  "Switch to a different branch (git checkout)",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		branchName := args[0]
+		pull, _ := cmd.Flags().GetBool("pull")
+		switchGitBranch(branchName, pull)
+	},
+}
+
 func init() {
 	gitAddCmd.Flags().StringP("repo-url", "r", "", "Git repository URL (required)")
 	gitAddCmd.Flags().StringP("username", "u", "", "Git username for authentication (stored in repository config)")
@@ -136,6 +188,18 @@ func init() {
 	gitCredentialsCmd.Flags().StringP("password", "p", "", "Git password or personal access token for authentication")
 	gitCredentialsCmd.Flags().Bool("clear", false, "Clear all stored credentials")
 
+	gitBranchCreateCmd.Flags().BoolP("switch", "s", false, "Switch to the new branch after creating it")
+	gitBranchCreateCmd.Flags().BoolP("push", "p", false, "Push the branch to remote after creating it")
+
+	gitBranchDeleteCmd.Flags().BoolP("force", "f", false, "Force delete the branch")
+
+	gitBranchSwitchCmd.Flags().BoolP("pull", "p", false, "Pull latest changes after switching")
+
+	gitBranchCmd.AddCommand(gitBranchListCmd)
+	gitBranchCmd.AddCommand(gitBranchCreateCmd)
+	gitBranchCmd.AddCommand(gitBranchDeleteCmd)
+	gitBranchCmd.AddCommand(gitBranchSwitchCmd)
+
 	gitCmd.AddCommand(gitAddCmd)
 	gitCmd.AddCommand(gitListCmd)
 	gitCmd.AddCommand(gitUseCmd)
@@ -144,6 +208,7 @@ func init() {
 	gitCmd.AddCommand(gitResetCmd)
 	gitCmd.AddCommand(gitCredentialsCmd)
 	gitCmd.AddCommand(gitCredentialsMigrateCmd)
+	gitCmd.AddCommand(gitBranchCmd)
 }
 
 func addGitRepository(name, repoURL, username string, setCurrent bool) {
@@ -554,4 +619,236 @@ func migrateGitCredentialsEncryption(oldHostname string) error {
 	log.Println()
 
 	return nil
+}
+
+func listGitBranches() {
+	repoMgr, err := repository.NewManager()
+	if err != nil {
+		log.Fatalf("Failed to create repository manager: %v", err)
+	}
+	defer repoMgr.Close()
+
+	currentRepo, err := repoMgr.GetCurrentRepository()
+	if err != nil {
+		log.Println("❌ No Git repository configured")
+		log.Println("Add a Git repository first: hyve git add <name> --repo-url <url>")
+		return
+	}
+
+	// Get authentication
+	authToken, authUsername := getGitAuth(currentRepo)
+
+	ctx := context.Background()
+	gitMgr := git.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
+
+	// Initialize/open repository
+	if err := gitMgr.InitializeRepo(ctx); err != nil {
+		log.Fatalf("Failed to initialize repository: %v", err)
+	}
+
+	// List branches
+	branches, err := gitMgr.ListBranches(ctx)
+	if err != nil {
+		log.Fatalf("Failed to list branches: %v", err)
+	}
+
+	if len(branches) == 0 {
+		log.Println("No branches found in repository")
+		return
+	}
+
+	log.Printf("🌿 Branches in repository '%s':\n", currentRepo.Name)
+	for _, branch := range branches {
+		marker := "  "
+		if branch.IsCurrent {
+			marker = "* "
+		}
+		log.Printf("%s%s (%s)", marker, branch.Name, branch.Hash)
+	}
+
+	log.Println("\n💡 Commands:")
+	log.Println("  hyve git branch create <name>    # Create new branch")
+	log.Println("  hyve git branch switch <name>    # Switch to branch")
+	log.Println("  hyve git branch delete <name>    # Delete branch")
+}
+
+func createGitBranch(branchName string, switchToBranch, push bool) {
+	repoMgr, err := repository.NewManager()
+	if err != nil {
+		log.Fatalf("Failed to create repository manager: %v", err)
+	}
+	defer repoMgr.Close()
+
+	currentRepo, err := repoMgr.GetCurrentRepository()
+	if err != nil {
+		log.Println("❌ No Git repository configured")
+		return
+	}
+
+	authToken, authUsername := getGitAuth(currentRepo)
+
+	ctx := context.Background()
+	gitMgr := git.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
+
+	if err := gitMgr.InitializeRepo(ctx); err != nil {
+		log.Fatalf("Failed to initialize repository: %v", err)
+	}
+
+	// Get current branch for display
+	currentBranch, err := gitMgr.GetCurrentBranch(ctx)
+	if err != nil {
+		log.Fatalf("Failed to get current branch: %v", err)
+	}
+
+	// Create branch
+	log.Printf("Creating branch '%s' from '%s'...", branchName, currentBranch)
+	if err := gitMgr.CreateBranch(ctx, branchName); err != nil {
+		log.Fatalf("Failed to create branch: %v", err)
+	}
+
+	log.Printf("✅ Branch '%s' created successfully", branchName)
+
+	// Switch if requested
+	if switchToBranch {
+		if err := gitMgr.SwitchBranch(ctx, branchName); err != nil {
+			log.Fatalf("Failed to switch to branch: %v", err)
+		}
+		log.Printf("✅ Switched to branch '%s'", branchName)
+	}
+
+	// Push if requested
+	if push {
+		log.Printf("Pushing branch '%s' to remote...", branchName)
+		if err := gitMgr.PushBranch(ctx, branchName); err != nil {
+			log.Printf("⚠️  Failed to push branch: %v", err)
+		} else {
+			log.Printf("✅ Branch '%s' pushed to remote", branchName)
+		}
+	}
+
+	if !switchToBranch {
+		log.Printf("\n💡 Switch to this branch with: hyve git branch switch %s", branchName)
+	}
+}
+
+func deleteGitBranch(branchName string, force bool) {
+	repoMgr, err := repository.NewManager()
+	if err != nil {
+		log.Fatalf("Failed to create repository manager: %v", err)
+	}
+	defer repoMgr.Close()
+
+	currentRepo, err := repoMgr.GetCurrentRepository()
+	if err != nil {
+		log.Println("❌ No Git repository configured")
+		return
+	}
+
+	authToken, authUsername := getGitAuth(currentRepo)
+
+	ctx := context.Background()
+	gitMgr := git.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
+
+	if err := gitMgr.InitializeRepo(ctx); err != nil {
+		log.Fatalf("Failed to initialize repository: %v", err)
+	}
+
+	// Delete branch
+	log.Printf("Deleting branch '%s'...", branchName)
+	if err := gitMgr.DeleteBranch(ctx, branchName, force); err != nil {
+		log.Fatalf("Failed to delete branch: %v", err)
+	}
+
+	log.Printf("✅ Branch '%s' deleted successfully", branchName)
+	log.Println("\n💡 The branch has been deleted locally.")
+	log.Println("💡 To delete from remote, use: git push origin --delete " + branchName)
+}
+
+func switchGitBranch(branchName string, pull bool) {
+	repoMgr, err := repository.NewManager()
+	if err != nil {
+		log.Fatalf("Failed to create repository manager: %v", err)
+	}
+	defer repoMgr.Close()
+
+	currentRepo, err := repoMgr.GetCurrentRepository()
+	if err != nil {
+		log.Println("❌ No Git repository configured")
+		return
+	}
+
+	authToken, authUsername := getGitAuth(currentRepo)
+
+	ctx := context.Background()
+	gitMgr := git.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
+
+	if err := gitMgr.InitializeRepo(ctx); err != nil {
+		log.Fatalf("Failed to initialize repository: %v", err)
+	}
+
+	// Get current branch
+	currentBranch, err := gitMgr.GetCurrentBranch(ctx)
+	if err != nil {
+		log.Fatalf("Failed to get current branch: %v", err)
+	}
+
+	if currentBranch == branchName {
+		log.Printf("Already on branch '%s'", branchName)
+		if pull {
+			log.Println("Pulling latest changes...")
+			if err := gitMgr.Pull(ctx); err != nil {
+				log.Printf("⚠️  Failed to pull: %v", err)
+			} else {
+				log.Println("✅ Pulled latest changes")
+			}
+		}
+		return
+	}
+
+	// Switch branch
+	log.Printf("Switching from '%s' to '%s'...", currentBranch, branchName)
+	if err := gitMgr.SwitchBranch(ctx, branchName); err != nil {
+		log.Fatalf("Failed to switch branch: %v", err)
+	}
+
+	log.Printf("✅ Switched to branch '%s'", branchName)
+
+	// Pull if requested
+	if pull {
+		log.Println("Pulling latest changes...")
+		if err := gitMgr.Pull(ctx); err != nil {
+			log.Printf("⚠️  Failed to pull: %v", err)
+		} else {
+			log.Println("✅ Pulled latest changes")
+		}
+	}
+
+	log.Println("\n💡 Your working directory now reflects the '" + branchName + "' branch")
+	log.Println("💡 Changes made will be tracked on this branch")
+}
+
+// getGitAuth retrieves Git authentication credentials
+func getGitAuth(repo *repository.Repository) (token, username string) {
+	username = repo.Username
+
+	// Try global credentials first
+	credsMgr, err := credentials.NewManager()
+	if err == nil {
+		defer credsMgr.Close()
+		if creds, err := credsMgr.GetCredentials(); err == nil && creds != nil {
+			if password, err := creds.GetPassword(); err == nil && password != "" {
+				token = password
+				if username == "" {
+					username = creds.Username
+				}
+			}
+		}
+	}
+
+	// Fall back to environment token
+	if token == "" {
+		token = os.Getenv("HYVE_GIT_TOKEN")
+	}
+
+	return token, username
 }
