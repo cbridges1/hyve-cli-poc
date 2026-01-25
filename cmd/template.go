@@ -302,7 +302,7 @@ func executeTemplate(templateName, clusterName string) {
 	configMgr := config.NewManager()
 	apiKey := configMgr.GetCivoToken()
 	if apiKey == "" {
-		log.Fatal("CIVO_TOKEN environment variable is required")
+		log.Fatal("CIVO API token not found. Please run 'hyve config set-token civo' or set CIVO_TOKEN environment variable")
 	}
 
 	// Get repository path

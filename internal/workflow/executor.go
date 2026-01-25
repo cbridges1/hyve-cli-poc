@@ -15,6 +15,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"civo-cluster-deploy/internal/cluster"
+	"civo-cluster-deploy/internal/config"
 	"civo-cluster-deploy/internal/kubeconfig"
 	"civo-cluster-deploy/internal/provider"
 	"civo-cluster-deploy/internal/types"
@@ -505,10 +506,11 @@ func (e *Executor) exportClusterEnvironmentVariables(ctx context.Context, cluste
 		return fmt.Errorf("failed to load cluster definition: %w", err)
 	}
 
-	// Get API key from environment
-	apiKey := os.Getenv("CIVO_TOKEN")
+	// Get API key from database, environment, or .env file (in that order)
+	configMgr := config.NewManager()
+	apiKey := configMgr.GetCivoToken()
 	if apiKey == "" {
-		return fmt.Errorf("CIVO_TOKEN environment variable not set")
+		return fmt.Errorf("CIVO API token not found. Please run 'hyve config set-token civo' or set CIVO_TOKEN environment variable")
 	}
 
 	// Create provider for this cluster

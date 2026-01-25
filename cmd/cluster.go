@@ -373,7 +373,7 @@ func deleteClusterExplicitly(ctx context.Context, clusterName, region string) er
 	configMgr := config.NewManager()
 	apiKey := configMgr.GetCivoToken()
 	if apiKey == "" {
-		return fmt.Errorf("CIVO_TOKEN not found in environment")
+		return fmt.Errorf("CIVO API token not found. Please run 'hyve config set-token civo' or set CIVO_TOKEN environment variable")
 	}
 
 	// Create provider factory and provider for the cluster's region
@@ -427,7 +427,7 @@ func forceDeleteClusterFromCloud(clusterName, region string) {
 	configMgr := config.NewManager()
 	apiKey := configMgr.GetCivoToken()
 	if apiKey == "" {
-		log.Fatalf("CIVO_TOKEN not found in environment")
+		log.Fatalf("CIVO API token not found. Please run 'hyve config set-token civo' or set CIVO_TOKEN environment variable")
 	}
 
 	regions := []string{region}

@@ -158,7 +158,7 @@ func createProviderFromCurrentRepo(ctx context.Context) (provider.Provider, erro
 	configMgr := config.NewManager()
 	apiKey := configMgr.GetCivoToken()
 	if apiKey == "" {
-		return nil, fmt.Errorf("CIVO_TOKEN environment variable is required")
+		return nil, fmt.Errorf("CIVO API token not found. Please run 'hyve config set-token civo' or set CIVO_TOKEN environment variable")
 	}
 
 	// Get authentication - prefer global credentials, fallback to environment token
