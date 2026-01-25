@@ -423,6 +423,11 @@ kubectl config use-context production
 | `hyve workflow list` | List all available workflows | No |
 | `hyve workflow run [name]` | Execute a workflow | No |
 | `hyve workflow delete [name]` | Delete a workflow definition | No |
+| `hyve template create [name]` | Create a new cluster template | No |
+| `hyve template list` | List all cluster templates | No |
+| `hyve template show [name]` | Show template details | No |
+| `hyve template delete [name]` | Delete a cluster template | No |
+| `hyve template execute [template] [cluster]` | Create cluster from template | Automatic |
 
 #### CLI Flags
 
@@ -961,6 +966,215 @@ Hyve stores repository, credential, and kubeconfig data in SQLite databases:
 ├── repositories/               # Centralized repository storage directory
 └── config.yaml                 # Legacy config (unused in current version)
 ```
+
+### Cluster Templates
+
+Hyve supports cluster templates that combine cluster configurations with automated workflow execution. Templates enable repeatable infrastructure patterns and automated post-deployment workflows.
+
+#### Template Features
+
+- 📋 **Reusable Configurations**: Define cluster specs once, deploy many times
+- 🔄 **Automated Workflows**: Execute workflows automatically after cluster creation
+- 🎯 **Consistent Deployments**: Ensure infrastructure consistency across environments
+- 📝 **YAML-Based**: Simple YAML files stored in your repository's `templates/` directory
+- 🚀 **One-Command Execution**: Create cluster and run workflows with a single command
+
+#### Creating Templates
+
+Create a template with cluster specifications and optional workflows:
+
+```bash
+# Create a basic template
+./hyve template create my-template \
+  --region NYC1 \
+  --nodes g4s.kube.medium \
+  --description "Development environment template"
+
+# Create template with workflows
+./hyve template create production-cluster \
+  --region NYC1 \
+  --nodes "g4s.kube.large,g4s.kube.large,g4s.kube.large" \
+  --workflows "setup-monitoring,deploy-app,configure-ingress" \
+  --description "Production cluster with monitoring and apps"
+
+# Create template with custom settings
+./hyve template create staging-env \
+  --provider civo \
+  --region FRA1 \
+  --nodes "g4s.kube.medium,g4s.kube.medium" \
+  --cluster-type k3s \
+  --ingress \
+  --load-balancer \
+  --workflows "deploy-staging-app" \
+  --description "Staging environment"
+```
+
+#### Template Structure
+
+Templates are stored as YAML files in the `templates/` directory:
+
+```yaml
+# templates/production-cluster.yaml
+apiVersion: v1
+kind: Template
+metadata:
+  name: production-cluster
+  description: Production cluster template with monitoring
+spec:
+  provider: civo
+  region: NYC1
+  nodes:
+    - g4s.kube.large
+    - g4s.kube.large
+    - g4s.kube.large
+  clusterType: k3s
+  ingress:
+    enabled: true
+    loadBalancer: true
+  workflows:
+    - setup-monitoring
+    - deploy-app
+    - configure-alerts
+```
+
+#### Managing Templates
+
+```bash
+# List all templates
+./hyve template list
+
+# Show template details
+./hyve template show production-cluster
+
+# Delete a template
+./hyve template delete old-template
+```
+
+#### Executing Templates
+
+Execute a template to create a cluster and run associated workflows:
+
+```bash
+# Create cluster from template
+./hyve template execute production-cluster prod-cluster-01
+
+# What happens:
+# 1. Creates cluster definition from template
+# 2. Creates the cluster on the provider
+# 3. Waits for cluster to be ready
+# 4. Executes all defined workflows in order
+```
+
+**Execution Output:**
+```bash
+🚀 Executing template 'production-cluster' to create cluster 'prod-cluster-01'...
+
+📋 Template Details:
+  Provider: civo
+  Region: NYC1
+  Nodes: g4s.kube.large, g4s.kube.large, g4s.kube.large
+  Cluster Type: k3s
+  Workflows: setup-monitoring, deploy-app, configure-alerts
+
+✅ Cluster definition created: clusters/prod-cluster-01.yaml
+
+1️⃣ Creating cluster...
+✅ Cluster 'prod-cluster-01' created successfully
+
+2️⃣ Waiting for cluster to be ready...
+✅ Cluster 'prod-cluster-01' is ready
+
+3️⃣ Executing 3 workflow(s)...
+
+[1/3] Running workflow: setup-monitoring
+✅ Workflow 'setup-monitoring' completed successfully
+
+[2/3] Running workflow: deploy-app
+✅ Workflow 'deploy-app' completed successfully
+
+[3/3] Running workflow: configure-alerts
+✅ Workflow 'configure-alerts' completed successfully
+
+✅ Template execution completed!
+
+💡 Cluster 'prod-cluster-01' is now available
+💡 Use 'hyve kubeconfig sync' to get the kubeconfig
+```
+
+#### Template Use Cases
+
+**Development Environment:**
+```bash
+./hyve template create dev-env \
+  --region PHX1 \
+  --nodes g4s.kube.small \
+  --workflows "setup-dev-tools" \
+  --description "Development environment with tools"
+
+./hyve template execute dev-env dev-cluster
+```
+
+**Staging Environment:**
+```bash
+./hyve template create staging-env \
+  --region NYC1 \
+  --nodes "g4s.kube.medium,g4s.kube.medium" \
+  --workflows "deploy-staging-app,run-smoke-tests" \
+  --description "Staging with automated tests"
+
+./hyve template execute staging-env staging-cluster-v2
+```
+
+**Production with Full Stack:**
+```bash
+./hyve template create prod-full-stack \
+  --region FRA1 \
+  --nodes "g4s.kube.large,g4s.kube.large,g4s.kube.large" \
+  --workflows "setup-monitoring,deploy-database,deploy-api,deploy-frontend,configure-ingress,setup-backups" \
+  --description "Production cluster with complete stack"
+
+./hyve template execute prod-full-stack production-eu
+```
+
+**Multi-Region Deployment:**
+```bash
+# US Region Template
+./hyve template create us-cluster \
+  --region NYC1 \
+  --nodes "g4s.kube.large,g4s.kube.large" \
+  --workflows "deploy-app,configure-geo-routing" \
+  --description "US region cluster"
+
+# EU Region Template
+./hyve template create eu-cluster \
+  --region FRA1 \
+  --nodes "g4s.kube.large,g4s.kube.large" \
+  --workflows "deploy-app,configure-geo-routing" \
+  --description "EU region cluster"
+
+# Execute both
+./hyve template execute us-cluster prod-us-01
+./hyve template execute eu-cluster prod-eu-01
+```
+
+#### Template Best Practices
+
+✅ **Descriptive Names**: Use clear, descriptive template names
+✅ **Version Workflows**: Keep workflow files alongside templates in version control
+✅ **Document Dependencies**: Include workflow requirements in descriptions
+✅ **Test Templates**: Test templates in development before using in production
+✅ **Workflow Order**: Ensure workflows run in correct dependency order
+✅ **Idempotent Workflows**: Design workflows to be safely re-runnable
+
+#### Template Commands Reference
+
+| Command | Description |
+|---------|-------------|
+| `hyve template create <name>` | Create a new template |
+| `hyve template list` | List all templates |
+| `hyve template show <name>` | Display template details |
+| `hyve template delete <name>` | Delete a template |
+| `hyve template execute <template> <cluster>` | Create cluster from template |
 
 ## Security Considerations
 
