@@ -347,11 +347,11 @@ The CLI follows a command-subcommand structure:
 - **`hyve reconcile`**: Manual reconciliation of all clusters in current repository
 - **`hyve cluster`**: Cluster operations (with automatic reconciliation)
   - **`add`**: Create cluster + reconcile
+  - **`list`**: List all clusters in current repository
   - **`modify`**: Update cluster + reconcile
   - **`delete`**: Remove cluster + reconcile
 - **`hyve kubeconfig`**: Kubeconfig management (automatically synced after reconcile)
   - **`sync`**: Manually sync kubeconfigs from active clusters
-  - **`list`**: List all stored kubeconfigs for current repository
   - **`get`**: Retrieve and display/save kubeconfig for specific cluster
   - **`merge`**: Merge cluster context into local ~/.kube/config
   - **`remove`**: Remove cluster context from local ~/.kube/config
@@ -413,10 +413,10 @@ kubectl config use-context production
 | `hyve config clear-token [provider]` | Remove stored API token | No |
 | `hyve reconcile` | Deploy all clusters in current repository | Manual |
 | `hyve cluster add [name]` | Create cluster configuration | Automatic |
+| `hyve cluster list` | List all clusters in current repository | No |
 | `hyve cluster modify [name]` | Update cluster configuration | Automatic |
 | `hyve cluster delete [name]` | Remove cluster configuration | Automatic |
 | `hyve kubeconfig sync` | Sync kubeconfigs from all active clusters | No |
-| `hyve kubeconfig list` | List all stored kubeconfigs | No |
 | `hyve kubeconfig get [name]` | Get kubeconfig for specific cluster | No |
 | `hyve kubeconfig merge [name]` | Merge cluster context into ~/.kube/config | No |
 | `hyve kubeconfig remove [name]` | Remove cluster context from ~/.kube/config | No |
@@ -489,11 +489,11 @@ Hyve automatically syncs kubeconfigs from active clusters after every reconcilia
 ./hyve kubeconfig sync
 ```
 
-#### List Stored Kubeconfigs
+#### List Clusters
 
 ```bash
-# List all kubeconfigs for current repository
-./hyve kubeconfig list
+# List all clusters for current repository
+./hyve cluster list
 ```
 
 #### Get Kubeconfig

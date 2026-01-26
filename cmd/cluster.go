@@ -14,6 +14,7 @@ import (
 	"civo-cluster-deploy/internal/config"
 	"civo-cluster-deploy/internal/credentials"
 	"civo-cluster-deploy/internal/ingress"
+	"civo-cluster-deploy/internal/kubeconfig"
 	"civo-cluster-deploy/internal/provider"
 	"civo-cluster-deploy/internal/repository"
 	"civo-cluster-deploy/internal/state"
@@ -90,6 +91,15 @@ Note: This command does not remove configuration files or run reconciliation.`,
 	},
 }
 
+var listCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List all stored cluster kubeconfigs",
+	Long:  "Display all kubeconfigs stored for clusters in the current repository",
+	Run: func(cmd *cobra.Command, args []string) {
+		listClusters()
+	},
+}
+
 func init() {
 	addCmd.Flags().StringP("region", "r", "PHX1", "Region for the cluster")
 	addCmd.Flags().StringP("provider", "p", "civo", "Cloud provider (e.g., civo, aws, gcp, azure)")
@@ -107,6 +117,7 @@ func init() {
 	forceDeleteCmd.Flags().StringP("region", "r", "", "Specific region to search (optional, will search common regions if not provided)")
 
 	clusterCmd.AddCommand(addCmd)
+	clusterCmd.AddCommand(listCmd)
 	clusterCmd.AddCommand(modifyCmd)
 	clusterCmd.AddCommand(deleteCmd)
 	clusterCmd.AddCommand(forceDeleteCmd)
@@ -488,4 +499,52 @@ func forceDeleteClusterFromCloud(clusterName, region string) {
 		log.Printf("❌ Cluster '%s' not found in any searched regions", clusterName)
 		log.Printf("💡 Try specifying a specific region with --region flag")
 	}
+}
+
+func listClusters() {
+	// Get current repository
+	repoMgr, err := repository.NewManager()
+	if err != nil {
+		log.Fatalf("Failed to create repository manager: %v", err)
+	}
+	defer repoMgr.Close()
+
+	currentRepo, err := repoMgr.GetCurrentRepository()
+	if err != nil {
+		log.Fatalf("No Git repository configured. Use 'hyve git add' to configure a repository")
+	}
+
+	// Create kubeconfig manager
+	kubeconfigMgr, err := kubeconfig.NewManager(currentRepo.Name)
+	if err != nil {
+		log.Fatalf("Failed to create kubeconfig manager: %v", err)
+	}
+	defer kubeconfigMgr.Close()
+
+	kubeconfigs, err := kubeconfigMgr.ListKubeconfigs()
+	if err != nil {
+		log.Fatalf("Failed to list kubeconfigs: %v", err)
+	}
+
+	if len(kubeconfigs) == 0 {
+		log.Printf("❌ No clusters found for repository '%s'", currentRepo.Name)
+		log.Println("\n💡 Run 'hyve kubeconfig sync' to retrieve kubeconfigs from active clusters")
+		return
+	}
+
+	log.Printf("🔑 Clusters in repository '%s' (%d):\n", currentRepo.Name, len(kubeconfigs))
+
+	for _, kc := range kubeconfigs {
+		log.Printf("  %s", kc.ClusterName)
+		log.Printf("    Repository: %s", kc.RepositoryName)
+		log.Printf("    Stored: %s", kc.UpdatedAt.Format("2006-01-02 15:04:05"))
+		log.Println()
+	}
+
+	log.Println("💡 Commands:")
+	log.Println("  eval $(hyve use <cluster-name>)              # Quickly set kubeconfig (recommended)")
+	log.Println("  hyve kubeconfig get <cluster-name>           # Display kubeconfig")
+	log.Println("  hyve kubeconfig get <cluster-name> --save    # Save to ~/.kube/config-<cluster-name>")
+	log.Println("  hyve kubeconfig get <cluster-name> -o <file> # Save to specific file")
+	log.Println("  hyve kubeconfig use <cluster-name>           # Set kubeconfig for current terminal session")
 }

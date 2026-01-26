@@ -42,15 +42,6 @@ var kubeconfigGetCmd = &cobra.Command{
 	},
 }
 
-var kubeconfigListCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List all stored kubeconfigs",
-	Long:  "Display all kubeconfigs stored for clusters in the current repository",
-	Run: func(cmd *cobra.Command, args []string) {
-		listKubeconfigs()
-	},
-}
-
 var kubeconfigUseCmd = &cobra.Command{
 	Use:   "use [cluster-name]",
 	Short: "Set kubeconfig for current terminal session",
@@ -112,7 +103,6 @@ func init() {
 
 	kubeconfigCmd.AddCommand(kubeconfigSyncCmd)
 	kubeconfigCmd.AddCommand(kubeconfigGetCmd)
-	kubeconfigCmd.AddCommand(kubeconfigListCmd)
 	kubeconfigCmd.AddCommand(kubeconfigUseCmd)
 	kubeconfigCmd.AddCommand(kubeconfigMergeCmd)
 	kubeconfigCmd.AddCommand(kubeconfigRemoveCmd)
@@ -312,41 +302,6 @@ func getKubeconfig(cmd *cobra.Command, clusterName string) {
 		// Output to stdout
 		fmt.Print(config)
 	}
-}
-
-func listKubeconfigs() {
-	kubeconfigMgr, repoName, err := createKubeconfigManager()
-	if err != nil {
-		log.Fatalf("Failed to create kubeconfig manager: %v", err)
-	}
-	defer kubeconfigMgr.Close()
-
-	kubeconfigs, err := kubeconfigMgr.ListKubeconfigs()
-	if err != nil {
-		log.Fatalf("Failed to list kubeconfigs: %v", err)
-	}
-
-	if len(kubeconfigs) == 0 {
-		log.Printf("❌ No kubeconfigs stored for repository '%s'", repoName)
-		log.Println("\n💡 Run 'hyve kubeconfig sync' to retrieve kubeconfigs from active clusters")
-		return
-	}
-
-	log.Printf("🔑 Stored kubeconfigs for repository '%s' (%d):\n", repoName, len(kubeconfigs))
-
-	for _, kc := range kubeconfigs {
-		log.Printf("  %s", kc.ClusterName)
-		log.Printf("    Repository: %s", kc.RepositoryName)
-		log.Printf("    Stored: %s", kc.UpdatedAt.Format("2006-01-02 15:04:05"))
-		log.Println()
-	}
-
-	log.Println("💡 Commands:")
-	log.Println("  eval $(hyve use <cluster-name>)              # Quickly set kubeconfig (recommended)")
-	log.Println("  hyve kubeconfig get <cluster-name>           # Display kubeconfig")
-	log.Println("  hyve kubeconfig get <cluster-name> --save    # Save to ~/.kube/config-<cluster-name>")
-	log.Println("  hyve kubeconfig get <cluster-name> -o <file> # Save to specific file")
-	log.Println("  hyve kubeconfig use <cluster-name>           # Set kubeconfig for current terminal session")
 }
 
 func useKubeconfig(clusterName string, evalMode bool) {
