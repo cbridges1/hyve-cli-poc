@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -284,15 +285,21 @@ func (e *Executor) executeStep(ctx context.Context, step *WorkflowStep, job *Wor
 	var args []string
 
 	if step.Command != "" {
-		parts := strings.Fields(step.Command)
-		if len(parts) > 0 {
-			command = parts[0]
-			args = parts[1:]
-		}
+		// Execute command via shell for consistent variable substitution across platforms
+		// Expand workflow variables first
+		expandedCommand := e.expandVariables(step.Command)
+		// Get the appropriate shell for the platform
+		shellCmd, shellFlag := getShellCommand()
+		command = shellCmd
+		args = []string{shellFlag, expandedCommand}
 	} else if step.Script != "" {
-		// Execute script via shell
-		command = "sh"
-		args = []string{"-c", step.Script}
+		// Execute script via shell (shell will expand variables)
+		// Expand workflow variables first
+		expandedScript := e.expandVariables(step.Script)
+		// Get the appropriate shell for the platform
+		shellCmd, shellFlag := getShellCommand()
+		command = shellCmd
+		args = []string{shellFlag, expandedScript}
 	} else if step.Action != "" {
 		// Execute predefined action
 		return e.executeAction(ctx, step.Action, step.With, result)
@@ -367,9 +374,15 @@ func (e *Executor) executeStep(ctx context.Context, step *WorkflowStep, job *Wor
 
 // executeAction executes a predefined action
 func (e *Executor) executeAction(ctx context.Context, action string, params map[string]string, result *StepResult) (*StepResult, error) {
+	// Expand variables in all parameters
+	expandedParams := make(map[string]string)
+	for key, value := range params {
+		expandedParams[key] = e.expandVariables(value)
+	}
+
 	switch action {
 	case "kubectl-apply":
-		file := params["file"]
+		file := expandedParams["file"]
 		if file == "" {
 			result.Status = JobStatusFailed
 			result.Error = "kubectl-apply action requires 'file' parameter"
@@ -398,7 +411,7 @@ func (e *Executor) executeAction(ctx context.Context, action string, params map[
 		return result, nil
 
 	case "kubectl-delete":
-		file := params["file"]
+		file := expandedParams["file"]
 		if file == "" {
 			result.Status = JobStatusFailed
 			result.Error = "kubectl-delete action requires 'file' parameter"
@@ -623,6 +636,16 @@ func (e *Executor) expandVariables(input string) string {
 		result = strings.ReplaceAll(result, fmt.Sprintf("$%s", key), value)
 	}
 	return result
+}
+
+// getShellCommand returns the appropriate shell command and flag for the current platform
+func getShellCommand() (string, string) {
+	if runtime.GOOS == "windows" {
+		// On Windows, use cmd.exe
+		return "cmd", "/C"
+	}
+	// On Unix-like systems (Linux, macOS, etc.), use sh
+	return "sh", "-c"
 }
 
 // addLog adds a log entry to the execution
