@@ -424,10 +424,12 @@ kubectl config use-context production
 | `hyve workflow create [name]` | Create a new workflow definition | No |
 | `hyve workflow list` | List all available workflows | No |
 | `hyve workflow run [name]` | Execute a workflow | No |
+| `hyve workflow validate [name]` | Validate a workflow definition | No |
 | `hyve workflow delete [name]` | Delete a workflow definition | No |
 | `hyve template create [name]` | Create a new cluster template | No |
 | `hyve template list` | List all cluster templates | No |
 | `hyve template show [name]` | Show template details | No |
+| `hyve template validate [name]` | Validate a template definition | No |
 | `hyve template delete [name]` | Delete a cluster template | No |
 | `hyve template execute [template] [cluster]` | Create cluster from template | Automatic |
 
@@ -782,10 +784,60 @@ spec:
 - `kubectl-apply`: Apply Kubernetes manifests
 - `kubectl-delete`: Delete Kubernetes resources
 
+#### Workflow Validation
+
+Before running workflows, you can validate their syntax and structure to catch errors early:
+
+```bash
+# Validate a workflow
+./hyve workflow validate my-workflow
+```
+
+**What gets validated:**
+- ✅ Required fields (apiVersion, kind, metadata.name, spec.jobs)
+- ✅ API version and kind values
+- ✅ Job structure (at least one step per job)
+- ✅ Step execution methods (command, script, or action)
+- ✅ Action parameters (e.g., kubectl-apply requires 'file' parameter)
+- ✅ Job dependencies exist and have no circular references
+- ✅ Duplicate job names
+- ✅ Multiple execution methods in same step
+
+**Example output (valid workflow):**
+```bash
+$ ./hyve workflow validate deployment-pipeline
+
+🔍 Validating workflow 'deployment-pipeline'...
+
+✅ Workflow is valid
+📋 Jobs: 3
+📋 Total steps: 8
+✨ No warnings
+```
+
+**Example output (invalid workflow):**
+```bash
+$ ./hyve workflow validate broken-workflow
+
+🔍 Validating workflow 'broken-workflow'...
+
+❌ Validation Failed
+
+Errors:
+  • Job 'deploy' has no steps
+  • Job 'test', step 'run-tests' has no command, script, or action
+  • Job 'build' depends on non-existent job 'compile'
+  • Duplicate job name: deploy
+  • Job 'apply', step 'kubectl-step': kubectl-apply action requires 'file' parameter
+
+⚠️  Warnings:
+  • Job 'build', step 'build-app' is missing a name
+```
+
 #### Workflow Management
 
 ```bash
-# Validate workflow syntax
+# Validate workflow before running
 ./hyve workflow validate my-workflow
 
 # Delete workflow
@@ -1048,8 +1100,67 @@ spec:
 # Show template details
 ./hyve template show production-cluster
 
+# Validate a template
+./hyve template validate production-cluster
+
 # Delete a template
 ./hyve template delete old-template
+```
+
+#### Template Validation
+
+Validate templates before executing them to catch configuration errors early:
+
+```bash
+# Validate a template
+./hyve template validate my-template
+```
+
+**What gets validated:**
+- ✅ Required fields (apiVersion, kind, metadata.name, spec fields)
+- ✅ API version and kind values
+- ✅ Provider name (civo, aws, gcp, azure)
+- ✅ Region validity (for Civo provider)
+- ✅ Node sizes (for Civo provider)
+- ✅ Cluster type (k3s, talos)
+- ✅ Referenced workflows exist in repository
+- ✅ At least one node defined
+
+**Example output (valid template):**
+```bash
+$ ./hyve template validate production-cluster
+
+🔍 Validating template 'production-cluster'...
+
+✅ Template is valid
+📋 Provider: civo
+📋 Region: NYC1
+📋 Nodes: 3 (g4s.kube.large, g4s.kube.large, g4s.kube.large)
+📋 Cluster Type: k3s
+📋 Ingress: true
+📋 Workflows: 2 (setup-monitoring, deploy-app)
+✨ No warnings
+```
+
+**Example output (template with warnings):**
+```bash
+$ ./hyve template validate staging-cluster
+
+🔍 Validating template 'staging-cluster'...
+
+⚠️  Warnings:
+  • Region 'CUSTOM1' may not be valid for Civo. Valid regions: PHX1, NYC1, FRA1, LON1
+  • Node size 'custom-node' may not be valid for Civo
+  • Cluster type 'k8s' may not be supported. Valid types: k3s, talos
+  • Workflow 'old-workflow' not found in repository
+
+✅ Template is valid
+📋 Provider: civo
+📋 Region: CUSTOM1
+📋 Nodes: 2 (custom-node, custom-node)
+📋 Cluster Type: k8s
+📋 Ingress: true
+📋 Workflows: 1 (old-workflow)
 ```
 
 #### Executing Templates

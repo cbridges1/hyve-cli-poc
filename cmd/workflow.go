@@ -359,14 +359,191 @@ func validateWorkflow(name string) {
 		log.Fatalf("Failed to get workflow: %v", err)
 	}
 
-	// Validation is done during GetWorkflow, so if we get here, it's valid
-	log.Printf("✅ Workflow '%s' is valid", wf.Metadata.Name)
-	log.Printf("📋 Jobs: %d", len(wf.Spec.Jobs))
-	totalSteps := 0
-	for _, job := range wf.Spec.Jobs {
-		totalSteps += len(job.Steps)
+	log.Printf("🔍 Validating workflow '%s'...\n", name)
+
+	errors := []string{}
+	warnings := []string{}
+
+	// Validate required fields
+	if wf.APIVersion == "" {
+		errors = append(errors, "Missing apiVersion")
+	} else if wf.APIVersion != "v1" {
+		warnings = append(warnings, fmt.Sprintf("Unexpected apiVersion '%s', expected 'v1'", wf.APIVersion))
 	}
-	log.Printf("📋 Total steps: %d", totalSteps)
+
+	if wf.Kind == "" {
+		errors = append(errors, "Missing kind")
+	} else if wf.Kind != "Workflow" {
+		errors = append(errors, fmt.Sprintf("Invalid kind '%s', expected 'Workflow'", wf.Kind))
+	}
+
+	if wf.Metadata.Name == "" {
+		errors = append(errors, "Missing metadata.name")
+	}
+
+	if len(wf.Spec.Jobs) == 0 {
+		errors = append(errors, "No jobs defined in workflow")
+	}
+
+	// Validate jobs
+	jobNames := make(map[string]bool)
+	for i, job := range wf.Spec.Jobs {
+		if job.Name == "" {
+			errors = append(errors, fmt.Sprintf("Job %d is missing a name", i+1))
+			continue
+		}
+
+		// Check for duplicate job names
+		if jobNames[job.Name] {
+			errors = append(errors, fmt.Sprintf("Duplicate job name: %s", job.Name))
+		}
+		jobNames[job.Name] = true
+
+		// Validate job has steps
+		if len(job.Steps) == 0 {
+			errors = append(errors, fmt.Sprintf("Job '%s' has no steps", job.Name))
+		}
+
+		// Validate dependencies
+		for _, dep := range job.DependsOn {
+			if !jobNames[dep] {
+				// Might not be an error if the dependency is defined later
+				// We'll do a second pass for this
+			}
+		}
+
+		// Validate steps
+		for j, step := range job.Steps {
+			if step.Name == "" {
+				warnings = append(warnings, fmt.Sprintf("Job '%s', step %d is missing a name", job.Name, j+1))
+			}
+
+			// Check that step has at least one execution method
+			hasExecution := step.Command != "" || step.Script != "" || step.Action != ""
+			if !hasExecution {
+				errors = append(errors, fmt.Sprintf("Job '%s', step '%s' has no command, script, or action", job.Name, step.Name))
+			}
+
+			// Check for multiple execution methods
+			methods := 0
+			if step.Command != "" {
+				methods++
+			}
+			if step.Script != "" {
+				methods++
+			}
+			if step.Action != "" {
+				methods++
+			}
+			if methods > 1 {
+				errors = append(errors, fmt.Sprintf("Job '%s', step '%s' has multiple execution methods (command/script/action)", job.Name, step.Name))
+			}
+
+			// Validate action parameters
+			if step.Action != "" {
+				switch step.Action {
+				case "kubectl-apply":
+					if step.With == nil || step.With["file"] == "" {
+						errors = append(errors, fmt.Sprintf("Job '%s', step '%s': kubectl-apply action requires 'file' parameter", job.Name, step.Name))
+					}
+				case "kubectl-delete":
+					if step.With == nil || step.With["file"] == "" {
+						errors = append(errors, fmt.Sprintf("Job '%s', step '%s': kubectl-delete action requires 'file' parameter", job.Name, step.Name))
+					}
+				default:
+					warnings = append(warnings, fmt.Sprintf("Job '%s', step '%s': unknown action '%s'", job.Name, step.Name, step.Action))
+				}
+			}
+		}
+	}
+
+	// Second pass: validate all job dependencies exist
+	for _, job := range wf.Spec.Jobs {
+		for _, dep := range job.DependsOn {
+			if !jobNames[dep] {
+				errors = append(errors, fmt.Sprintf("Job '%s' depends on non-existent job '%s'", job.Name, dep))
+			}
+		}
+	}
+
+	// Check for circular dependencies
+	if hasCircularDependencies(wf.Spec.Jobs) {
+		errors = append(errors, "Circular dependency detected in job dependencies")
+	}
+
+	// Print results
+	if len(errors) > 0 {
+		log.Println("\n❌ Validation Failed")
+		log.Println("\nErrors:")
+		for _, err := range errors {
+			log.Printf("  • %s", err)
+		}
+	}
+
+	if len(warnings) > 0 {
+		log.Println("\n⚠️  Warnings:")
+		for _, warn := range warnings {
+			log.Printf("  • %s", warn)
+		}
+	}
+
+	if len(errors) == 0 {
+		log.Println("\n✅ Workflow is valid")
+		log.Printf("📋 Jobs: %d", len(wf.Spec.Jobs))
+		totalSteps := 0
+		for _, job := range wf.Spec.Jobs {
+			totalSteps += len(job.Steps)
+		}
+		log.Printf("📋 Total steps: %d", totalSteps)
+
+		if len(warnings) == 0 {
+			log.Println("✨ No warnings")
+		}
+	} else {
+		os.Exit(1)
+	}
+}
+
+// hasCircularDependencies checks for circular dependencies in job dependencies
+func hasCircularDependencies(jobs []workflow.WorkflowJob) bool {
+	// Build adjacency list
+	graph := make(map[string][]string)
+	for _, job := range jobs {
+		graph[job.Name] = job.DependsOn
+	}
+
+	// Check each job for circular dependencies using DFS
+	visited := make(map[string]bool)
+	recStack := make(map[string]bool)
+
+	var hasCycle func(string) bool
+	hasCycle = func(jobName string) bool {
+		visited[jobName] = true
+		recStack[jobName] = true
+
+		for _, dep := range graph[jobName] {
+			if !visited[dep] {
+				if hasCycle(dep) {
+					return true
+				}
+			} else if recStack[dep] {
+				return true
+			}
+		}
+
+		recStack[jobName] = false
+		return false
+	}
+
+	for _, job := range jobs {
+		if !visited[job.Name] {
+			if hasCycle(job.Name) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 func printExecutionLogs(execution *workflow.WorkflowExecution, showOutput bool) {
