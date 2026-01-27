@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="images/banner.svg" alt="Hyve Banner" width="800">
+</p>
+
 # Hyve - GitOps Kubernetes Cluster Management CLI
 
 A declarative GitOps Kubernetes cluster management tool for Civo Cloud with multi-repository support, automated workflows, and secure credential management.
