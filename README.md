@@ -42,7 +42,7 @@ go build -o hyve .
 ### Prerequisites
 
 - Go 1.21 or higher
-- Git
+- Git (required - Hyve uses system git by default for easier onboarding)
 - Civo Cloud account with API token
 
 ### Build from Source
@@ -56,6 +56,9 @@ go build -o hyve .
 ### Configure
 
 ```bash
+# Verify git is available (required for default backend)
+git --version
+
 # Store Civo API token (encrypted)
 ./hyve config set-token civo
 
@@ -65,6 +68,21 @@ go build -o hyve .
 # Add your first repository
 ./hyve git add production --repo-url https://github.com/company/hyve-state.git
 ```
+
+<details>
+<summary>Optional: Use built-in git library</summary>
+
+By default, Hyve uses your system's git command for easier onboarding. If you prefer the built-in go-git library:
+
+```bash
+export GIT_BACKEND=builtin
+```
+
+Add to your shell profile for persistence:
+```bash
+echo 'export GIT_BACKEND=builtin' >> ~/.bashrc
+```
+</details>
 
 ## Documentation
 

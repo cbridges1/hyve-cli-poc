@@ -105,7 +105,10 @@ func createStateManagerFromRepository(ctx context.Context) *state.Manager {
 		authToken = os.Getenv("HYVE_GIT_TOKEN")
 	}
 
-	stateMgr := state.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
+	stateMgr, err := state.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
+	if err != nil {
+		log.Fatalf("Failed to create state manager: %v", err)
+	}
 
 	// Initialize and sync Git repository
 	if err := stateMgr.InitializeGitRepo(ctx); err != nil {

@@ -173,7 +173,10 @@ func createProviderFromCurrentRepo(ctx context.Context) (provider.Provider, erro
 	}
 
 	// Create state manager to get cluster definitions (to determine regions)
-	stateMgr := state.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
+	stateMgr, err := state.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
+	if err != nil {
+		log.Fatalf("Failed to create state manager: %v", err)
+	}
 
 	// Initialize and sync Git repository
 	if err := stateMgr.InitializeGitRepo(ctx); err != nil {

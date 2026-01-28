@@ -17,16 +17,21 @@ import (
 // Manager handles state file operations using Git repositories
 type Manager struct {
 	stateDir   string
-	gitManager *git.Manager
+	gitManager git.GitBackend
 }
 
 // NewManager creates a new state manager with Git repository support
-func NewManager(gitRepoURL, localPath, username, token string) *Manager {
-	gitMgr := git.NewManager(gitRepoURL, localPath, username, token)
+func NewManager(gitRepoURL, localPath, username, token string) (*Manager, error) {
+	backendType := git.GetBackendType()
+	gitMgr, err := git.NewBackend(gitRepoURL, localPath, username, token, backendType)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create git backend: %w", err)
+	}
+
 	return &Manager{
 		stateDir:   gitMgr.GetStateDir(),
 		gitManager: gitMgr,
-	}
+	}, nil
 }
 
 // InitializeGitRepo initializes or clones the Git repository
