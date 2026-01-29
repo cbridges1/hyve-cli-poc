@@ -75,13 +75,17 @@ git --version
 By default, Hyve uses your system's git command for easier onboarding. If you prefer the built-in go-git library:
 
 ```bash
-export GIT_BACKEND=builtin
+# Set to built-in git (persisted in config)
+./hyve config set-git-backend builtin
+
+# Or switch back to system git
+./hyve config set-git-backend system
+
+# Check current backend
+./hyve config get-git-backend
 ```
 
-Add to your shell profile for persistence:
-```bash
-echo 'export GIT_BACKEND=builtin' >> ~/.bashrc
-```
+The preference is stored in `~/.hyve/config.yaml` and persists across sessions.
 </details>
 
 ## Documentation

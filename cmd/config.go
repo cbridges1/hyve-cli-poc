@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"civo-cluster-deploy/internal/config"
 	"civo-cluster-deploy/internal/credentials"
 )
 
@@ -67,6 +68,36 @@ var configListTokensCmd = &cobra.Command{
 	},
 }
 
+var configSetGitBackendCmd = &cobra.Command{
+	Use:   "set-git-backend [backend]",
+	Short: "Set the git backend preference",
+	Long: `Set the git backend used for repository operations.
+
+Supported backends:
+  - system:  Use system git command (default, requires git in PATH)
+  - builtin: Use embedded go-git library (portable)
+
+The preference is stored in ~/.hyve/config.yaml and persists across sessions.
+
+Example:
+  hyve config set-git-backend system
+  hyve config set-git-backend builtin`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		backend := args[0]
+		setGitBackend(backend)
+	},
+}
+
+var configGetGitBackendCmd = &cobra.Command{
+	Use:   "get-git-backend",
+	Short: "Get the current git backend preference",
+	Long:  "Display the configured git backend (system or builtin)",
+	Run: func(cmd *cobra.Command, args []string) {
+		getGitBackend()
+	},
+}
+
 func init() {
 	configSetTokenCmd.Flags().StringP("token", "t", "", "API token (if not provided, will prompt securely)")
 
@@ -74,6 +105,8 @@ func init() {
 	configCmd.AddCommand(configGetTokenCmd)
 	configCmd.AddCommand(configClearTokenCmd)
 	configCmd.AddCommand(configListTokensCmd)
+	configCmd.AddCommand(configSetGitBackendCmd)
+	configCmd.AddCommand(configGetGitBackendCmd)
 }
 
 func setAPIToken(provider, token string) {
@@ -186,4 +219,46 @@ func listAPITokens() {
 	log.Println("💡 Commands:")
 	log.Println("  hyve config get-token <provider>    # View token")
 	log.Println("  hyve config clear-token <provider>  # Remove token")
+}
+
+func setGitBackend(backend string) {
+	configMgr := config.NewManager()
+	if err := configMgr.SetGitBackend(backend); err != nil {
+		log.Fatalf("Failed to set git backend: %v", err)
+	}
+
+	log.Printf("✅ Git backend set to '%s'", backend)
+	log.Println()
+	log.Println("💡 The backend preference is stored in ~/.hyve/config.yaml")
+
+	if backend == "system" {
+		log.Println("💡 Hyve will now use your system's git command for repository operations")
+		log.Println("   Requirement: git must be in PATH")
+	} else if backend == "builtin" {
+		log.Println("💡 Hyve will now use the embedded go-git library")
+		log.Println("   This works without git installed, but may have limited authentication options")
+	}
+}
+
+func getGitBackend() {
+	configMgr := config.NewManager()
+	if err := configMgr.LoadConfig(); err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	backend := configMgr.GetGitBackend()
+
+	log.Printf("🔧 Current git backend: %s\n", backend)
+	log.Println()
+
+	if backend == "system" {
+		log.Println("Using system git command for repository operations")
+		log.Println("Requirement: git must be in PATH")
+	} else if backend == "builtin" {
+		log.Println("Using embedded go-git library for repository operations")
+		log.Println("Works without git installed")
+	}
+
+	log.Println()
+	log.Println("💡 Change backend with: hyve config set-git-backend [system|builtin]")
 }

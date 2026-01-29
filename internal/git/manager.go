@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+
+	"civo-cluster-deploy/internal/config"
 )
 
 // NewBackend creates a new Git backend based on configuration
@@ -30,21 +32,33 @@ func NewBackend(repoURL, localPath, username, token string, backendType BackendT
 	}
 }
 
-// GetBackendType returns the configured git backend type from environment
-// Defaults to system git
+// GetBackendType returns the configured git backend type
+// Priority: 1) Database config 2) Environment variable 3) Default to system git
 func GetBackendType() BackendType {
-	backend := os.Getenv("GIT_BACKEND")
-	if backend == "" {
-		return BackendSystem // Default to system git
+	// Load from config manager (which checks config file, then env var, then defaults to "system")
+	configMgr := config.NewManager()
+	if err := configMgr.LoadConfig(); err == nil {
+		backend := configMgr.GetGitBackend()
+		return GetBackendTypeFromConfig(backend)
 	}
 
-	switch backend {
+	// Fallback to environment variable if config fails
+	backend := os.Getenv("GIT_BACKEND")
+	if backend == "" {
+		backend = "system" // Default to system git
+	}
+
+	return GetBackendTypeFromConfig(backend)
+}
+
+// GetBackendTypeFromConfig returns the backend type from config manager
+func GetBackendTypeFromConfig(configBackend string) BackendType {
+	switch configBackend {
 	case "system":
 		return BackendSystem
 	case "builtin":
 		return BackendBuiltIn
 	default:
-		// Unknown backend, default to system
 		return BackendSystem
 	}
 }
