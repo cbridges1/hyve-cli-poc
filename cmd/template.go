@@ -17,6 +17,7 @@ import (
 	"civo-cluster-deploy/internal/kubeconfig"
 	"civo-cluster-deploy/internal/provider"
 	"civo-cluster-deploy/internal/repository"
+	"civo-cluster-deploy/internal/state"
 	"civo-cluster-deploy/internal/template"
 	"civo-cluster-deploy/internal/types"
 	"civo-cluster-deploy/internal/workflow"
@@ -110,6 +111,30 @@ var templateValidateCmd = &cobra.Command{
 	},
 }
 
+// getAuthCredentials retrieves authentication credentials for git operations
+func getAuthCredentials(currentRepo *repository.Repository) (username, token string) {
+	username = currentRepo.Username
+
+	credsMgr, err := credentials.NewManager()
+	if err == nil {
+		defer credsMgr.Close()
+		if creds, _ := credsMgr.GetCredentials(); creds != nil {
+			if password, err := creds.GetPassword(); err == nil && password != "" {
+				token = password
+				if username == "" {
+					username = creds.Username
+				}
+			}
+		}
+	}
+
+	if token == "" {
+		token = os.Getenv("HYVE_GIT_TOKEN")
+	}
+
+	return username, token
+}
+
 func init() {
 	templateCreateCmd.Flags().StringP("description", "d", "", "Template description")
 	templateCreateCmd.Flags().StringP("provider", "p", "civo", "Cloud provider")
@@ -129,6 +154,8 @@ func init() {
 }
 
 func createTemplate(name, description, provider, region, nodesSizes, clusterType string, ingressEnabled, loadBalancer bool, workflowsStr string) {
+	ctx := context.Background()
+
 	// Get repository path
 	repoMgr, err := repository.NewManager()
 	if err != nil {
@@ -186,6 +213,16 @@ func createTemplate(name, description, provider, region, nodesSizes, clusterType
 	}
 
 	log.Printf("✅ Template '%s' created successfully", name)
+
+	// Commit and push template to Git
+	authUsername, authToken := getAuthCredentials(currentRepo)
+	stateMgr, err := state.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
+	if err != nil {
+		log.Printf("⚠️  Warning: Failed to create state manager: %v", err)
+		log.Println("💡 Template saved locally but not pushed to git")
+	} else {
+		commitStateChanges(ctx, stateMgr, fmt.Sprintf("Create template %s", name))
+	}
 	log.Printf("Template path: %s", templateMgr.GetTemplatePath(name))
 	log.Println("\n📋 Template Details:")
 	log.Printf("  Provider: %s", provider)
@@ -251,6 +288,8 @@ func listTemplates() {
 }
 
 func deleteTemplate(name string) {
+	ctx := context.Background()
+
 	// Get repository path
 	repoMgr, err := repository.NewManager()
 	if err != nil {
@@ -273,6 +312,16 @@ func deleteTemplate(name string) {
 	}
 
 	log.Printf("✅ Template '%s' deleted successfully", name)
+
+	// Commit and push deletion to Git
+	authUsername, authToken := getAuthCredentials(currentRepo)
+	stateMgr, err := state.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
+	if err != nil {
+		log.Printf("⚠️  Warning: Failed to create state manager: %v", err)
+		log.Println("💡 Template deleted locally but not pushed to git")
+	} else {
+		commitStateChanges(ctx, stateMgr, fmt.Sprintf("Delete template %s", name))
+	}
 }
 
 func showTemplate(name string) {
@@ -332,25 +381,7 @@ func executeTemplate(templateName, clusterName string) {
 	}
 
 	// Get authentication
-	credsMgr, err := credentials.NewManager()
-	var authToken string
-	var authUsername = currentRepo.Username
-
-	if err == nil {
-		defer credsMgr.Close()
-		if creds, _ := credsMgr.GetCredentials(); creds != nil {
-			if password, err := creds.GetPassword(); err == nil && password != "" {
-				authToken = password
-				if authUsername == "" {
-					authUsername = creds.Username
-				}
-			}
-		}
-	}
-
-	if authToken == "" {
-		authToken = os.Getenv("HYVE_GIT_TOKEN")
-	}
+	authUsername, authToken := getAuthCredentials(currentRepo)
 
 	// Create template manager
 	templateMgr := template.NewManager(currentRepo.LocalPath)
@@ -391,6 +422,15 @@ func executeTemplate(templateName, clusterName string) {
 	}
 
 	log.Printf("\n✅ Cluster definition created: %s", clusterPath)
+
+	// Commit and push cluster definition to Git
+	stateMgr, err := state.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
+	if err != nil {
+		log.Printf("⚠️  Warning: Failed to create state manager: %v", err)
+		log.Println("💡 Cluster definition saved locally but not pushed to git")
+	} else {
+		commitStateChanges(ctx, stateMgr, fmt.Sprintf("Create cluster %s from template %s", clusterName, templateName))
+	}
 
 	// Create cluster manager
 	factory := provider.NewFactory()

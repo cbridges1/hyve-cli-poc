@@ -47,10 +47,14 @@ func (m *Manager) SyncWithRemote(ctx context.Context) error {
 // CommitAndPush commits changes and pushes to remote repository
 func (m *Manager) CommitAndPush(ctx context.Context, message string) error {
 	if err := m.gitManager.Commit(ctx, message); err != nil {
-		return err
+		return fmt.Errorf("failed to commit: %w", err)
 	}
 
-	return m.gitManager.Push(ctx)
+	if err := m.gitManager.Push(ctx); err != nil {
+		return fmt.Errorf("failed to push: %w", err)
+	}
+
+	return nil
 }
 
 // LoadClusterDefinitions loads all cluster definitions from YAML files

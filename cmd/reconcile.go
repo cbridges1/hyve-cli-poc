@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -55,10 +56,20 @@ func runReconciliation() {
 	}
 
 	// Commit and push changes to Git repository
+	log.Println("📝 Committing and pushing reconciliation changes to Git repository...")
 	if err := stateMgr.CommitAndPush(ctx, "Update cluster state after reconciliation"); err != nil {
-		log.Printf("Warning: Failed to commit changes to Git repository: %v", err)
+		log.Printf("❌ Failed to commit and push: %v", err)
+
+		// Provide helpful hints based on error type
+		if strings.Contains(err.Error(), "failed to push") {
+			log.Println("💡 Changes were committed locally but push failed")
+			log.Println("💡 Check your Git credentials and network connection")
+			log.Println("💡 You can manually push with: cd <repo-path> && git push")
+		} else if strings.Contains(err.Error(), "failed to commit") {
+			log.Println("💡 Commit operation failed - changes may still be in working directory")
+		}
 	} else {
-		log.Println("Changes committed and pushed to Git repository")
+		log.Println("✅ Changes committed and pushed to remote repository successfully")
 	}
 
 	log.Println("Cluster reconciliation completed")

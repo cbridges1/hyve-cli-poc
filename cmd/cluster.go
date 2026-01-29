@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -185,13 +186,25 @@ func createStateManager(ctx context.Context) (*state.Manager, string) {
 	return stateMgr, stateDir
 }
 
-// commitStateChanges commits changes to Git repository
+// commitStateChanges commits changes to Git repository and pushes to remote
 func commitStateChanges(ctx context.Context, stateMgr *state.Manager, message string) {
+	log.Println("📝 Committing and pushing changes to Git repository...")
+
 	if err := stateMgr.CommitAndPush(ctx, message); err != nil {
-		log.Printf("Warning: Failed to commit changes to Git repository: %v", err)
-	} else {
-		log.Println("Changes committed and pushed to Git repository")
+		log.Printf("❌ Failed to commit and push: %v", err)
+
+		// Provide helpful hints based on error type
+		if strings.Contains(err.Error(), "failed to push") {
+			log.Println("💡 Changes were committed locally but push failed")
+			log.Println("💡 Check your Git credentials and network connection")
+			log.Println("💡 You can manually push with: cd <repo-path> && git push")
+		} else if strings.Contains(err.Error(), "failed to commit") {
+			log.Println("💡 Commit operation failed - changes may still be in working directory")
+		}
+		return
 	}
+
+	log.Println("✅ Changes committed and pushed to remote repository successfully")
 }
 
 func addClusterFromCLI(clusterName, region, provider string, nodes []string, clusterType string) {
