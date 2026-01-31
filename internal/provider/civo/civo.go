@@ -1,0 +1,421 @@
+package civo
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/civo/civogo"
+
+	"civo-cluster-deploy/internal/types"
+)
+
+// Cluster represents a generic cluster
+type Cluster struct {
+	ID         string
+	Name       string
+	Status     string
+	FirewallID string
+	MasterIP   string
+	KubeConfig string
+	CreatedAt  time.Time
+}
+
+// Firewall represents a generic firewall
+type Firewall struct {
+	ID    string
+	Name  string
+	Rules []FirewallRule
+}
+
+// FirewallRule represents a generic firewall rule
+type FirewallRule struct {
+	Protocol  string
+	StartPort string
+	EndPort   string
+	Cidr      []string
+	Direction string
+}
+
+// LoadBalancer represents a generic load balancer
+type LoadBalancer struct {
+	ID        string
+	Name      string
+	PublicIP  string
+	ClusterID string
+}
+
+// ClusterConfig represents cluster creation configuration
+type ClusterConfig struct {
+	Name         string
+	Region       string
+	Nodes        []string
+	ClusterType  string
+	FirewallID   string
+	Applications []string
+}
+
+// ClusterUpdateConfig represents cluster update configuration
+type ClusterUpdateConfig struct {
+	Name  string
+	Nodes []string
+}
+
+// FirewallConfig represents firewall creation configuration
+type FirewallConfig struct {
+	Name  string
+	Rules []FirewallRule
+}
+
+// ClusterInfo represents exported cluster information
+type ClusterInfo struct {
+	Name       string
+	IPAddress  string
+	AccessPort string
+	Kubeconfig string
+	Status     string
+	ID         string
+}
+
+// Provider implements the provider interfaces for Civo
+type Provider struct {
+	client *civogo.Client
+	region string
+}
+
+// NewProvider creates a new Civo provider
+func NewProvider(apiKey, region string) (*Provider, error) {
+	client, err := civogo.NewClient(apiKey, region)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Civo client: %w", err)
+	}
+
+	return &Provider{
+		client: client,
+		region: region,
+	}, nil
+}
+
+// Name returns the provider name
+func (p *Provider) Name() string {
+	return "civo"
+}
+
+// Region returns the provider region
+func (p *Provider) Region() string {
+	return p.region
+}
+
+// ListClusters lists all clusters
+func (p *Provider) ListClusters(ctx context.Context) ([]*Cluster, error) {
+	civoClusters, err := p.client.ListKubernetesClusters()
+	if err != nil {
+		return nil, err
+	}
+
+	var clusters []*Cluster
+	for _, c := range civoClusters.Items {
+		clusters = append(clusters, p.convertCluster(&c))
+	}
+
+	return clusters, nil
+}
+
+// GetCluster gets a cluster by ID
+func (p *Provider) GetCluster(ctx context.Context, clusterID string) (*Cluster, error) {
+	civoCluster, err := p.client.GetKubernetesCluster(clusterID)
+	if err != nil {
+		return nil, err
+	}
+
+	return p.convertCluster(civoCluster), nil
+}
+
+// FindClusterByName finds a cluster by name
+func (p *Provider) FindClusterByName(ctx context.Context, name string) (*Cluster, error) {
+	clusters, err := p.client.ListKubernetesClusters()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, cluster := range clusters.Items {
+		if cluster.Name == name {
+			return p.convertCluster(&cluster), nil
+		}
+	}
+
+	return nil, nil
+}
+
+// CreateCluster creates a new cluster
+func (p *Provider) CreateCluster(ctx context.Context, config *ClusterConfig) (*Cluster, error) {
+	log.Printf("Creating cluster %s in region %s", config.Name, config.Region)
+
+	clusterConfig := &civogo.KubernetesClusterConfig{
+		Name:            config.Name,
+		Region:          config.Region,
+		NumTargetNodes:  len(config.Nodes),
+		TargetNodesSize: config.Nodes[0], // Use first node size
+		//KubernetesVersion: config.ClusterType,
+		NodeDestroy:  "",
+		NetworkID:    "",
+		Tags:         "",
+		Applications: "",
+		//FirewallID:        config.FirewallID,
+	}
+
+	log.Printf("Creating cluster %v", clusterConfig)
+
+	if len(config.Applications) > 0 {
+		clusterConfig.Applications = config.Applications[0]
+	}
+
+	cluster, err := p.client.NewKubernetesClusters(clusterConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cluster: %w", err)
+	}
+
+	log.Printf("Cluster creation started with ID: %s", cluster.ID)
+	return p.convertCluster(cluster), nil
+}
+
+// UpdateCluster updates an existing cluster
+func (p *Provider) UpdateCluster(ctx context.Context, clusterID string, config *ClusterUpdateConfig) (*Cluster, error) {
+	updateConfig := &civogo.KubernetesClusterConfig{
+		Name:            config.Name,
+		NumTargetNodes:  len(config.Nodes),
+		TargetNodesSize: config.Nodes[0],
+	}
+
+	cluster, err := p.client.UpdateKubernetesCluster(clusterID, updateConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update cluster: %w", err)
+	}
+
+	return p.convertCluster(cluster), nil
+}
+
+// DeleteCluster deletes a cluster
+func (p *Provider) DeleteCluster(ctx context.Context, clusterID string) error {
+	_, err := p.client.DeleteKubernetesCluster(clusterID)
+	return err
+}
+
+// WaitForClusterReady waits for cluster to be ready
+func (p *Provider) WaitForClusterReady(ctx context.Context, clusterID string) error {
+	for {
+		cluster, err := p.client.GetKubernetesCluster(clusterID)
+		if err != nil {
+			return fmt.Errorf("failed to get cluster status: %w", err)
+		}
+
+		log.Printf("Cluster status: %s, waiting...", cluster.Status)
+
+		if cluster.Status == "ACTIVE" {
+			break
+		}
+
+		if cluster.Status == "FAILED" {
+			return fmt.Errorf("cluster creation failed")
+		}
+
+		time.Sleep(30 * time.Second)
+	}
+
+	return nil
+}
+
+// GetClusterInfo gets cluster information for export
+func (p *Provider) GetClusterInfo(ctx context.Context, name string) (*ClusterInfo, error) {
+	cluster, err := p.FindClusterByName(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+
+	if cluster == nil {
+		return nil, fmt.Errorf("cluster %s not found", name)
+	}
+
+	clusterDetails, err := p.client.GetKubernetesCluster(cluster.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get cluster details for %s: %w", name, err)
+	}
+
+	info := &ClusterInfo{
+		Name:       cluster.Name,
+		IPAddress:  clusterDetails.MasterIP,
+		AccessPort: "6443",
+		Kubeconfig: clusterDetails.KubeConfig,
+		Status:     cluster.Status,
+		ID:         cluster.ID,
+	}
+
+	return info, nil
+}
+
+// ListFirewalls lists all firewalls
+func (p *Provider) ListFirewalls(ctx context.Context) ([]*Firewall, error) {
+	civoFirewalls, err := p.client.ListFirewalls()
+	if err != nil {
+		return nil, err
+	}
+
+	var firewalls []*Firewall
+	for _, f := range civoFirewalls {
+		firewalls = append(firewalls, p.convertFirewall(&f))
+	}
+
+	return firewalls, nil
+}
+
+// CreateFirewall creates a firewall
+func (p *Provider) CreateFirewall(ctx context.Context, config *FirewallConfig) (*Firewall, error) {
+	var rules []civogo.FirewallRule
+	for _, rule := range config.Rules {
+		rules = append(rules, civogo.FirewallRule{
+			Protocol:  rule.Protocol,
+			StartPort: rule.StartPort,
+			EndPort:   rule.EndPort,
+			Cidr:      rule.Cidr,
+			Direction: rule.Direction,
+		})
+	}
+
+	firewallConfig := &civogo.FirewallConfig{
+		Name:  config.Name,
+		Rules: rules,
+	}
+
+	firewall, err := p.client.NewFirewall(firewallConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Firewall{
+		ID:    firewall.ID,
+		Name:  firewall.Name,
+		Rules: config.Rules,
+	}, nil
+}
+
+// DeleteFirewall deletes a firewall
+func (p *Provider) DeleteFirewall(ctx context.Context, firewallID string) error {
+	_, err := p.client.DeleteFirewall(firewallID)
+	return err
+}
+
+// FindFirewallByName finds a firewall by name
+func (p *Provider) FindFirewallByName(ctx context.Context, name string) (*Firewall, error) {
+	firewalls, err := p.client.ListFirewalls()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, fw := range firewalls {
+		if fw.Name == name {
+			return p.convertFirewall(&fw), nil
+		}
+	}
+
+	return nil, nil
+}
+
+// ListLoadBalancers lists all load balancers
+func (p *Provider) ListLoadBalancers(ctx context.Context) ([]*LoadBalancer, error) {
+	civoLBs, err := p.client.ListLoadBalancers()
+	if err != nil {
+		return nil, err
+	}
+
+	var lbs []*LoadBalancer
+	for _, lb := range civoLBs {
+		lbs = append(lbs, &LoadBalancer{
+			ID:        lb.ID,
+			Name:      lb.Name,
+			PublicIP:  lb.PublicIP,
+			ClusterID: lb.ClusterID,
+		})
+	}
+
+	return lbs, nil
+}
+
+// DeployIngressController deploys ingress controller
+func (p *Provider) DeployIngressController(ctx context.Context, clusterID string, spec types.IngressSpec) (*LoadBalancer, error) {
+	if !spec.LoadBalancer {
+		return nil, nil
+	}
+
+	loadBalancers, err := p.client.ListLoadBalancers()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, lb := range loadBalancers {
+		if lb.ClusterID == clusterID {
+			return &LoadBalancer{
+				ID:        lb.ID,
+				Name:      lb.Name,
+				PublicIP:  lb.PublicIP,
+				ClusterID: lb.ClusterID,
+			}, nil
+		}
+	}
+
+	return nil, nil
+}
+
+// RemoveIngressController removes ingress controller
+func (p *Provider) RemoveIngressController(ctx context.Context, clusterID string) error {
+	return nil
+}
+
+// GetLoadBalancerIP gets load balancer IP for cluster
+func (p *Provider) GetLoadBalancerIP(ctx context.Context, clusterID string) (string, error) {
+	loadBalancers, err := p.client.ListLoadBalancers()
+	if err != nil {
+		return "", err
+	}
+
+	for _, lb := range loadBalancers {
+		if lb.ClusterID == clusterID {
+			return lb.PublicIP, nil
+		}
+	}
+
+	return "", nil
+}
+
+// convertCluster converts a Civo cluster to provider cluster
+func (p *Provider) convertCluster(civoCluster *civogo.KubernetesCluster) *Cluster {
+	return &Cluster{
+		ID:         civoCluster.ID,
+		Name:       civoCluster.Name,
+		Status:     civoCluster.Status,
+		FirewallID: civoCluster.FirewallID,
+		MasterIP:   civoCluster.MasterIP,
+		KubeConfig: civoCluster.KubeConfig,
+		CreatedAt:  civoCluster.CreatedAt,
+	}
+}
+
+// convertFirewall converts a Civo firewall to provider firewall
+func (p *Provider) convertFirewall(civoFirewall *civogo.Firewall) *Firewall {
+	var rules []FirewallRule
+	for _, rule := range civoFirewall.Rules {
+		rules = append(rules, FirewallRule{
+			Protocol:  rule.Protocol,
+			StartPort: rule.StartPort,
+			EndPort:   rule.EndPort,
+			Cidr:      rule.Cidr,
+			Direction: rule.Direction,
+		})
+	}
+
+	return &Firewall{
+		ID:    civoFirewall.ID,
+		Name:  civoFirewall.Name,
+		Rules: rules,
+	}
+}
