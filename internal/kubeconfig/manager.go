@@ -9,9 +9,9 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -234,35 +234,68 @@ func (m *Manager) DeleteKubeconfig(clusterName string) error {
 
 // CleanupOrphanedKubeconfigs removes kubeconfigs that don't have corresponding cluster definitions
 func (m *Manager) CleanupOrphanedKubeconfigs(activeClusterNames []string) error {
+	// First, find orphaned kubeconfigs to log what will be removed
+	var orphanedNames []string
+
 	if len(activeClusterNames) == 0 {
-		// If no active clusters, remove all kubeconfigs for this repository
-		deleteSQL := `DELETE FROM kubeconfigs WHERE repository_name = ?`
-		_, err := m.db.Exec(deleteSQL, m.repositoryName)
+		// If no active clusters, all kubeconfigs are orphaned
+		rows, err := m.db.Query(`SELECT cluster_name FROM kubeconfigs WHERE repository_name = ?`, m.repositoryName)
 		if err != nil {
-			return fmt.Errorf("failed to cleanup all kubeconfigs: %w", err)
+			return fmt.Errorf("failed to query kubeconfigs: %w", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err == nil {
+				orphanedNames = append(orphanedNames, name)
+			}
+		}
+
+		if len(orphanedNames) > 0 {
+			deleteSQL := `DELETE FROM kubeconfigs WHERE repository_name = ?`
+			_, err := m.db.Exec(deleteSQL, m.repositoryName)
+			if err != nil {
+				return fmt.Errorf("failed to cleanup all kubeconfigs: %w", err)
+			}
+			for _, name := range orphanedNames {
+				log.Printf("🗑️  Removed orphaned kubeconfig: %s", name)
+			}
 		}
 		return nil
 	}
 
-	// Create placeholders for the IN clause
-	placeholders := make([]string, len(activeClusterNames))
-	args := make([]interface{}, len(activeClusterNames)+1)
-	args[0] = m.repositoryName
-
-	for i, name := range activeClusterNames {
-		placeholders[i] = "?"
-		args[i+1] = name
+	// Build a map for quick lookup of active cluster names
+	activeSet := make(map[string]bool)
+	for _, name := range activeClusterNames {
+		activeSet[name] = true
 	}
 
-	deleteSQL := fmt.Sprintf(`
-		DELETE FROM kubeconfigs 
-		WHERE repository_name = ? 
-		AND cluster_name NOT IN (%s)
-	`, "?"+strings.Join(placeholders, ",?"))
-
-	_, err := m.db.Exec(deleteSQL, args...)
+	// Query all kubeconfigs for this repository to find orphans
+	rows, err := m.db.Query(`SELECT cluster_name FROM kubeconfigs WHERE repository_name = ?`, m.repositoryName)
 	if err != nil {
-		return fmt.Errorf("failed to cleanup orphaned kubeconfigs: %w", err)
+		return fmt.Errorf("failed to query kubeconfigs: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err == nil {
+			if !activeSet[name] {
+				orphanedNames = append(orphanedNames, name)
+			}
+		}
+	}
+
+	// Delete orphaned kubeconfigs
+	for _, orphanName := range orphanedNames {
+		deleteSQL := `DELETE FROM kubeconfigs WHERE repository_name = ? AND cluster_name = ?`
+		_, err := m.db.Exec(deleteSQL, m.repositoryName, orphanName)
+		if err != nil {
+			log.Printf("⚠️  Failed to remove orphaned kubeconfig %s: %v", orphanName, err)
+			continue
+		}
+		log.Printf("🗑️  Removed orphaned kubeconfig: %s", orphanName)
 	}
 
 	return nil

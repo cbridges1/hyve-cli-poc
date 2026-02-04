@@ -15,7 +15,6 @@ import (
 	"civo-cluster-deploy/internal/config"
 	"civo-cluster-deploy/internal/credentials"
 	"civo-cluster-deploy/internal/ingress"
-	"civo-cluster-deploy/internal/kubeconfig"
 	"civo-cluster-deploy/internal/provider"
 	"civo-cluster-deploy/internal/repository"
 	"civo-cluster-deploy/internal/state"
@@ -94,8 +93,8 @@ Note: This command does not remove configuration files or run reconciliation.`,
 
 var listCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List all stored cluster kubeconfigs",
-	Long:  "Display all kubeconfigs stored for clusters in the current repository",
+	Short: "List all cluster definitions",
+	Long:  "Display all cluster definitions from the current repository",
 	Run: func(cmd *cobra.Command, args []string) {
 		listClusters()
 	},
@@ -530,37 +529,75 @@ func listClusters() {
 		log.Fatalf("No Git repository configured. Use 'hyve git add' to configure a repository")
 	}
 
-	// Create kubeconfig manager
-	kubeconfigMgr, err := kubeconfig.NewManager(currentRepo.Name)
-	if err != nil {
-		log.Fatalf("Failed to create kubeconfig manager: %v", err)
-	}
-	defer kubeconfigMgr.Close()
+	// Read cluster definitions from the repository's clusters directory
+	clustersDir := filepath.Join(currentRepo.LocalPath, "clusters")
 
-	kubeconfigs, err := kubeconfigMgr.ListKubeconfigs()
-	if err != nil {
-		log.Fatalf("Failed to list kubeconfigs: %v", err)
-	}
-
-	if len(kubeconfigs) == 0 {
+	// Check if clusters directory exists
+	if _, err := os.Stat(clustersDir); os.IsNotExist(err) {
 		log.Printf("❌ No clusters found for repository '%s'", currentRepo.Name)
-		log.Println("\n💡 Run 'hyve kubeconfig sync' to retrieve kubeconfigs from active clusters")
+		log.Println("\n💡 Run 'hyve cluster add <name>' to create a cluster")
 		return
 	}
 
-	log.Printf("🔑 Clusters in repository '%s' (%d):\n", currentRepo.Name, len(kubeconfigs))
+	// Read all YAML files from the clusters directory
+	entries, err := os.ReadDir(clustersDir)
+	if err != nil {
+		log.Fatalf("Failed to read clusters directory: %v", err)
+	}
 
-	for _, kc := range kubeconfigs {
-		log.Printf("  %s", kc.ClusterName)
-		log.Printf("    Repository: %s", kc.RepositoryName)
-		log.Printf("    Stored: %s", kc.UpdatedAt.Format("2006-01-02 15:04:05"))
+	var clusters []types.ClusterDefinition
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		// Only process .yaml and .yml files
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
+			continue
+		}
+
+		filePath := filepath.Join(clustersDir, name)
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			log.Printf("Warning: Failed to read %s: %v", name, err)
+			continue
+		}
+
+		var clusterDef types.ClusterDefinition
+		if err := yaml.Unmarshal(data, &clusterDef); err != nil {
+			log.Printf("Warning: Failed to parse %s: %v", name, err)
+			continue
+		}
+
+		// Only include files with Kind: Cluster
+		if clusterDef.Kind == "Cluster" {
+			clusters = append(clusters, clusterDef)
+		}
+	}
+
+	if len(clusters) == 0 {
+		log.Printf("❌ No clusters found for repository '%s'", currentRepo.Name)
+		log.Println("\n💡 Run 'hyve cluster add <name>' to create a cluster")
+		return
+	}
+
+	log.Printf("📦 Clusters in repository '%s' (%d):\n", currentRepo.Name, len(clusters))
+
+	for _, cluster := range clusters {
+		log.Printf("  %s", cluster.Metadata.Name)
+		log.Printf("    Provider: %s", cluster.Spec.Provider)
+		log.Printf("    Region: %s", cluster.Metadata.Region)
+		log.Printf("    Nodes: %d (%s)", len(cluster.Spec.Nodes), strings.Join(cluster.Spec.Nodes, ", "))
+		if cluster.Spec.Ingress.Enabled {
+			log.Printf("    Ingress: enabled")
+		}
 		log.Println()
 	}
 
 	log.Println("💡 Commands:")
-	log.Println("  eval $(hyve use <cluster-name>)              # Quickly set kubeconfig (recommended)")
-	log.Println("  hyve kubeconfig get <cluster-name>           # Display kubeconfig")
-	log.Println("  hyve kubeconfig get <cluster-name> --save    # Save to ~/.kube/config-<cluster-name>")
-	log.Println("  hyve kubeconfig get <cluster-name> -o <file> # Save to specific file")
-	log.Println("  hyve kubeconfig use <cluster-name>           # Set kubeconfig for current terminal session")
+	log.Println("  hyve cluster add <name>       # Add a new cluster")
+	log.Println("  hyve cluster modify <name>    # Modify an existing cluster")
+	log.Println("  hyve cluster delete <name>    # Delete a cluster")
+	log.Println("  hyve reconcile                # Apply cluster changes to cloud")
 }
