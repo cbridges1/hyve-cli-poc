@@ -35,7 +35,7 @@ var templateCreateCmd = &cobra.Command{
 	Long: `Create a new cluster template with cluster specifications and workflows.
 
 The template will be created interactively, prompting for cluster details
-and workflows to execute upon cluster creation.`,
+and workflows to execute upon cluster creation or destruction.`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		templateName := args[0]
@@ -46,9 +46,10 @@ and workflows to execute upon cluster creation.`,
 		clusterType, _ := cmd.Flags().GetString("cluster-type")
 		ingressEnabled, _ := cmd.Flags().GetBool("ingress")
 		loadBalancer, _ := cmd.Flags().GetBool("load-balancer")
-		workflows, _ := cmd.Flags().GetString("workflows")
+		onCreatedWorkflows, _ := cmd.Flags().GetString("on-created")
+		onDestroyWorkflows, _ := cmd.Flags().GetString("on-destroy")
 
-		createTemplate(templateName, description, provider, region, nodes, clusterType, ingressEnabled, loadBalancer, workflows)
+		createTemplate(templateName, description, provider, region, nodes, clusterType, ingressEnabled, loadBalancer, onCreatedWorkflows, onDestroyWorkflows)
 	},
 }
 
@@ -143,7 +144,8 @@ func init() {
 	templateCreateCmd.Flags().StringP("cluster-type", "t", "k3s", "Kubernetes cluster type")
 	templateCreateCmd.Flags().Bool("ingress", true, "Enable ingress controller")
 	templateCreateCmd.Flags().Bool("load-balancer", true, "Enable load balancer for ingress")
-	templateCreateCmd.Flags().StringP("workflows", "w", "", "Workflows to run after creation (comma-separated)")
+	templateCreateCmd.Flags().String("on-created", "", "Workflows to run after cluster creation (comma-separated)")
+	templateCreateCmd.Flags().String("on-destroy", "", "Workflows to run before cluster destruction (comma-separated)")
 
 	templateCmd.AddCommand(templateCreateCmd)
 	templateCmd.AddCommand(templateListCmd)
@@ -153,7 +155,7 @@ func init() {
 	templateCmd.AddCommand(templateValidateCmd)
 }
 
-func createTemplate(name, description, provider, region, nodesSizes, clusterType string, ingressEnabled, loadBalancer bool, workflowsStr string) {
+func createTemplate(name, description, provider, region, nodesSizes, clusterType string, ingressEnabled, loadBalancer bool, onCreatedStr, onDestroyStr string) {
 	ctx := context.Background()
 
 	// Get repository path
@@ -178,12 +180,21 @@ func createTemplate(name, description, provider, region, nodesSizes, clusterType
 		nodes[i] = strings.TrimSpace(node)
 	}
 
-	// Parse workflows
-	var workflows []string
-	if workflowsStr != "" {
-		workflows = strings.Split(workflowsStr, ",")
-		for i, wf := range workflows {
-			workflows[i] = strings.TrimSpace(wf)
+	// Parse onCreated workflows
+	var onCreatedWorkflows []string
+	if onCreatedStr != "" {
+		onCreatedWorkflows = strings.Split(onCreatedStr, ",")
+		for i, wf := range onCreatedWorkflows {
+			onCreatedWorkflows[i] = strings.TrimSpace(wf)
+		}
+	}
+
+	// Parse onDestroy workflows
+	var onDestroyWorkflows []string
+	if onDestroyStr != "" {
+		onDestroyWorkflows = strings.Split(onDestroyStr, ",")
+		for i, wf := range onDestroyWorkflows {
+			onDestroyWorkflows[i] = strings.TrimSpace(wf)
 		}
 	}
 
@@ -200,7 +211,10 @@ func createTemplate(name, description, provider, region, nodesSizes, clusterType
 			Region:      region,
 			Nodes:       nodes,
 			ClusterType: clusterType,
-			Workflows:   workflows,
+			Workflows: template.TemplateWorkflowsSpec{
+				OnCreated: onCreatedWorkflows,
+				OnDestroy: onDestroyWorkflows,
+			},
 		},
 	}
 
@@ -230,8 +244,11 @@ func createTemplate(name, description, provider, region, nodesSizes, clusterType
 	log.Printf("  Nodes: %s", strings.Join(nodes, ", "))
 	log.Printf("  Cluster Type: %s", clusterType)
 	log.Printf("  Ingress: %v", ingressEnabled)
-	if len(workflows) > 0 {
-		log.Printf("  Workflows: %s", strings.Join(workflows, ", "))
+	if len(onCreatedWorkflows) > 0 {
+		log.Printf("  OnCreated Workflows: %s", strings.Join(onCreatedWorkflows, ", "))
+	}
+	if len(onDestroyWorkflows) > 0 {
+		log.Printf("  OnDestroy Workflows: %s", strings.Join(onDestroyWorkflows, ", "))
 	}
 
 	log.Println("\n💡 Execute this template with:")
@@ -277,8 +294,11 @@ func listTemplates() {
 			tmpl.Spec.Region,
 			strings.Join(tmpl.Spec.Nodes, ", "),
 			tmpl.Spec.ClusterType)
-		if len(tmpl.Spec.Workflows) > 0 {
-			log.Printf("    Workflows: %s", strings.Join(tmpl.Spec.Workflows, ", "))
+		if len(tmpl.Spec.Workflows.OnCreated) > 0 {
+			log.Printf("    OnCreated Workflows: %s", strings.Join(tmpl.Spec.Workflows.OnCreated, ", "))
+		}
+		if len(tmpl.Spec.Workflows.OnDestroy) > 0 {
+			log.Printf("    OnDestroy Workflows: %s", strings.Join(tmpl.Spec.Workflows.OnDestroy, ", "))
 		}
 		log.Println()
 	}
@@ -399,8 +419,11 @@ func executeTemplate(templateName, clusterName string) {
 	log.Printf("  Region: %s", tmpl.Spec.Region)
 	log.Printf("  Nodes: %s", strings.Join(tmpl.Spec.Nodes, ", "))
 	log.Printf("  Cluster Type: %s", tmpl.Spec.ClusterType)
-	if len(tmpl.Spec.Workflows) > 0 {
-		log.Printf("  Workflows: %s", strings.Join(tmpl.Spec.Workflows, ", "))
+	if len(tmpl.Spec.Workflows.OnCreated) > 0 {
+		log.Printf("  OnCreated Workflows: %s", strings.Join(tmpl.Spec.Workflows.OnCreated, ", "))
+	}
+	if len(tmpl.Spec.Workflows.OnDestroy) > 0 {
+		log.Printf("  OnDestroy Workflows: %s", strings.Join(tmpl.Spec.Workflows.OnDestroy, ", "))
 	}
 
 	// Save cluster definition to clusters directory
@@ -496,9 +519,9 @@ func executeTemplate(templateName, clusterName string) {
 		}
 	}
 
-	// Execute workflows if any
-	if len(tmpl.Spec.Workflows) > 0 {
-		log.Printf("\n4️⃣ Executing %d workflow(s)...\n", len(tmpl.Spec.Workflows))
+	// Execute onCreated workflows if any
+	if len(tmpl.Spec.Workflows.OnCreated) > 0 {
+		log.Printf("\n4️⃣ Executing %d onCreated workflow(s)...\n", len(tmpl.Spec.Workflows.OnCreated))
 
 		// Create workflow manager
 		workflowMgr, err := workflow.NewManager()
@@ -514,8 +537,8 @@ func executeTemplate(templateName, clusterName string) {
 			return
 		}
 
-		for i, workflowName := range tmpl.Spec.Workflows {
-			log.Printf("\n[%d/%d] Running workflow: %s", i+1, len(tmpl.Spec.Workflows), workflowName)
+		for i, workflowName := range tmpl.Spec.Workflows.OnCreated {
+			log.Printf("\n[%d/%d] Running workflow: %s", i+1, len(tmpl.Spec.Workflows.OnCreated), workflowName)
 
 			// Execute workflow
 			execution, err := executor.RunWorkflow(ctx, workflowName, clusterName)
@@ -660,7 +683,8 @@ func validateTemplate(name string) {
 	}
 
 	// Validate workflows exist
-	if len(tmpl.Spec.Workflows) > 0 {
+	allWorkflows := append(tmpl.Spec.Workflows.OnCreated, tmpl.Spec.Workflows.OnDestroy...)
+	if len(allWorkflows) > 0 {
 		workflowMgr, err := workflow.NewManager()
 		if err == nil {
 			availableWorkflows, err := workflowMgr.ListWorkflows()
@@ -670,9 +694,14 @@ func validateTemplate(name string) {
 					workflowMap[wf.Metadata.Name] = true
 				}
 
-				for _, wfName := range tmpl.Spec.Workflows {
+				for _, wfName := range tmpl.Spec.Workflows.OnCreated {
 					if !workflowMap[wfName] {
-						warnings = append(warnings, fmt.Sprintf("Workflow '%s' not found in repository", wfName))
+						warnings = append(warnings, fmt.Sprintf("OnCreated workflow '%s' not found in repository", wfName))
+					}
+				}
+				for _, wfName := range tmpl.Spec.Workflows.OnDestroy {
+					if !workflowMap[wfName] {
+						warnings = append(warnings, fmt.Sprintf("OnDestroy workflow '%s' not found in repository", wfName))
 					}
 				}
 			}
@@ -702,10 +731,15 @@ func validateTemplate(name string) {
 		log.Printf("📋 Nodes: %d (%s)", len(tmpl.Spec.Nodes), strings.Join(tmpl.Spec.Nodes, ", "))
 		log.Printf("📋 Cluster Type: %s", tmpl.Spec.ClusterType)
 		log.Printf("📋 Ingress: %v", tmpl.Spec.Ingress.Enabled)
-		if len(tmpl.Spec.Workflows) > 0 {
-			log.Printf("📋 Workflows: %d (%s)", len(tmpl.Spec.Workflows), strings.Join(tmpl.Spec.Workflows, ", "))
+		if len(tmpl.Spec.Workflows.OnCreated) > 0 {
+			log.Printf("📋 OnCreated Workflows: %d (%s)", len(tmpl.Spec.Workflows.OnCreated), strings.Join(tmpl.Spec.Workflows.OnCreated, ", "))
 		} else {
-			log.Printf("📋 Workflows: none")
+			log.Printf("📋 OnCreated Workflows: none")
+		}
+		if len(tmpl.Spec.Workflows.OnDestroy) > 0 {
+			log.Printf("📋 OnDestroy Workflows: %d (%s)", len(tmpl.Spec.Workflows.OnDestroy), strings.Join(tmpl.Spec.Workflows.OnDestroy, ", "))
+		} else {
+			log.Printf("📋 OnDestroy Workflows: none")
 		}
 
 		if len(warnings) == 0 {

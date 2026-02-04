@@ -400,7 +400,9 @@ func TestExecuteTemplate(t *testing.T) {
 			Region:      "PHX1",
 			Nodes:       []string{"g4s.kube.medium"},
 			ClusterType: "k3s",
-			Workflows:   []string{"setup-monitoring", "deploy-app"},
+			Workflows: TemplateWorkflowsSpec{
+				OnCreated: []string{"setup-monitoring", "deploy-app"},
+			},
 		},
 	}
 
@@ -433,8 +435,8 @@ func TestExecuteTemplate(t *testing.T) {
 		t.Errorf("Expected cluster name %s, got %s", clusterName, clusterDef.Metadata.Name)
 	}
 
-	if len(retrievedTemplate.Spec.Workflows) != 2 {
-		t.Errorf("Expected 2 workflows, got %d", len(retrievedTemplate.Spec.Workflows))
+	if len(retrievedTemplate.Spec.Workflows.OnCreated) != 2 {
+		t.Errorf("Expected 2 onCreated workflows, got %d", len(retrievedTemplate.Spec.Workflows.OnCreated))
 	}
 }
 
@@ -464,7 +466,10 @@ func TestTemplateWithWorkflows(t *testing.T) {
 			Region:      "NYC1",
 			Nodes:       []string{"g4s.kube.large"},
 			ClusterType: "k3s",
-			Workflows:   []string{"setup", "deploy", "monitor"},
+			Workflows: TemplateWorkflowsSpec{
+				OnCreated: []string{"setup", "deploy"},
+				OnDestroy: []string{"cleanup"},
+			},
 		},
 	}
 
@@ -478,15 +483,23 @@ func TestTemplateWithWorkflows(t *testing.T) {
 		t.Fatalf("Failed to get template: %v", err)
 	}
 
-	if len(retrieved.Spec.Workflows) != 3 {
-		t.Errorf("Expected 3 workflows, got %d", len(retrieved.Spec.Workflows))
+	if len(retrieved.Spec.Workflows.OnCreated) != 2 {
+		t.Errorf("Expected 2 onCreated workflows, got %d", len(retrieved.Spec.Workflows.OnCreated))
 	}
 
-	expectedWorkflows := []string{"setup", "deploy", "monitor"}
-	for i, workflow := range retrieved.Spec.Workflows {
-		if workflow != expectedWorkflows[i] {
-			t.Errorf("Expected workflow %s, got %s", expectedWorkflows[i], workflow)
+	if len(retrieved.Spec.Workflows.OnDestroy) != 1 {
+		t.Errorf("Expected 1 onDestroy workflow, got %d", len(retrieved.Spec.Workflows.OnDestroy))
+	}
+
+	expectedOnCreated := []string{"setup", "deploy"}
+	for i, workflow := range retrieved.Spec.Workflows.OnCreated {
+		if workflow != expectedOnCreated[i] {
+			t.Errorf("Expected onCreated workflow %s, got %s", expectedOnCreated[i], workflow)
 		}
+	}
+
+	if retrieved.Spec.Workflows.OnDestroy[0] != "cleanup" {
+		t.Errorf("Expected onDestroy workflow 'cleanup', got %s", retrieved.Spec.Workflows.OnDestroy[0])
 	}
 }
 

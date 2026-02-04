@@ -7,12 +7,19 @@ type IngressSpec struct {
 	ChartVersion string `yaml:"chartVersion,omitempty"` // Specific helm chart version to install
 }
 
+// WorkflowsSpec defines workflows to run on cluster lifecycle events
+type WorkflowsSpec struct {
+	OnCreated []string `yaml:"onCreated,omitempty"` // Workflows to run after cluster creation
+	OnDestroy []string `yaml:"onDestroy,omitempty"` // Workflows to run before cluster destruction
+}
+
 // ClusterSpec represents the desired cluster configuration
 type ClusterSpec struct {
-	Provider    string      `yaml:"provider"`
-	Nodes       []string    `yaml:"nodes"`
-	ClusterType string      `yaml:"clusterType"`
-	Ingress     IngressSpec `yaml:"ingress"`
+	Provider    string        `yaml:"provider"`
+	Nodes       []string      `yaml:"nodes"`
+	ClusterType string        `yaml:"clusterType"`
+	Ingress     IngressSpec   `yaml:"ingress"`
+	Workflows   WorkflowsSpec `yaml:"workflows,omitempty"`
 }
 
 // ClusterMetadata represents cluster metadata

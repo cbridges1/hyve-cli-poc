@@ -12,6 +12,7 @@ import (
 	"civo-cluster-deploy/internal/repository"
 	"civo-cluster-deploy/internal/state"
 	"civo-cluster-deploy/internal/types"
+	"civo-cluster-deploy/internal/workflow"
 )
 
 // Reconciler handles the reconciliation of clusters using provider abstraction
@@ -158,6 +159,13 @@ func (r *Reconciler) createCluster(ctx context.Context, clusterMgr *cluster.Mana
 	}
 
 	log.Printf("Cluster %s created successfully!", clusterDef.Metadata.Name)
+
+	// Run onCreated workflows if defined
+	if len(clusterDef.Spec.Workflows.OnCreated) > 0 {
+		log.Printf("🔄 Running onCreated workflows for cluster %s...", clusterDef.Metadata.Name)
+		r.runWorkflows(ctx, clusterDef.Spec.Workflows.OnCreated, clusterDef.Metadata.Name)
+	}
+
 	return nil
 }
 
@@ -176,6 +184,12 @@ func (r *Reconciler) deleteCluster(ctx context.Context, clusterMgr *cluster.Mana
 	if existingCluster == nil {
 		log.Printf("Cluster %s not found, nothing to delete", clusterDef.Metadata.Name)
 		return nil
+	}
+
+	// Run onDestroy workflows before deletion if defined
+	if len(clusterDef.Spec.Workflows.OnDestroy) > 0 {
+		log.Printf("🔄 Running onDestroy workflows for cluster %s...", clusterDef.Metadata.Name)
+		r.runWorkflows(ctx, clusterDef.Spec.Workflows.OnDestroy, clusterDef.Metadata.Name)
 	}
 
 	log.Printf("Deleting cluster %s with ID %s", clusterDef.Metadata.Name, existingCluster.ID)
@@ -296,4 +310,43 @@ func (r *Reconciler) syncKubeconfigs(ctx context.Context, clusterDefs []types.Cl
 	}
 
 	return nil
+}
+
+// runWorkflows executes a list of workflows for a cluster
+func (r *Reconciler) runWorkflows(ctx context.Context, workflowNames []string, clusterName string) {
+	if len(workflowNames) == 0 {
+		return
+	}
+
+	// Create workflow manager
+	workflowMgr, err := workflow.NewManager()
+	if err != nil {
+		log.Printf("⚠️  Failed to create workflow manager: %v", err)
+		return
+	}
+
+	// Create workflow executor
+	executor, err := workflow.NewExecutor(workflowMgr, clusterName)
+	if err != nil {
+		log.Printf("⚠️  Failed to create workflow executor: %v", err)
+		return
+	}
+	defer executor.Close()
+
+	// Run each workflow
+	for _, workflowName := range workflowNames {
+		log.Printf("▶️  Running workflow '%s' for cluster '%s'...", workflowName, clusterName)
+
+		execution, err := executor.RunWorkflow(ctx, workflowName, clusterName)
+		if err != nil {
+			log.Printf("⚠️  Workflow '%s' failed: %v", workflowName, err)
+			continue
+		}
+
+		if execution.Status == workflow.StatusCompleted {
+			log.Printf("✅ Workflow '%s' completed successfully", workflowName)
+		} else {
+			log.Printf("⚠️  Workflow '%s' finished with status: %s", workflowName, execution.Status)
+		}
+	}
 }

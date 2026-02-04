@@ -155,6 +155,10 @@ func (m *Manager) ConvertToClusterDefinition(template *Template, clusterName str
 				LoadBalancer: template.Spec.Ingress.LoadBalancer,
 				ChartVersion: template.Spec.Ingress.ChartVersion,
 			},
+			Workflows: types.WorkflowsSpec{
+				OnCreated: template.Spec.Workflows.OnCreated,
+				OnDestroy: template.Spec.Workflows.OnDestroy,
+			},
 		},
 	}
 }

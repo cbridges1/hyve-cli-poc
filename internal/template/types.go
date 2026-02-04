@@ -6,6 +6,12 @@ type TemplateMetadata struct {
 	Description string `yaml:"description,omitempty"`
 }
 
+// TemplateWorkflowsSpec defines workflows to run on cluster lifecycle events
+type TemplateWorkflowsSpec struct {
+	OnCreated []string `yaml:"onCreated,omitempty"` // Workflows to run after cluster creation
+	OnDestroy []string `yaml:"onDestroy,omitempty"` // Workflows to run before cluster destruction
+}
+
 // TemplateSpec represents the template specification
 type TemplateSpec struct {
 	Provider    string   `yaml:"provider"`
@@ -17,7 +23,7 @@ type TemplateSpec struct {
 		LoadBalancer bool   `yaml:"loadBalancer"`
 		ChartVersion string `yaml:"chartVersion,omitempty"`
 	} `yaml:"ingress"`
-	Workflows []string `yaml:"workflows,omitempty"` // Workflows to run after cluster creation
+	Workflows TemplateWorkflowsSpec `yaml:"workflows,omitempty"` // Workflows to run on lifecycle events
 }
 
 // Template represents a complete cluster template definition
