@@ -4,7 +4,7 @@
 
 # Hyve - GitOps Kubernetes Cluster Management CLI
 
-A declarative GitOps Kubernetes cluster management tool for Civo Cloud with multi-repository support, automated workflows, and secure credential management.
+A declarative GitOps Kubernetes cluster management tool with multi-cloud support (Civo, AWS EKS, GCP GKE, Azure AKS), multi-repository support, automated workflows, and secure credential management.
 
 [![Documentation](https://img.shields.io/badge/docs-hyve.dev-green)](https://docs.hyve.dev)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -24,14 +24,26 @@ A declarative GitOps Kubernetes cluster management tool for Civo Cloud with mult
 # 1. Build Hyve
 go build -o hyve .
 
-# 2. Configure API token
-./hyve config set-token civo
+# 2. Configure authentication for your cloud provider
+# For Civo (stores encrypted token in Hyve):
+./hyve config set-token civo --account default
+
+# For AWS, GCP, or Azure (use native CLI authentication):
+# aws configure                              # AWS
+# gcloud auth application-default login      # GCP
+# az login                                   # Azure
 
 # 3. Set up Git repository
 ./hyve git add production --repo-url https://github.com/company/hyve-prod.git
 
-# 4. Create a cluster
-./hyve cluster add my-cluster --region PHX1 --nodes g4s.kube.medium
+# 4. Create a cluster (specify provider)
+./hyve cluster add my-cluster --provider civo --region PHX1 --nodes g4s.kube.medium
+# or
+./hyve cluster add my-cluster --provider aws --region us-east-1 --nodes t3.medium
+# or
+./hyve cluster add my-cluster --provider gcp --region us-central1 --nodes e2-medium
+# or
+./hyve cluster add my-cluster --provider azure --region eastus --nodes Standard_D2s_v3
 
 # 5. Run a workflow
 ./hyve workflow run deploy-app --cluster my-cluster
@@ -43,7 +55,11 @@ go build -o hyve .
 
 - Go 1.21 or higher
 - Git (required - Hyve uses system git by default for easier onboarding)
-- Civo Cloud account with API token
+- One or more cloud provider accounts:
+  - **Civo**: API token (stored encrypted in Hyve)
+  - **AWS**: AWS CLI configured (`aws configure`)
+  - **GCP**: gcloud CLI authenticated (`gcloud auth application-default login`)
+  - **Azure**: Azure CLI authenticated (`az login`)
 
 ### Build from Source
 
@@ -59,8 +75,30 @@ go build -o hyve .
 # Verify git is available (required for default backend)
 git --version
 
-# Store Civo API token (encrypted)
-./hyve config set-token civo
+# Configure cloud provider authentication:
+
+# Option 1: Civo (token stored encrypted in Hyve)
+./hyve config set-token civo --account default
+# Or for multiple Civo accounts:
+./hyve config set-token civo --account production
+./hyve config set-token civo --account development
+
+# Option 2: AWS (uses native AWS CLI authentication)
+aws configure
+# Required environment variable:
+# - AWS_ACCESS_KEY_ID (or ~/.aws/credentials)
+# - AWS_SECRET_ACCESS_KEY (or ~/.aws/credentials)
+
+# Option 3: GCP (uses Application Default Credentials)
+gcloud auth application-default login
+# Required environment variable:
+# - GCP_PROJECT_ID or GOOGLE_CLOUD_PROJECT
+
+# Option 4: Azure (uses Azure CLI authentication)
+az login
+# Required environment variables:
+# - AZURE_SUBSCRIPTION_ID
+# - AZURE_RESOURCE_GROUP
 
 # Configure Git credentials (for private repos)
 ./hyve git credentials --username your-username --password your-token
@@ -118,6 +156,7 @@ hyve git use production
 Define Kubernetes clusters as YAML files:
 
 ```yaml
+# Civo cluster
 apiVersion: v1
 kind: Cluster
 metadata:
@@ -128,6 +167,40 @@ spec:
   nodes:
     - g4s.kube.large
     - g4s.kube.large
+---
+# AWS EKS cluster
+apiVersion: v1
+kind: Cluster
+metadata:
+  name: production
+  region: us-east-1
+spec:
+  provider: aws
+  nodes:
+    - t3.large
+    - t3.large
+---
+# GCP GKE cluster
+apiVersion: v1
+kind: Cluster
+metadata:
+  name: production
+  region: us-central1
+spec:
+  provider: gcp
+  nodes:
+    - e2-standard-4
+---
+# Azure AKS cluster
+apiVersion: v1
+kind: Cluster
+metadata:
+  name: production
+  region: eastus
+spec:
+  provider: azure
+  nodes:
+    - Standard_D2s_v3
 ```
 
 ### Workflows

@@ -66,6 +66,23 @@ func NewManager() (*Manager, error) {
 	return mgr, nil
 }
 
+// CivoAccount represents a stored Civo account
+type CivoAccount struct {
+	AccountID      string    `json:"account_id"`
+	EncryptedToken string    `json:"-"` // Not serialized for security
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	manager        *Manager  `json:"-"` // Reference to manager for decryption
+}
+
+// GetToken returns the decrypted token for this account
+func (c *CivoAccount) GetToken() (string, error) {
+	if c.manager == nil {
+		return "", fmt.Errorf("credentials manager not available for token decryption")
+	}
+	return c.manager.decryptPassword(c.EncryptedToken)
+}
+
 // initializeDB creates and initializes the SQLite database
 func (m *Manager) initializeDB() error {
 	db, err := sql.Open("sqlite3", m.dbPath)
@@ -75,7 +92,7 @@ func (m *Manager) initializeDB() error {
 
 	m.db = db
 
-	// Create credentials table
+	// Create credentials table (for Git credentials)
 	createTableSQL := `
 	CREATE TABLE IF NOT EXISTS credentials (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,19 +107,55 @@ func (m *Manager) initializeDB() error {
 		return fmt.Errorf("failed to create credentials table: %w", err)
 	}
 
-	// Create API tokens table
-	createAPITokensSQL := `
-	CREATE TABLE IF NOT EXISTS api_tokens (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		provider TEXT NOT NULL UNIQUE,
+	// Create Civo accounts table with account_id as primary key
+	createCivoAccountsSQL := `
+	CREATE TABLE IF NOT EXISTS civo_accounts (
+		account_id TEXT PRIMARY KEY,
 		encrypted_token TEXT NOT NULL,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 	`
 
-	if _, err := db.Exec(createAPITokensSQL); err != nil {
-		return fmt.Errorf("failed to create api_tokens table: %w", err)
+	if _, err := db.Exec(createCivoAccountsSQL); err != nil {
+		return fmt.Errorf("failed to create civo_accounts table: %w", err)
+	}
+
+	// Migrate from old api_tokens table if it exists
+	if err := m.migrateFromAPITokens(); err != nil {
+		// Log but don't fail - migration is best-effort
+		fmt.Printf("Note: Could not migrate from api_tokens: %v\n", err)
+	}
+
+	return nil
+}
+
+// migrateFromAPITokens migrates data from the old api_tokens table to civo_accounts
+func (m *Manager) migrateFromAPITokens() error {
+	// Check if old table exists
+	var tableName string
+	err := m.db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='api_tokens'").Scan(&tableName)
+	if err != nil {
+		// Table doesn't exist, nothing to migrate
+		return nil
+	}
+
+	// Check if we have any Civo tokens in the old table
+	var encryptedToken string
+	err = m.db.QueryRow("SELECT encrypted_token FROM api_tokens WHERE provider = 'civo'").Scan(&encryptedToken)
+	if err != nil {
+		// No Civo token found, nothing to migrate
+		return nil
+	}
+
+	// Insert into new table with default account_id
+	insertSQL := `
+	INSERT OR IGNORE INTO civo_accounts (account_id, encrypted_token)
+	VALUES ('default', ?)
+	`
+	_, err = m.db.Exec(insertSQL, encryptedToken)
+	if err != nil {
+		return fmt.Errorf("failed to migrate Civo token: %w", err)
 	}
 
 	return nil
@@ -361,10 +414,10 @@ func (m *Manager) MigrateEncryption(oldHostname string) error {
 	return nil
 }
 
-// StoreAPIToken stores or updates an API token for a provider (e.g., "civo")
-func (m *Manager) StoreAPIToken(provider, token string) error {
-	if provider == "" || token == "" {
-		return fmt.Errorf("provider and token are required")
+// StoreCivoToken stores or updates a Civo API token for an account
+func (m *Manager) StoreCivoToken(accountID, token string) error {
+	if accountID == "" || token == "" {
+		return fmt.Errorf("account_id and token are required")
 	}
 
 	// Encrypt the token
@@ -373,49 +426,37 @@ func (m *Manager) StoreAPIToken(provider, token string) error {
 		return fmt.Errorf("failed to encrypt token: %w", err)
 	}
 
-	// Try to update existing token first
-	updateSQL := `
-	UPDATE api_tokens
-	SET encrypted_token = ?, updated_at = CURRENT_TIMESTAMP
-	WHERE provider = ?
+	// Use INSERT OR REPLACE to handle both insert and update
+	upsertSQL := `
+	INSERT INTO civo_accounts (account_id, encrypted_token, created_at, updated_at)
+	VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+	ON CONFLICT(account_id) DO UPDATE SET
+		encrypted_token = excluded.encrypted_token,
+		updated_at = CURRENT_TIMESTAMP
 	`
-	result, err := m.db.Exec(updateSQL, encryptedToken, provider)
+	_, err = m.db.Exec(upsertSQL, accountID, encryptedToken)
 	if err != nil {
-		return fmt.Errorf("failed to update token: %w", err)
-	}
-
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
-		// Insert new token if update didn't affect any rows
-		insertSQL := `
-		INSERT INTO api_tokens (provider, encrypted_token)
-		VALUES (?, ?)
-		`
-		_, err := m.db.Exec(insertSQL, provider, encryptedToken)
-		if err != nil {
-			return fmt.Errorf("failed to insert token: %w", err)
-		}
+		return fmt.Errorf("failed to store Civo token: %w", err)
 	}
 
 	return nil
 }
 
-// GetAPIToken retrieves and decrypts an API token for a provider
-func (m *Manager) GetAPIToken(provider string) (string, error) {
+// GetCivoToken retrieves and decrypts a Civo API token for an account
+func (m *Manager) GetCivoToken(accountID string) (string, error) {
 	selectSQL := `
 	SELECT encrypted_token
-	FROM api_tokens
-	WHERE provider = ?
-	LIMIT 1
+	FROM civo_accounts
+	WHERE account_id = ?
 	`
 
 	var encryptedToken string
-	err := m.db.QueryRow(selectSQL, provider).Scan(&encryptedToken)
+	err := m.db.QueryRow(selectSQL, accountID).Scan(&encryptedToken)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return "", nil // No token stored
 		}
-		return "", fmt.Errorf("failed to get token: %w", err)
+		return "", fmt.Errorf("failed to get Civo token: %w", err)
 	}
 
 	// Decrypt the token
@@ -427,47 +468,85 @@ func (m *Manager) GetAPIToken(provider string) (string, error) {
 	return token, nil
 }
 
-// HasAPIToken checks if a token is stored for the given provider
-func (m *Manager) HasAPIToken(provider string) (bool, error) {
-	token, err := m.GetAPIToken(provider)
+// GetCivoAccount retrieves a Civo account by account_id
+func (m *Manager) GetCivoAccount(accountID string) (*CivoAccount, error) {
+	selectSQL := `
+	SELECT account_id, encrypted_token, created_at, updated_at
+	FROM civo_accounts
+	WHERE account_id = ?
+	`
+
+	account := &CivoAccount{}
+	var createdAt, updatedAt string
+
+	err := m.db.QueryRow(selectSQL, accountID).Scan(&account.AccountID, &account.EncryptedToken, &createdAt, &updatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil // No account found
+		}
+		return nil, fmt.Errorf("failed to get Civo account: %w", err)
+	}
+
+	// Parse timestamps
+	if account.CreatedAt, err = time.Parse("2006-01-02 15:04:05", createdAt); err != nil {
+		account.CreatedAt = time.Now()
+	}
+	if account.UpdatedAt, err = time.Parse("2006-01-02 15:04:05", updatedAt); err != nil {
+		account.UpdatedAt = time.Now()
+	}
+
+	// Set manager reference for token decryption
+	account.manager = m
+	return account, nil
+}
+
+// HasCivoToken checks if a token is stored for the given account
+func (m *Manager) HasCivoToken(accountID string) (bool, error) {
+	token, err := m.GetCivoToken(accountID)
 	if err != nil {
 		return false, err
 	}
 	return token != "", nil
 }
 
-// ClearAPIToken removes the stored API token for a provider
-func (m *Manager) ClearAPIToken(provider string) error {
-	deleteSQL := `DELETE FROM api_tokens WHERE provider = ?`
-	_, err := m.db.Exec(deleteSQL, provider)
+// ClearCivoToken removes the stored Civo API token for an account
+func (m *Manager) ClearCivoToken(accountID string) error {
+	deleteSQL := `DELETE FROM civo_accounts WHERE account_id = ?`
+	_, err := m.db.Exec(deleteSQL, accountID)
 	if err != nil {
-		return fmt.Errorf("failed to clear token: %w", err)
+		return fmt.Errorf("failed to clear Civo token: %w", err)
 	}
 	return nil
 }
 
-// ListAPITokens returns a list of providers that have tokens stored
-func (m *Manager) ListAPITokens() ([]string, error) {
+// ListCivoAccounts returns a list of Civo account IDs that have tokens stored
+func (m *Manager) ListCivoAccounts() ([]string, error) {
 	selectSQL := `
-	SELECT provider
-	FROM api_tokens
-	ORDER BY provider
+	SELECT account_id
+	FROM civo_accounts
+	ORDER BY account_id
 	`
 
 	rows, err := m.db.Query(selectSQL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list tokens: %w", err)
+		return nil, fmt.Errorf("failed to list Civo accounts: %w", err)
 	}
 	defer rows.Close()
 
-	var providers []string
+	var accounts []string
 	for rows.Next() {
-		var provider string
-		if err := rows.Scan(&provider); err != nil {
-			return nil, fmt.Errorf("failed to scan provider: %w", err)
+		var accountID string
+		if err := rows.Scan(&accountID); err != nil {
+			return nil, fmt.Errorf("failed to scan account_id: %w", err)
 		}
-		providers = append(providers, provider)
+		accounts = append(accounts, accountID)
 	}
 
-	return providers, nil
+	return accounts, nil
+}
+
+// GetDefaultCivoToken returns the token for the "default" Civo account
+// This is used for backward compatibility and environment variable fallback
+func (m *Manager) GetDefaultCivoToken() (string, error) {
+	return m.GetCivoToken("default")
 }

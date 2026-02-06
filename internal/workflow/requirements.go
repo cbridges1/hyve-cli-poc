@@ -98,19 +98,31 @@ func (v *RequirementValidator) validateSecret(secret SecretRequirement) error {
 		return nil // Secret available in environment
 	}
 
-	// If provider specified, check credentials database
-	if secret.Provider != "" {
-		hasToken, err := v.credsMgr.HasAPIToken(secret.Provider)
+	// Handle different providers
+	switch secret.Provider {
+	case "civo":
+		// Civo tokens are stored in our credentials database
+		hasToken, err := v.credsMgr.HasCivoToken("default")
 		if err != nil {
 			if secret.Required {
 				return fmt.Errorf("error checking secret '%s' for provider '%s': %w", secret.Name, secret.Provider, err)
 			}
 			return nil // Non-required secret, ignore errors
 		}
-
 		if hasToken {
 			return nil // Secret available in database
 		}
+
+	case "aws", "gcp", "azure":
+		// These providers use native CLI authentication
+		// We can't easily check if they're authenticated here, so we skip validation
+		// Authentication will be validated when the provider is actually used
+		return nil
+
+	default:
+		// Unknown provider or no provider specified
+		// If no provider is specified, we can only check environment variable (already done above)
+		// For unknown providers, we fall through to the "not found" logic
 	}
 
 	// Secret not found
@@ -120,10 +132,17 @@ func (v *RequirementValidator) validateSecret(secret SecretRequirement) error {
 			msg = fmt.Sprintf("%s (%s)", msg, secret.Description)
 		}
 
-		// Add helpful suggestions
+		// Add helpful suggestions based on provider
 		suggestions := []string{}
-		if secret.Provider != "" {
-			suggestions = append(suggestions, fmt.Sprintf("hyve config set-token %s", secret.Provider))
+		switch secret.Provider {
+		case "civo":
+			suggestions = append(suggestions, "hyve config set-token civo --account default")
+		case "aws":
+			suggestions = append(suggestions, "aws configure")
+		case "gcp":
+			suggestions = append(suggestions, "gcloud auth application-default login")
+		case "azure":
+			suggestions = append(suggestions, "az login")
 		}
 		suggestions = append(suggestions, fmt.Sprintf("export %s=your-secret", secret.Name))
 
@@ -206,12 +225,13 @@ func (v *RequirementValidator) LoadSecretsIntoEnvironment(requirements *Workflow
 			continue
 		}
 
-		// Try to load from database if provider specified
-		if secret.Provider != "" {
-			token, err := v.credsMgr.GetAPIToken(secret.Provider)
+		// Only Civo stores credentials in our database
+		// AWS, GCP, Azure use native CLI authentication
+		if secret.Provider == "civo" {
+			token, err := v.credsMgr.GetCivoToken("default")
 			if err != nil {
 				if secret.Required {
-					return fmt.Errorf("failed to load secret '%s' from provider '%s': %w", secret.Name, secret.Provider, err)
+					return fmt.Errorf("failed to load secret '%s' from Civo credentials: %w", secret.Name, err)
 				}
 				continue // Skip non-required secrets on error
 			}
@@ -223,6 +243,7 @@ func (v *RequirementValidator) LoadSecretsIntoEnvironment(requirements *Workflow
 				}
 			}
 		}
+		// For other providers (AWS, GCP, Azure), their SDKs handle auth automatically
 	}
 
 	return nil

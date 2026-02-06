@@ -143,8 +143,8 @@ func TestClearCredentials(t *testing.T) {
 	}
 }
 
-// TestStoreAndGetAPIToken tests API token storage and retrieval
-func TestStoreAndGetAPIToken(t *testing.T) {
+// TestStoreAndGetCivoToken tests Civo token storage and retrieval
+func TestStoreAndGetCivoToken(t *testing.T) {
 	tempDir := t.TempDir()
 	mgr := &Manager{
 		dbPath: filepath.Join(tempDir, "test_credentials.db"),
@@ -156,37 +156,37 @@ func TestStoreAndGetAPIToken(t *testing.T) {
 	defer mgr.Close()
 
 	testCases := []struct {
-		provider string
-		token    string
+		accountID string
+		token     string
 	}{
-		{"civo", "test-civo-token-123"},
-		{"aws", "test-aws-token-456"},
-		{"gcp", "test-gcp-token-789"},
+		{"default", "test-civo-token-123"},
+		{"production", "test-prod-token-456"},
+		{"staging", "test-staging-token-789"},
 	}
 
-	// Store tokens for different providers
+	// Store tokens for different accounts
 	for _, tc := range testCases {
-		err := mgr.StoreAPIToken(tc.provider, tc.token)
+		err := mgr.StoreCivoToken(tc.accountID, tc.token)
 		if err != nil {
-			t.Fatalf("Failed to store token for %s: %v", tc.provider, err)
+			t.Fatalf("Failed to store token for %s: %v", tc.accountID, err)
 		}
 	}
 
 	// Retrieve and verify each token
 	for _, tc := range testCases {
-		retrievedToken, err := mgr.GetAPIToken(tc.provider)
+		retrievedToken, err := mgr.GetCivoToken(tc.accountID)
 		if err != nil {
-			t.Fatalf("Failed to get token for %s: %v", tc.provider, err)
+			t.Fatalf("Failed to get token for %s: %v", tc.accountID, err)
 		}
 
 		if retrievedToken != tc.token {
-			t.Errorf("Provider %s: expected token %s, got %s", tc.provider, tc.token, retrievedToken)
+			t.Errorf("Account %s: expected token %s, got %s", tc.accountID, tc.token, retrievedToken)
 		}
 	}
 }
 
-// TestUpdateAPIToken tests updating an existing API token
-func TestUpdateAPIToken(t *testing.T) {
+// TestUpdateCivoToken tests updating an existing Civo token
+func TestUpdateCivoToken(t *testing.T) {
 	tempDir := t.TempDir()
 	mgr := &Manager{
 		dbPath: filepath.Join(tempDir, "test_credentials.db"),
@@ -197,22 +197,22 @@ func TestUpdateAPIToken(t *testing.T) {
 	}
 	defer mgr.Close()
 
-	provider := "civo"
+	accountID := "default"
 
 	// Store initial token
-	err := mgr.StoreAPIToken(provider, "old-token")
+	err := mgr.StoreCivoToken(accountID, "old-token")
 	if err != nil {
 		t.Fatalf("Failed to store initial token: %v", err)
 	}
 
 	// Update token
-	err = mgr.StoreAPIToken(provider, "new-token")
+	err = mgr.StoreCivoToken(accountID, "new-token")
 	if err != nil {
 		t.Fatalf("Failed to update token: %v", err)
 	}
 
 	// Verify updated token
-	retrievedToken, err := mgr.GetAPIToken(provider)
+	retrievedToken, err := mgr.GetCivoToken(accountID)
 	if err != nil {
 		t.Fatalf("Failed to get token: %v", err)
 	}
@@ -222,8 +222,8 @@ func TestUpdateAPIToken(t *testing.T) {
 	}
 }
 
-// TestClearAPIToken tests removing an API token
-func TestClearAPIToken(t *testing.T) {
+// TestClearCivoToken tests removing a Civo token
+func TestClearCivoToken(t *testing.T) {
 	tempDir := t.TempDir()
 	mgr := &Manager{
 		dbPath: filepath.Join(tempDir, "test_credentials.db"),
@@ -234,16 +234,16 @@ func TestClearAPIToken(t *testing.T) {
 	}
 	defer mgr.Close()
 
-	provider := "civo"
+	accountID := "default"
 
 	// Store token
-	err := mgr.StoreAPIToken(provider, "test-token")
+	err := mgr.StoreCivoToken(accountID, "test-token")
 	if err != nil {
 		t.Fatalf("Failed to store token: %v", err)
 	}
 
 	// Verify token exists
-	hasToken, err := mgr.HasAPIToken(provider)
+	hasToken, err := mgr.HasCivoToken(accountID)
 	if err != nil {
 		t.Fatalf("Failed to check token: %v", err)
 	}
@@ -252,13 +252,13 @@ func TestClearAPIToken(t *testing.T) {
 	}
 
 	// Clear token
-	err = mgr.ClearAPIToken(provider)
+	err = mgr.ClearCivoToken(accountID)
 	if err != nil {
 		t.Fatalf("Failed to clear token: %v", err)
 	}
 
 	// Verify token is gone
-	hasTokenAfter, err := mgr.HasAPIToken(provider)
+	hasTokenAfter, err := mgr.HasCivoToken(accountID)
 	if err != nil {
 		t.Fatalf("Failed to check token after clear: %v", err)
 	}
@@ -267,8 +267,8 @@ func TestClearAPIToken(t *testing.T) {
 	}
 }
 
-// TestListAPITokens tests listing all stored tokens
-func TestListAPITokens(t *testing.T) {
+// TestListCivoAccounts tests listing all stored Civo accounts
+func TestListCivoAccounts(t *testing.T) {
 	tempDir := t.TempDir()
 	mgr := &Manager{
 		dbPath: filepath.Join(tempDir, "test_credentials.db"),
@@ -279,35 +279,35 @@ func TestListAPITokens(t *testing.T) {
 	}
 	defer mgr.Close()
 
-	// Store tokens for multiple providers
-	providers := []string{"civo", "aws", "gcp"}
-	for _, provider := range providers {
-		err := mgr.StoreAPIToken(provider, "token-for-"+provider)
+	// Store tokens for multiple accounts
+	accounts := []string{"default", "production", "staging"}
+	for _, account := range accounts {
+		err := mgr.StoreCivoToken(account, "token-for-"+account)
 		if err != nil {
-			t.Fatalf("Failed to store token for %s: %v", provider, err)
+			t.Fatalf("Failed to store token for %s: %v", account, err)
 		}
 	}
 
-	// List tokens
-	list, err := mgr.ListAPITokens()
+	// List accounts
+	list, err := mgr.ListCivoAccounts()
 	if err != nil {
-		t.Fatalf("Failed to list tokens: %v", err)
+		t.Fatalf("Failed to list accounts: %v", err)
 	}
 
 	// Verify count
-	if len(list) != len(providers) {
-		t.Errorf("Expected %d providers, got %d", len(providers), len(list))
+	if len(list) != len(accounts) {
+		t.Errorf("Expected %d accounts, got %d", len(accounts), len(list))
 	}
 
-	// Verify all providers are in the list
-	providerMap := make(map[string]bool)
-	for _, p := range list {
-		providerMap[p] = true
+	// Verify all accounts are in the list
+	accountMap := make(map[string]bool)
+	for _, a := range list {
+		accountMap[a] = true
 	}
 
-	for _, expected := range providers {
-		if !providerMap[expected] {
-			t.Errorf("Expected provider %s not found in list", expected)
+	for _, expected := range accounts {
+		if !accountMap[expected] {
+			t.Errorf("Expected account %s not found in list", expected)
 		}
 	}
 }
@@ -380,21 +380,21 @@ func TestEmptyValues(t *testing.T) {
 		t.Error("Expected error for empty password")
 	}
 
-	// Test empty API token provider
-	err = mgr.StoreAPIToken("", "token")
+	// Test empty Civo account_id
+	err = mgr.StoreCivoToken("", "token")
 	if err == nil {
-		t.Error("Expected error for empty provider")
+		t.Error("Expected error for empty account_id")
 	}
 
-	// Test empty API token
-	err = mgr.StoreAPIToken("civo", "")
+	// Test empty Civo token
+	err = mgr.StoreCivoToken("default", "")
 	if err == nil {
 		t.Error("Expected error for empty token")
 	}
 }
 
-// TestGetNonExistentToken tests retrieving a token that doesn't exist
-func TestGetNonExistentToken(t *testing.T) {
+// TestGetNonExistentCivoToken tests retrieving a token that doesn't exist
+func TestGetNonExistentCivoToken(t *testing.T) {
 	tempDir := t.TempDir()
 	mgr := &Manager{
 		dbPath: filepath.Join(tempDir, "test_credentials.db"),
@@ -406,7 +406,7 @@ func TestGetNonExistentToken(t *testing.T) {
 	defer mgr.Close()
 
 	// Try to get non-existent token
-	token, err := mgr.GetAPIToken("nonexistent")
+	token, err := mgr.GetCivoToken("nonexistent")
 	if err != nil {
 		t.Fatalf("Should not error on non-existent token: %v", err)
 	}
@@ -415,14 +415,14 @@ func TestGetNonExistentToken(t *testing.T) {
 		t.Errorf("Expected empty token, got %s", token)
 	}
 
-	// Verify HasAPIToken returns false
-	hasToken, err := mgr.HasAPIToken("nonexistent")
+	// Verify HasCivoToken returns false
+	hasToken, err := mgr.HasCivoToken("nonexistent")
 	if err != nil {
 		t.Fatalf("Failed to check for token: %v", err)
 	}
 
 	if hasToken {
-		t.Error("Expected HasAPIToken to return false for non-existent token")
+		t.Error("Expected HasCivoToken to return false for non-existent token")
 	}
 }
 
@@ -437,7 +437,7 @@ func TestDatabasePersistence(t *testing.T) {
 		t.Fatalf("Failed to initialize database: %v", err)
 	}
 
-	err := mgr1.StoreAPIToken("civo", "persistent-token")
+	err := mgr1.StoreCivoToken("default", "persistent-token")
 	if err != nil {
 		t.Fatalf("Failed to store token: %v", err)
 	}
@@ -450,7 +450,7 @@ func TestDatabasePersistence(t *testing.T) {
 	}
 	defer mgr2.Close()
 
-	token, err := mgr2.GetAPIToken("civo")
+	token, err := mgr2.GetCivoToken("default")
 	if err != nil {
 		t.Fatalf("Failed to get token from second manager: %v", err)
 	}

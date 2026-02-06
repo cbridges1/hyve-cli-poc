@@ -2,9 +2,10 @@ package provider
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
-	"civo-cluster-deploy/internal/config"
+	"civo-cluster-deploy/internal/credentials"
 	"civo-cluster-deploy/internal/provider/aws"
 	"civo-cluster-deploy/internal/provider/azure"
 	"civo-cluster-deploy/internal/provider/civo"
@@ -20,83 +21,153 @@ func NewFactory() *Factory {
 }
 
 // CreateProvider creates a provider based on the provider name
-// For Civo, the apiKey parameter is used directly.
-// For other providers, credentials are loaded from config/environment.
+// For Civo, the apiKey parameter is used directly (or loaded from credentials store).
+// For AWS, GCP, and Azure, authentication uses the native CLI credentials:
+//   - AWS: Uses AWS CLI credentials (~/.aws/credentials) or environment variables
+//   - GCP: Uses gcloud CLI credentials (Application Default Credentials)
+//   - Azure: Uses Azure CLI credentials (az login)
 func (f *Factory) CreateProvider(providerName, apiKey, region string) (Provider, error) {
-	configMgr := config.NewManager()
-
 	switch strings.ToLower(providerName) {
 	case "civo":
-		civoProvider, err := civo.NewProvider(apiKey, region)
+		// For Civo, use provided apiKey or load from credentials store
+		token := apiKey
+		if token == "" {
+			// Try environment variable first
+			token = os.Getenv("CIVO_TOKEN")
+		}
+		if token == "" {
+			// Try credentials store with default account
+			credsMgr, err := credentials.NewManager()
+			if err == nil {
+				defer credsMgr.Close()
+				token, _ = credsMgr.GetDefaultCivoToken()
+			}
+		}
+		if token == "" {
+			return nil, fmt.Errorf("Civo API token not found. Please run 'hyve config set-token civo --account <account-id>' or set CIVO_TOKEN environment variable")
+		}
+		civoProvider, err := civo.NewProvider(token, region)
 		if err != nil {
 			return nil, err
 		}
 		return &ProviderAdapter{civo: civoProvider}, nil
+
 	case "aws":
-		accessKeyID, secretAccessKey := configMgr.GetAWSCredentials()
-		if accessKeyID == "" || secretAccessKey == "" {
-			return nil, fmt.Errorf("AWS credentials not found. Please run 'hyve config set-token aws-access-key' and 'hyve config set-token aws-secret-key' or set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables")
-		}
-		awsProvider, err := aws.NewProvider(accessKeyID, secretAccessKey, region)
+		// AWS uses native CLI authentication via AWS SDK's default credential chain
+		// This automatically checks: environment variables, ~/.aws/credentials, IAM roles, etc.
+		// No credentials need to be stored in Hyve - use 'aws configure' to set up
+		awsProvider, err := aws.NewProvider("", "", region)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("AWS authentication failed. Please run 'aws configure' or set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables: %w", err)
 		}
 		return &ProviderAdapter{aws: awsProvider}, nil
+
 	case "gcp":
-		projectID, credentialsJSON := configMgr.GetGCPCredentials()
+		// GCP uses Application Default Credentials (ADC)
+		// This automatically checks: GOOGLE_APPLICATION_CREDENTIALS, gcloud auth, metadata server
+		// No credentials need to be stored in Hyve - use 'gcloud auth application-default login' to set up
+		projectID := os.Getenv("GCP_PROJECT_ID")
 		if projectID == "" {
-			return nil, fmt.Errorf("GCP project ID not found. Please run 'hyve config set-token gcp-project' or set GCP_PROJECT_ID environment variable")
+			projectID = os.Getenv("GOOGLE_CLOUD_PROJECT")
 		}
-		gcpProvider, err := gcp.NewProvider(credentialsJSON, projectID, region)
+		if projectID == "" {
+			return nil, fmt.Errorf("GCP project ID not found. Please set GCP_PROJECT_ID or GOOGLE_CLOUD_PROJECT environment variable")
+		}
+		gcpProvider, err := gcp.NewProvider("", projectID, region)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("GCP authentication failed. Please run 'gcloud auth application-default login': %w", err)
 		}
 		return &ProviderAdapter{gcp: gcpProvider}, nil
+
 	case "azure":
-		subscriptionID, resourceGroup := configMgr.GetAzureCredentials()
+		// Azure uses DefaultAzureCredential which checks:
+		// Environment variables, managed identity, Azure CLI, Azure PowerShell, etc.
+		// No credentials need to be stored in Hyve - use 'az login' to set up
+		subscriptionID := os.Getenv("AZURE_SUBSCRIPTION_ID")
 		if subscriptionID == "" {
-			return nil, fmt.Errorf("Azure subscription ID not found. Please run 'hyve config set-token azure-subscription' or set AZURE_SUBSCRIPTION_ID environment variable")
+			return nil, fmt.Errorf("Azure subscription ID not found. Please set AZURE_SUBSCRIPTION_ID environment variable")
 		}
+		resourceGroup := os.Getenv("AZURE_RESOURCE_GROUP")
 		if resourceGroup == "" {
-			return nil, fmt.Errorf("Azure resource group not found. Please run 'hyve config set-token azure-resource-group' or set AZURE_RESOURCE_GROUP environment variable")
+			return nil, fmt.Errorf("Azure resource group not found. Please set AZURE_RESOURCE_GROUP environment variable")
 		}
 		azureProvider, err := azure.NewProvider(subscriptionID, resourceGroup, region)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("Azure authentication failed. Please run 'az login': %w", err)
 		}
 		return &ProviderAdapter{azure: azureProvider}, nil
+
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s. Valid providers are: civo, aws, gcp, azure", providerName)
 	}
 }
 
 // CreateProviderWithOptions creates a provider with additional options
+// For Civo, credentials are required in opts.APIKey or opts.CivoAccountID
+// For AWS/GCP/Azure, native CLI authentication is used (options are for environment overrides only)
 func (f *Factory) CreateProviderWithOptions(providerName string, opts ProviderOptions) (Provider, error) {
 	switch strings.ToLower(providerName) {
 	case "civo":
-		civoProvider, err := civo.NewProvider(opts.APIKey, opts.Region)
+		token := opts.APIKey
+		if token == "" && opts.CivoAccountID != "" {
+			// Load token from credentials store using account ID
+			credsMgr, err := credentials.NewManager()
+			if err == nil {
+				defer credsMgr.Close()
+				token, _ = credsMgr.GetCivoToken(opts.CivoAccountID)
+			}
+		}
+		if token == "" {
+			token = os.Getenv("CIVO_TOKEN")
+		}
+		if token == "" {
+			return nil, fmt.Errorf("Civo API token not found")
+		}
+		civoProvider, err := civo.NewProvider(token, opts.Region)
 		if err != nil {
 			return nil, err
 		}
 		return &ProviderAdapter{civo: civoProvider}, nil
+
 	case "gcp":
-		gcpProvider, err := gcp.NewProvider(opts.CredentialsJSON, opts.ProjectID, opts.Region)
+		// GCP uses ADC - ProjectID can be passed or read from environment
+		projectID := opts.ProjectID
+		if projectID == "" {
+			projectID = os.Getenv("GCP_PROJECT_ID")
+		}
+		if projectID == "" {
+			projectID = os.Getenv("GOOGLE_CLOUD_PROJECT")
+		}
+		gcpProvider, err := gcp.NewProvider("", projectID, opts.Region)
 		if err != nil {
 			return nil, err
 		}
 		return &ProviderAdapter{gcp: gcpProvider}, nil
+
 	case "aws":
-		awsProvider, err := aws.NewProvider(opts.AWSAccessKeyID, opts.AWSSecretAccessKey, opts.Region)
+		// AWS uses default credential chain - no explicit credentials needed
+		awsProvider, err := aws.NewProvider("", "", opts.Region)
 		if err != nil {
 			return nil, err
 		}
 		return &ProviderAdapter{aws: awsProvider}, nil
+
 	case "azure":
-		azureProvider, err := azure.NewProvider(opts.AzureSubscriptionID, opts.AzureResourceGroup, opts.Region)
+		// Azure uses DefaultAzureCredential - subscription/resource group from opts or env
+		subscriptionID := opts.AzureSubscriptionID
+		if subscriptionID == "" {
+			subscriptionID = os.Getenv("AZURE_SUBSCRIPTION_ID")
+		}
+		resourceGroup := opts.AzureResourceGroup
+		if resourceGroup == "" {
+			resourceGroup = os.Getenv("AZURE_RESOURCE_GROUP")
+		}
+		azureProvider, err := azure.NewProvider(subscriptionID, resourceGroup, opts.Region)
 		if err != nil {
 			return nil, err
 		}
 		return &ProviderAdapter{azure: azureProvider}, nil
+
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", providerName)
 	}
@@ -107,20 +178,18 @@ type ProviderOptions struct {
 	// Common
 	Region string // For all providers
 
-	// Civo
-	APIKey string
+	// Civo - requires API token stored in Hyve
+	APIKey        string // Direct API key (optional, can use CivoAccountID instead)
+	CivoAccountID string // Account ID to load token from credentials store
 
-	// GCP
-	CredentialsJSON string // Optional, uses ADC if empty
-	ProjectID       string
+	// GCP - uses gcloud CLI authentication (Application Default Credentials)
+	ProjectID string // GCP project ID (can also be set via GCP_PROJECT_ID env var)
 
-	// AWS
-	AWSAccessKeyID     string
-	AWSSecretAccessKey string
+	// Azure - uses Azure CLI authentication (az login)
+	AzureSubscriptionID string // Azure subscription ID (can also be set via AZURE_SUBSCRIPTION_ID env var)
+	AzureResourceGroup  string // Azure resource group (can also be set via AZURE_RESOURCE_GROUP env var)
 
-	// Azure
-	AzureSubscriptionID string
-	AzureResourceGroup  string
+	// Note: AWS uses AWS CLI authentication automatically - no options needed
 }
 
 // GetSupportedProviders returns list of supported providers

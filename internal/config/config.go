@@ -117,115 +117,44 @@ func (m *Manager) IsGitConfigured() bool {
 }
 
 // GetCivoToken loads the Civo API token from configuration
-// Priority: 1) Database 2) Environment variable 3) .env file
+// Priority: 1) Database (default account) 2) Environment variable 3) .env file
 func (m *Manager) GetCivoToken() string {
+	return m.GetCivoTokenForAccount("default")
+}
+
+// GetCivoTokenForAccount loads the Civo API token for a specific account
+// Priority: 1) Database 2) Environment variable (for default account only) 3) .env file
+func (m *Manager) GetCivoTokenForAccount(accountID string) string {
 	// First, try to get from database
 	credsMgr, err := credentials.NewManager()
 	if err == nil {
 		defer credsMgr.Close()
-		token, err := credsMgr.GetAPIToken("civo")
+		token, err := credsMgr.GetCivoToken(accountID)
 		if err == nil && token != "" {
 			return token
 		}
 	}
 
-	// Second, try environment variable
-	if token := os.Getenv("CIVO_TOKEN"); token != "" {
-		return token
-	}
-
-	// Third, try .env file
-	viper.SetConfigName(".env")
-	viper.SetConfigType("env")
-	viper.AddConfigPath(".")
-	viper.AutomaticEnv()
-
-	if err := viper.ReadInConfig(); err != nil {
-		// Don't log warning if both database and environment variable are empty
-		// This makes the error message cleaner
-	}
-
-	return viper.GetString("CIVO_TOKEN")
-}
-
-// GetAWSCredentials returns AWS access key ID and secret access key
-// Priority: 1) Database 2) Environment variables
-func (m *Manager) GetAWSCredentials() (accessKeyID, secretAccessKey string) {
-	credsMgr, err := credentials.NewManager()
-	if err == nil {
-		defer credsMgr.Close()
-		if key, err := credsMgr.GetAPIToken("aws-access-key"); err == nil && key != "" {
-			accessKeyID = key
+	// For default account, also check environment variable
+	if accountID == "default" {
+		if token := os.Getenv("CIVO_TOKEN"); token != "" {
+			return token
 		}
-		if secret, err := credsMgr.GetAPIToken("aws-secret-key"); err == nil && secret != "" {
-			secretAccessKey = secret
-		}
-	}
 
-	// Fallback to environment variables
-	if accessKeyID == "" {
-		accessKeyID = os.Getenv("AWS_ACCESS_KEY_ID")
-	}
-	if secretAccessKey == "" {
-		secretAccessKey = os.Getenv("AWS_SECRET_ACCESS_KEY")
-	}
+		// Also check .env file
+		viper.SetConfigName(".env")
+		viper.SetConfigType("env")
+		viper.AddConfigPath(".")
+		viper.AutomaticEnv()
 
-	return accessKeyID, secretAccessKey
-}
-
-// GetGCPCredentials returns GCP project ID and credentials JSON
-// Priority: 1) Database 2) Environment variables
-func (m *Manager) GetGCPCredentials() (projectID, credentialsJSON string) {
-	credsMgr, err := credentials.NewManager()
-	if err == nil {
-		defer credsMgr.Close()
-		if proj, err := credsMgr.GetAPIToken("gcp-project"); err == nil && proj != "" {
-			projectID = proj
-		}
-		if creds, err := credsMgr.GetAPIToken("gcp-credentials"); err == nil && creds != "" {
-			credentialsJSON = creds
-		}
-	}
-
-	// Fallback to environment variables
-	if projectID == "" {
-		projectID = os.Getenv("GCP_PROJECT_ID")
-	}
-	if credentialsJSON == "" {
-		// Check for credentials file path
-		if credsFile := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS"); credsFile != "" {
-			if data, err := os.ReadFile(credsFile); err == nil {
-				credentialsJSON = string(data)
+		if err := viper.ReadInConfig(); err == nil {
+			if token := viper.GetString("CIVO_TOKEN"); token != "" {
+				return token
 			}
 		}
 	}
 
-	return projectID, credentialsJSON
-}
-
-// GetAzureCredentials returns Azure subscription ID and resource group
-// Priority: 1) Database 2) Environment variables
-func (m *Manager) GetAzureCredentials() (subscriptionID, resourceGroup string) {
-	credsMgr, err := credentials.NewManager()
-	if err == nil {
-		defer credsMgr.Close()
-		if sub, err := credsMgr.GetAPIToken("azure-subscription"); err == nil && sub != "" {
-			subscriptionID = sub
-		}
-		if rg, err := credsMgr.GetAPIToken("azure-resource-group"); err == nil && rg != "" {
-			resourceGroup = rg
-		}
-	}
-
-	// Fallback to environment variables
-	if subscriptionID == "" {
-		subscriptionID = os.Getenv("AZURE_SUBSCRIPTION_ID")
-	}
-	if resourceGroup == "" {
-		resourceGroup = os.Getenv("AZURE_RESOURCE_GROUP")
-	}
-
-	return subscriptionID, resourceGroup
+	return ""
 }
 
 // GetGitBackend returns the configured git backend
