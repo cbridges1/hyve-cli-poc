@@ -20,6 +20,9 @@ type ClusterSpec struct {
 	ClusterType string        `yaml:"clusterType"`
 	Ingress     IngressSpec   `yaml:"ingress"`
 	Workflows   WorkflowsSpec `yaml:"workflows,omitempty"`
+
+	// Provider-specific configuration
+	GCPProject string `yaml:"gcpProject,omitempty"` // GCP project name alias (resolved to project ID at runtime)
 }
 
 // ClusterMetadata represents cluster metadata

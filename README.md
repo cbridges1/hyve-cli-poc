@@ -251,8 +251,34 @@ hyve template execute prod-template prod-cluster-01
 | `hyve workflow` | Run and manage workflows |
 | `hyve template` | Manage cluster templates |
 | `hyve kubeconfig` | Manage cluster kubeconfigs |
-| `hyve config` | Configure API tokens |
+| `hyve config` | Configure API tokens and provider settings |
+| `hyve config gcp` | Manage GCP provider configuration |
+| `hyve config aws` | Manage AWS provider configuration |
+| `hyve config azure` | Manage Azure provider configuration |
 | `hyve reconcile` | Reconcile cluster state |
+
+### Provider Configuration Commands
+
+Store provider-specific configurations in your repository for team sharing:
+
+```bash
+# GCP - Add project IDs
+hyve config gcp add-project-ids my-project-1,my-project-2
+hyve config gcp list-project-ids
+hyve config gcp remove-project-ids my-project-1
+
+# AWS - Add account IDs
+hyve config aws add-account-ids 123456789012,987654321098
+hyve config aws list-account-ids
+hyve config aws remove-account-ids 123456789012
+
+# Azure - Add subscription IDs
+hyve config azure add-subscription-ids sub-id-1,sub-id-2
+hyve config azure list-subscription-ids
+hyve config azure remove-subscription-ids sub-id-1
+```
+
+Provider configurations are stored in `provider-configs/` in your repository and can be committed to Git.
 
 See [CLI Reference](https://docs.hyve.dev/cli/overview) for complete command documentation.
 
@@ -263,14 +289,18 @@ Hyve stores all data in `~/.hyve/`:
 ```
 ~/.hyve/
 ├── repositories.db      # Repository configurations (SQLite)
-├── credentials.db       # Encrypted API tokens and credentials (AES-GCM)
+├── credentials.db       # Encrypted Civo tokens and Git credentials (AES-GCM)
 ├── kubeconfigs.db      # Encrypted cluster kubeconfigs (AES-GCM)
 ├── temp/               # Temporary kubeconfig files
 └── repositories/       # Cloned repository storage
     ├── production/
-    │   ├── clusters/   # Cluster YAML files
-    │   ├── workflows/  # Workflow definitions
-    │   └── templates/  # Cluster templates
+    │   ├── clusters/         # Cluster YAML files
+    │   ├── workflows/        # Workflow definitions
+    │   ├── templates/        # Cluster templates
+    │   └── provider-configs/ # Provider-specific configuration
+    │       ├── gcp.yaml      # GCP project IDs
+    │       ├── aws.yaml      # AWS account IDs
+    │       └── azure.yaml    # Azure subscription IDs
     └── development/
 ```
 

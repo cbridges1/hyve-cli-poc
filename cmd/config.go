@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"log"
+	"strings"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -10,6 +11,8 @@ import (
 
 	"civo-cluster-deploy/internal/config"
 	"civo-cluster-deploy/internal/credentials"
+	"civo-cluster-deploy/internal/providerconfig"
+	"civo-cluster-deploy/internal/repository"
 )
 
 var configCmd = &cobra.Command{
@@ -141,6 +144,171 @@ var configGetGitBackendCmd = &cobra.Command{
 	},
 }
 
+// GCP provider config commands
+var configGCPCmd = &cobra.Command{
+	Use:   "gcp",
+	Short: "Manage GCP provider configuration",
+	Long: `Manage GCP-specific configuration stored in the current repository.
+
+These configurations are stored in the repository under provider-configs/gcp.yaml
+and are committed to Git for team sharing.`,
+}
+
+var configGCPAddProjectCmd = &cobra.Command{
+	Use:   "add-project",
+	Short: "Add a GCP project with an alias to the repository configuration",
+	Long: `Add a GCP project ID with a friendly name/alias to the repository's provider configuration.
+
+The project is stored in provider-configs/gcp.yaml in the current repository.
+The name can then be used as an alias when creating clusters.
+
+Examples:
+  hyve config gcp add-project --name dev --id my-dev-project-123
+  hyve config gcp add-project --name prod --id my-prod-project-456
+
+Then use with cluster create:
+  hyve cluster add my-cluster --provider gcp --gcp-project dev --region us-central1`,
+	Run: func(cmd *cobra.Command, args []string) {
+		name, _ := cmd.Flags().GetString("name")
+		projectID, _ := cmd.Flags().GetString("id")
+		addGCPProject(name, projectID)
+	},
+}
+
+var configGCPRemoveProjectCmd = &cobra.Command{
+	Use:   "remove-project [name]",
+	Short: "Remove a GCP project from the repository configuration",
+	Long: `Remove a GCP project by its alias/name from the repository's provider configuration.
+
+Examples:
+  hyve config gcp remove-project dev
+  hyve config gcp remove-project prod`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		removeGCPProject(args[0])
+	},
+}
+
+var configGCPListProjectsCmd = &cobra.Command{
+	Use:   "list-projects",
+	Short: "List configured GCP projects",
+	Long:  "Display all GCP projects configured in the current repository with their aliases.",
+	Run: func(cmd *cobra.Command, args []string) {
+		listGCPProjects()
+	},
+}
+
+var configGCPGetProjectCmd = &cobra.Command{
+	Use:   "get-project [name]",
+	Short: "Get the project ID for a GCP project alias",
+	Long: `Display the GCP project ID associated with a given alias/name.
+
+Examples:
+  hyve config gcp get-project dev`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		getGCPProject(args[0])
+	},
+}
+
+// AWS provider config commands
+var configAWSCmd = &cobra.Command{
+	Use:   "aws",
+	Short: "Manage AWS provider configuration",
+	Long: `Manage AWS-specific configuration stored in the current repository.
+
+These configurations are stored in the repository under provider-configs/aws.yaml
+and are committed to Git for team sharing.`,
+}
+
+var configAWSAddAccountIDsCmd = &cobra.Command{
+	Use:   "add-account-ids [account-id,...]",
+	Short: "Add AWS account IDs to the repository configuration",
+	Long: `Add one or more AWS account IDs to the repository's provider configuration.
+
+The account IDs are stored in provider-configs/aws.yaml in the current repository.
+Multiple account IDs can be specified as comma-separated values or as separate arguments.
+
+Examples:
+  hyve config aws add-account-ids 123456789012
+  hyve config aws add-account-ids 123456789012,987654321098`,
+	Args: cobra.MinimumNArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		addAWSAccountIDs(args)
+	},
+}
+
+var configAWSRemoveAccountIDsCmd = &cobra.Command{
+	Use:   "remove-account-ids [account-id,...]",
+	Short: "Remove AWS account IDs from the repository configuration",
+	Long: `Remove one or more AWS account IDs from the repository's provider configuration.
+
+Examples:
+  hyve config aws remove-account-ids 123456789012`,
+	Args: cobra.MinimumNArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		removeAWSAccountIDs(args)
+	},
+}
+
+var configAWSListAccountIDsCmd = &cobra.Command{
+	Use:   "list-account-ids",
+	Short: "List configured AWS account IDs",
+	Long:  "Display all AWS account IDs configured in the current repository.",
+	Run: func(cmd *cobra.Command, args []string) {
+		listAWSAccountIDs()
+	},
+}
+
+// Azure provider config commands
+var configAzureCmd = &cobra.Command{
+	Use:   "azure",
+	Short: "Manage Azure provider configuration",
+	Long: `Manage Azure-specific configuration stored in the current repository.
+
+These configurations are stored in the repository under provider-configs/azure.yaml
+and are committed to Git for team sharing.`,
+}
+
+var configAzureAddSubscriptionIDsCmd = &cobra.Command{
+	Use:   "add-subscription-ids [subscription-id,...]",
+	Short: "Add Azure subscription IDs to the repository configuration",
+	Long: `Add one or more Azure subscription IDs to the repository's provider configuration.
+
+The subscription IDs are stored in provider-configs/azure.yaml in the current repository.
+Multiple subscription IDs can be specified as comma-separated values or as separate arguments.
+
+Examples:
+  hyve config azure add-subscription-ids 12345678-1234-1234-1234-123456789012
+  hyve config azure add-subscription-ids sub-1,sub-2`,
+	Args: cobra.MinimumNArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		addAzureSubscriptionIDs(args)
+	},
+}
+
+var configAzureRemoveSubscriptionIDsCmd = &cobra.Command{
+	Use:   "remove-subscription-ids [subscription-id,...]",
+	Short: "Remove Azure subscription IDs from the repository configuration",
+	Long: `Remove one or more Azure subscription IDs from the repository's provider configuration.
+
+Examples:
+  hyve config azure remove-subscription-ids 12345678-1234-1234-1234-123456789012`,
+	Args: cobra.MinimumNArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		removeAzureSubscriptionIDs(args)
+	},
+}
+
+var configAzureListSubscriptionIDsCmd = &cobra.Command{
+	Use:   "list-subscription-ids",
+	Short: "List configured Azure subscription IDs",
+	Long:  "Display all Azure subscription IDs configured in the current repository.",
+	Run: func(cmd *cobra.Command, args []string) {
+		listAzureSubscriptionIDs()
+	},
+}
+
 func init() {
 	configSetTokenCmd.Flags().StringP("token", "t", "", "API token (if not provided, will prompt securely)")
 	configSetTokenCmd.Flags().StringP("account", "a", "default", "Civo account ID (allows multiple accounts)")
@@ -148,12 +316,36 @@ func init() {
 	configGetTokenCmd.Flags().StringP("account", "a", "default", "Civo account ID")
 	configClearTokenCmd.Flags().StringP("account", "a", "default", "Civo account ID")
 
+	// GCP subcommands
+	configGCPAddProjectCmd.Flags().String("name", "", "Friendly name/alias for the project (required)")
+	configGCPAddProjectCmd.Flags().String("id", "", "GCP project ID (required)")
+	configGCPAddProjectCmd.MarkFlagRequired("name")
+	configGCPAddProjectCmd.MarkFlagRequired("id")
+
+	configGCPCmd.AddCommand(configGCPAddProjectCmd)
+	configGCPCmd.AddCommand(configGCPRemoveProjectCmd)
+	configGCPCmd.AddCommand(configGCPListProjectsCmd)
+	configGCPCmd.AddCommand(configGCPGetProjectCmd)
+
+	// AWS subcommands
+	configAWSCmd.AddCommand(configAWSAddAccountIDsCmd)
+	configAWSCmd.AddCommand(configAWSRemoveAccountIDsCmd)
+	configAWSCmd.AddCommand(configAWSListAccountIDsCmd)
+
+	// Azure subcommands
+	configAzureCmd.AddCommand(configAzureAddSubscriptionIDsCmd)
+	configAzureCmd.AddCommand(configAzureRemoveSubscriptionIDsCmd)
+	configAzureCmd.AddCommand(configAzureListSubscriptionIDsCmd)
+
 	configCmd.AddCommand(configSetTokenCmd)
 	configCmd.AddCommand(configGetTokenCmd)
 	configCmd.AddCommand(configClearTokenCmd)
 	configCmd.AddCommand(configListTokensCmd)
 	configCmd.AddCommand(configSetGitBackendCmd)
 	configCmd.AddCommand(configGetGitBackendCmd)
+	configCmd.AddCommand(configGCPCmd)
+	configCmd.AddCommand(configAWSCmd)
+	configCmd.AddCommand(configAzureCmd)
 }
 
 func setCivoToken(accountID, token string) {
@@ -317,4 +509,421 @@ func getGitBackend() {
 
 	log.Println()
 	log.Println("💡 Change backend with: hyve config set-git-backend [system|builtin]")
+}
+
+// getRepoPath returns the current repository's local path
+func getRepoPath() string {
+	repoMgr, err := repository.NewManager()
+	if err != nil {
+		log.Fatalf("Failed to create repository manager: %v", err)
+	}
+	defer repoMgr.Close()
+
+	currentRepo, err := repoMgr.GetCurrentRepository()
+	if err != nil {
+		log.Fatalf("❌ No Git repository configured.\n\n" +
+			"Provider configurations are stored in the repository.\n" +
+			"Please configure a Git repository first:\n" +
+			"  hyve git add <name> --repo-url <repository-url>")
+	}
+
+	return currentRepo.LocalPath
+}
+
+// parseProjectIDs parses project IDs from arguments (supports comma-separated and space-separated)
+func parseProjectIDs(args []string) []string {
+	var projectIDs []string
+	for _, arg := range args {
+		// Split by comma for comma-separated values
+		parts := strings.Split(arg, ",")
+		for _, part := range parts {
+			trimmed := strings.TrimSpace(part)
+			if trimmed != "" {
+				projectIDs = append(projectIDs, trimmed)
+			}
+		}
+	}
+	return projectIDs
+}
+
+func addGCPProject(name, projectID string) {
+	if name == "" {
+		log.Fatal("Project name is required (--name)")
+	}
+	if projectID == "" {
+		log.Fatal("Project ID is required (--id)")
+	}
+
+	repoPath := getRepoPath()
+	mgr := providerconfig.NewManager(repoPath)
+
+	// Check if name already exists
+	exists, err := mgr.HasGCPProject(name)
+	if err != nil {
+		log.Fatalf("Failed to check GCP config: %v", err)
+	}
+
+	if err := mgr.AddGCPProject(name, projectID); err != nil {
+		log.Fatalf("Failed to add GCP project: %v", err)
+	}
+
+	if exists {
+		log.Printf("✅ Updated GCP project '%s':\n", name)
+	} else {
+		log.Printf("✅ Added GCP project '%s':\n", name)
+	}
+	log.Printf("   Name:       %s", name)
+	log.Printf("   Project ID: %s", projectID)
+	log.Println()
+	log.Println("💡 The configuration is stored in provider-configs/gcp.yaml")
+	log.Println("💡 Use this project when creating clusters:")
+	log.Printf("   hyve cluster add my-cluster --provider gcp --gcp-project %s --region us-central1", name)
+}
+
+func removeGCPProject(name string) {
+	repoPath := getRepoPath()
+	mgr := providerconfig.NewManager(repoPath)
+
+	// Get project info before removing for display
+	projectID, err := mgr.GetGCPProjectID(name)
+	if err != nil {
+		log.Fatalf("❌ GCP project '%s' not found", name)
+	}
+
+	if err := mgr.RemoveGCPProject(name); err != nil {
+		log.Fatalf("Failed to remove GCP project: %v", err)
+	}
+
+	log.Printf("✅ Removed GCP project '%s' (project ID: %s)", name, projectID)
+}
+
+func listGCPProjects() {
+	repoPath := getRepoPath()
+	mgr := providerconfig.NewManager(repoPath)
+
+	projects, err := mgr.ListGCPProjects()
+	if err != nil {
+		log.Fatalf("Failed to list GCP projects: %v", err)
+	}
+
+	if len(projects) == 0 {
+		log.Println("❌ No GCP projects configured")
+		log.Println()
+		log.Println("💡 Add a project with:")
+		log.Println("   hyve config gcp add-project --name dev --id my-project-id")
+		return
+	}
+
+	log.Printf("🌐 GCP Projects (%d):\n", len(projects))
+	log.Println()
+	for _, p := range projects {
+		log.Printf("   %s", p.Name)
+		log.Printf("      Project ID: %s", p.ProjectID)
+		log.Println()
+	}
+	log.Println("💡 Commands:")
+	log.Println("   hyve config gcp add-project --name <name> --id <id>  # Add/update project")
+	log.Println("   hyve config gcp remove-project <name>                 # Remove project")
+	log.Println("   hyve config gcp get-project <name>                    # Get project ID")
+	log.Println()
+	log.Println("💡 Use with cluster create:")
+	log.Println("   hyve cluster add my-cluster --provider gcp --gcp-project <name> --region us-central1")
+}
+
+func getGCPProject(name string) {
+	repoPath := getRepoPath()
+	mgr := providerconfig.NewManager(repoPath)
+
+	projectID, err := mgr.GetGCPProjectID(name)
+	if err != nil {
+		log.Fatalf("❌ GCP project '%s' not found", name)
+	}
+
+	fmt.Printf("%s\n", projectID)
+}
+
+// AWS helper functions
+func addAWSAccountIDs(args []string) {
+	repoPath := getRepoPath()
+	accountIDs := parseProjectIDs(args) // Reuse the same parsing function
+
+	if len(accountIDs) == 0 {
+		log.Fatal("No account IDs provided")
+	}
+
+	mgr := providerconfig.NewManager(repoPath)
+
+	existingConfig, err := mgr.LoadAWSConfig()
+	if err != nil {
+		log.Fatalf("Failed to load AWS config: %v", err)
+	}
+
+	existing := make(map[string]bool)
+	for _, id := range existingConfig.AccountIDs {
+		existing[id] = true
+	}
+
+	added := []string{}
+	skipped := []string{}
+	for _, id := range accountIDs {
+		if existing[id] {
+			skipped = append(skipped, id)
+		} else {
+			added = append(added, id)
+			existingConfig.AccountIDs = append(existingConfig.AccountIDs, id)
+			existing[id] = true
+		}
+	}
+
+	if len(added) > 0 {
+		if err := mgr.SaveAWSConfig(existingConfig); err != nil {
+			log.Fatalf("Failed to save AWS config: %v", err)
+		}
+
+		log.Printf("✅ Added %d AWS account ID(s):\n", len(added))
+		for _, id := range added {
+			log.Printf("   + %s", id)
+		}
+	}
+
+	if len(skipped) > 0 {
+		log.Printf("\nℹ️  Skipped %d account ID(s) (already configured):\n", len(skipped))
+		for _, id := range skipped {
+			log.Printf("   • %s", id)
+		}
+	}
+
+	if len(added) > 0 {
+		log.Println()
+		log.Println("💡 The configuration is stored in provider-configs/aws.yaml")
+	}
+}
+
+func removeAWSAccountIDs(args []string) {
+	repoPath := getRepoPath()
+	accountIDs := parseProjectIDs(args)
+
+	if len(accountIDs) == 0 {
+		log.Fatal("No account IDs provided")
+	}
+
+	mgr := providerconfig.NewManager(repoPath)
+
+	existingConfig, err := mgr.LoadAWSConfig()
+	if err != nil {
+		log.Fatalf("Failed to load AWS config: %v", err)
+	}
+
+	existing := make(map[string]bool)
+	for _, id := range existingConfig.AccountIDs {
+		existing[id] = true
+	}
+
+	removed := []string{}
+	notFound := []string{}
+	toRemove := make(map[string]bool)
+	for _, id := range accountIDs {
+		toRemove[id] = true
+		if existing[id] {
+			removed = append(removed, id)
+		} else {
+			notFound = append(notFound, id)
+		}
+	}
+
+	if len(removed) > 0 {
+		filtered := []string{}
+		for _, id := range existingConfig.AccountIDs {
+			if !toRemove[id] {
+				filtered = append(filtered, id)
+			}
+		}
+		existingConfig.AccountIDs = filtered
+
+		if err := mgr.SaveAWSConfig(existingConfig); err != nil {
+			log.Fatalf("Failed to save AWS config: %v", err)
+		}
+
+		log.Printf("✅ Removed %d AWS account ID(s):\n", len(removed))
+		for _, id := range removed {
+			log.Printf("   - %s", id)
+		}
+	}
+
+	if len(notFound) > 0 {
+		log.Printf("\nℹ️  Skipped %d account ID(s) (not configured):\n", len(notFound))
+		for _, id := range notFound {
+			log.Printf("   • %s", id)
+		}
+	}
+}
+
+func listAWSAccountIDs() {
+	repoPath := getRepoPath()
+	mgr := providerconfig.NewManager(repoPath)
+
+	config, err := mgr.LoadAWSConfig()
+	if err != nil {
+		log.Fatalf("Failed to load AWS config: %v", err)
+	}
+
+	if len(config.AccountIDs) == 0 {
+		log.Println("❌ No AWS account IDs configured")
+		log.Println()
+		log.Println("💡 Add account IDs with:")
+		log.Println("   hyve config aws add-account-ids 123456789012")
+		return
+	}
+
+	log.Printf("☁️  AWS Account IDs (%d):\n", len(config.AccountIDs))
+	for _, id := range config.AccountIDs {
+		log.Printf("   • %s", id)
+	}
+	log.Println()
+	log.Println("💡 Commands:")
+	log.Println("   hyve config aws add-account-ids <ids>      # Add account IDs")
+	log.Println("   hyve config aws remove-account-ids <ids>   # Remove account IDs")
+}
+
+// Azure helper functions
+func addAzureSubscriptionIDs(args []string) {
+	repoPath := getRepoPath()
+	subscriptionIDs := parseProjectIDs(args)
+
+	if len(subscriptionIDs) == 0 {
+		log.Fatal("No subscription IDs provided")
+	}
+
+	mgr := providerconfig.NewManager(repoPath)
+
+	existingConfig, err := mgr.LoadAzureConfig()
+	if err != nil {
+		log.Fatalf("Failed to load Azure config: %v", err)
+	}
+
+	existing := make(map[string]bool)
+	for _, id := range existingConfig.SubscriptionIDs {
+		existing[id] = true
+	}
+
+	added := []string{}
+	skipped := []string{}
+	for _, id := range subscriptionIDs {
+		if existing[id] {
+			skipped = append(skipped, id)
+		} else {
+			added = append(added, id)
+			existingConfig.SubscriptionIDs = append(existingConfig.SubscriptionIDs, id)
+			existing[id] = true
+		}
+	}
+
+	if len(added) > 0 {
+		if err := mgr.SaveAzureConfig(existingConfig); err != nil {
+			log.Fatalf("Failed to save Azure config: %v", err)
+		}
+
+		log.Printf("✅ Added %d Azure subscription ID(s):\n", len(added))
+		for _, id := range added {
+			log.Printf("   + %s", id)
+		}
+	}
+
+	if len(skipped) > 0 {
+		log.Printf("\nℹ️  Skipped %d subscription ID(s) (already configured):\n", len(skipped))
+		for _, id := range skipped {
+			log.Printf("   • %s", id)
+		}
+	}
+
+	if len(added) > 0 {
+		log.Println()
+		log.Println("💡 The configuration is stored in provider-configs/azure.yaml")
+	}
+}
+
+func removeAzureSubscriptionIDs(args []string) {
+	repoPath := getRepoPath()
+	subscriptionIDs := parseProjectIDs(args)
+
+	if len(subscriptionIDs) == 0 {
+		log.Fatal("No subscription IDs provided")
+	}
+
+	mgr := providerconfig.NewManager(repoPath)
+
+	existingConfig, err := mgr.LoadAzureConfig()
+	if err != nil {
+		log.Fatalf("Failed to load Azure config: %v", err)
+	}
+
+	existing := make(map[string]bool)
+	for _, id := range existingConfig.SubscriptionIDs {
+		existing[id] = true
+	}
+
+	removed := []string{}
+	notFound := []string{}
+	toRemove := make(map[string]bool)
+	for _, id := range subscriptionIDs {
+		toRemove[id] = true
+		if existing[id] {
+			removed = append(removed, id)
+		} else {
+			notFound = append(notFound, id)
+		}
+	}
+
+	if len(removed) > 0 {
+		filtered := []string{}
+		for _, id := range existingConfig.SubscriptionIDs {
+			if !toRemove[id] {
+				filtered = append(filtered, id)
+			}
+		}
+		existingConfig.SubscriptionIDs = filtered
+
+		if err := mgr.SaveAzureConfig(existingConfig); err != nil {
+			log.Fatalf("Failed to save Azure config: %v", err)
+		}
+
+		log.Printf("✅ Removed %d Azure subscription ID(s):\n", len(removed))
+		for _, id := range removed {
+			log.Printf("   - %s", id)
+		}
+	}
+
+	if len(notFound) > 0 {
+		log.Printf("\nℹ️  Skipped %d subscription ID(s) (not configured):\n", len(notFound))
+		for _, id := range notFound {
+			log.Printf("   • %s", id)
+		}
+	}
+}
+
+func listAzureSubscriptionIDs() {
+	repoPath := getRepoPath()
+	mgr := providerconfig.NewManager(repoPath)
+
+	config, err := mgr.LoadAzureConfig()
+	if err != nil {
+		log.Fatalf("Failed to load Azure config: %v", err)
+	}
+
+	if len(config.SubscriptionIDs) == 0 {
+		log.Println("❌ No Azure subscription IDs configured")
+		log.Println()
+		log.Println("💡 Add subscription IDs with:")
+		log.Println("   hyve config azure add-subscription-ids <subscription-id>")
+		return
+	}
+
+	log.Printf("🔷 Azure Subscription IDs (%d):\n", len(config.SubscriptionIDs))
+	for _, id := range config.SubscriptionIDs {
+		log.Printf("   • %s", id)
+	}
+	log.Println()
+	log.Println("💡 Commands:")
+	log.Println("   hyve config azure add-subscription-ids <ids>      # Add subscription IDs")
+	log.Println("   hyve config azure remove-subscription-ids <ids>   # Remove subscription IDs")
 }

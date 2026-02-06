@@ -9,6 +9,7 @@ import (
 	"civo-cluster-deploy/internal/ingress"
 	"civo-cluster-deploy/internal/kubeconfig"
 	"civo-cluster-deploy/internal/provider"
+	"civo-cluster-deploy/internal/providerconfig"
 	"civo-cluster-deploy/internal/repository"
 	"civo-cluster-deploy/internal/state"
 	"civo-cluster-deploy/internal/types"
@@ -68,37 +69,85 @@ func (r *Reconciler) ReconcileAll(ctx context.Context, clusterDefs []types.Clust
 func (r *Reconciler) reconcileRegion(ctx context.Context, region string, clusters []types.ClusterDefinition) error {
 	log.Printf("Processing region: %s", region)
 
-	// Get provider name from first cluster (assuming all clusters in region use same provider)
-	providerName := "civo" // default
-	if len(clusters) > 0 {
-		providerName = clusters[0].Spec.Provider
-	}
-
-	// Create provider for this region
-	prov, err := r.providerFactory.CreateProvider(providerName, r.apiKey, region)
-	if err != nil {
-		return fmt.Errorf("failed to create provider for region %s: %w", region, err)
-	}
-
-	// Initialize managers for this region
-	clusterMgr := cluster.NewManager(prov)
-	ingressMgr := ingress.NewManager(prov)
-
 	// Reconcile all desired clusters
 	for _, clusterDef := range clusters {
-		err := r.reconcileCluster(ctx, clusterMgr, ingressMgr, clusterDef)
+		// Create provider with appropriate options for each cluster
+		prov, err := r.createProviderForCluster(clusterDef)
+		if err != nil {
+			log.Printf("Failed to create provider for cluster %s: %v", clusterDef.Metadata.Name, err)
+			continue
+		}
+
+		clusterMgr := cluster.NewManager(prov)
+		ingressMgr := ingress.NewManager(prov)
+
+		err = r.reconcileCluster(ctx, clusterMgr, ingressMgr, clusterDef)
 		if err != nil {
 			log.Printf("Failed to reconcile cluster %s: %v", clusterDef.Metadata.Name, err)
 		}
 	}
 
-	// Then, cleanup orphaned resources
-	err = r.cleanupOrphanedResources(ctx, clusterMgr, clusters)
-	if err != nil {
-		log.Printf("Failed to cleanup orphaned resources in region %s: %v", region, err)
+	// For cleanup, use a default provider (assuming Civo for backward compatibility)
+	// TODO: This should be improved to handle multi-provider cleanup
+	if len(clusters) > 0 {
+		prov, err := r.createProviderForCluster(clusters[0])
+		if err != nil {
+			log.Printf("Failed to create provider for cleanup in region %s: %v", region, err)
+			return nil
+		}
+		clusterMgr := cluster.NewManager(prov)
+		err = r.cleanupOrphanedResources(ctx, clusterMgr, clusters)
+		if err != nil {
+			log.Printf("Failed to cleanup orphaned resources in region %s: %v", region, err)
+		}
 	}
 
 	return nil
+}
+
+// createProviderForCluster creates a provider with the appropriate options for a cluster
+func (r *Reconciler) createProviderForCluster(clusterDef types.ClusterDefinition) (provider.Provider, error) {
+	providerName := clusterDef.Spec.Provider
+	if providerName == "" {
+		providerName = "civo" // default
+	}
+
+	opts := provider.ProviderOptions{
+		Region: clusterDef.Metadata.Region,
+		APIKey: r.apiKey,
+	}
+
+	// Handle GCP-specific configuration
+	if providerName == "gcp" && clusterDef.Spec.GCPProject != "" {
+		// Resolve GCP project alias to project ID
+		projectID, err := r.resolveGCPProjectID(clusterDef.Spec.GCPProject)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve GCP project '%s': %w", clusterDef.Spec.GCPProject, err)
+		}
+		opts.ProjectID = projectID
+		log.Printf("Using GCP project '%s' (ID: %s) for cluster %s",
+			clusterDef.Spec.GCPProject, projectID, clusterDef.Metadata.Name)
+	}
+
+	return r.providerFactory.CreateProviderWithOptions(providerName, opts)
+}
+
+// resolveGCPProjectID resolves a GCP project alias to its project ID
+func (r *Reconciler) resolveGCPProjectID(projectAlias string) (string, error) {
+	// Get current repository
+	repoMgr, err := repository.NewManager()
+	if err != nil {
+		return "", fmt.Errorf("failed to create repository manager: %w", err)
+	}
+	defer repoMgr.Close()
+
+	currentRepo, err := repoMgr.GetCurrentRepository()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current repository: %w", err)
+	}
+
+	pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
+	return pcMgr.GetGCPProjectID(projectAlias)
 }
 
 // reconcileCluster handles the reconciliation of a single cluster
@@ -222,10 +271,17 @@ func (r *Reconciler) cleanupOrphanedResources(ctx context.Context, clusterMgr *c
 
 // cleanupAllRegions handles cleanup when no clusters are defined
 func (r *Reconciler) cleanupAllRegions(ctx context.Context, clusterDefs []types.ClusterDefinition) {
-	defaultRegion := "PHX1"
-	prov, err := r.providerFactory.CreateProvider("civo", r.apiKey, defaultRegion)
+	// Create a default cluster definition for Civo cleanup
+	// TODO: This should be improved to handle multi-provider cleanup
+	defaultCluster := types.ClusterDefinition{
+		Metadata: types.ClusterMetadata{Region: "PHX1"},
+		Spec:     types.ClusterSpec{Provider: "civo"},
+	}
+
+	prov, err := r.createProviderForCluster(defaultCluster)
 	if err != nil {
-		log.Fatalf("Failed to create provider: %v", err)
+		log.Printf("Failed to create provider for cleanup: %v", err)
+		return
 	}
 
 	clusterMgr := cluster.NewManager(prov)
@@ -248,7 +304,7 @@ func (r *Reconciler) exportAllClusterInfo(ctx context.Context, clusterDefs []typ
 
 // exportClusterInfo exports cluster information
 func (r *Reconciler) exportClusterInfo(ctx context.Context, clusterDef types.ClusterDefinition) error {
-	prov, err := r.providerFactory.CreateProvider(clusterDef.Spec.Provider, r.apiKey, clusterDef.Metadata.Region)
+	prov, err := r.createProviderForCluster(clusterDef)
 	if err != nil {
 		return fmt.Errorf("failed to create provider: %w", err)
 	}
@@ -287,25 +343,23 @@ func (r *Reconciler) syncKubeconfigs(ctx context.Context, clusterDefs []types.Cl
 
 	// Sync kubeconfigs for each region
 	for region, clusters := range regionClusters {
-		// Get provider name from first cluster (assuming all clusters in region use same provider)
-		providerName := "civo" // default
-		if len(clusters) > 0 {
-			providerName = clusters[0].Spec.Provider
-		}
+		// Sync kubeconfig for each cluster individually to handle different project IDs
+		for _, clusterDef := range clusters {
+			prov, err := r.createProviderForCluster(clusterDef)
+			if err != nil {
+				log.Printf("Failed to create provider for cluster %s in region %s: %v",
+					clusterDef.Metadata.Name, region, err)
+				continue
+			}
 
-		// Create provider for this region
-		prov, err := r.providerFactory.CreateProvider(providerName, r.apiKey, region)
-		if err != nil {
-			log.Printf("Failed to create provider for region %s: %v", region, err)
-			continue
-		}
-
-		// Create syncer and sync kubeconfigs for this region
-		syncer := kubeconfig.NewSyncer(kubeconfigMgr, prov)
-		err = syncer.SyncKubeconfigs(ctx, clusters)
-		if err != nil {
-			log.Printf("Failed to sync kubeconfigs for region %s: %v", region, err)
-			continue
+			// Create syncer and sync kubeconfig for this cluster
+			syncer := kubeconfig.NewSyncer(kubeconfigMgr, prov)
+			err = syncer.SyncKubeconfigs(ctx, []types.ClusterDefinition{clusterDef})
+			if err != nil {
+				log.Printf("Failed to sync kubeconfig for cluster %s in region %s: %v",
+					clusterDef.Metadata.Name, region, err)
+				continue
+			}
 		}
 	}
 

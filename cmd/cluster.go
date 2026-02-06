@@ -16,6 +16,7 @@ import (
 	"civo-cluster-deploy/internal/credentials"
 	"civo-cluster-deploy/internal/ingress"
 	"civo-cluster-deploy/internal/provider"
+	"civo-cluster-deploy/internal/providerconfig"
 	"civo-cluster-deploy/internal/repository"
 	"civo-cluster-deploy/internal/state"
 	"civo-cluster-deploy/internal/types"
@@ -64,6 +65,7 @@ Supported cloud providers:
 		providerName, _ := cmd.Flags().GetString("provider")
 		nodes, _ := cmd.Flags().GetStringSlice("nodes")
 		clusterType, _ := cmd.Flags().GetString("cluster-type")
+		projectName, _ := cmd.Flags().GetString("project-name")
 
 		// Validate provider
 		if !isValidProvider(providerName) {
@@ -73,7 +75,12 @@ Supported cloud providers:
 		// Normalize provider to lowercase
 		providerName = strings.ToLower(providerName)
 
-		addClusterFromCLI(clusterName, region, providerName, nodes, clusterType)
+		// Validate name is provided for GCP provider (used as project alias)
+		if providerName == "gcp" && projectName == "" {
+			log.Fatalf("GCP provider requires --name flag (GCP project alias). Use 'hyve config gcp list-projects' to see available projects.")
+		}
+
+		addClusterFromCLI(clusterName, region, providerName, nodes, clusterType, projectName)
 	},
 }
 
@@ -154,6 +161,7 @@ func init() {
 	addCmd.MarkFlagRequired("provider")
 	addCmd.Flags().StringSliceP("nodes", "n", []string{"g4s.kube.small"}, "Node sizes")
 	addCmd.Flags().StringP("cluster-type", "t", "k3s", "Type of Kubernetes cluster")
+	addCmd.Flags().String("project-name", "", "Project/account name alias (required for GCP provider, use 'hyve config gcp list-projects' to see available)")
 
 	modifyCmd.Flags().StringP("region", "r", "", "Region for the cluster")
 	modifyCmd.Flags().StringP("provider", "p", "", "Cloud provider")
@@ -255,7 +263,7 @@ func commitStateChanges(ctx context.Context, stateMgr *state.Manager, message st
 	log.Println("✅ Changes committed and pushed to remote repository successfully")
 }
 
-func addClusterFromCLI(clusterName, region, provider string, nodes []string, clusterType string) {
+func addClusterFromCLI(clusterName, region, providerName string, nodes []string, clusterType, projectName string) {
 	ctx := context.Background()
 	stateMgr, stateDir := createStateManager(ctx)
 
@@ -269,6 +277,28 @@ func addClusterFromCLI(clusterName, region, provider string, nodes []string, clu
 		log.Fatalf("Cluster %s already exists. Use 'modify' action to update it.", clusterName)
 	}
 
+	// Validate GCP project alias exists in repository configuration
+	if providerName == "gcp" && projectName != "" {
+		repoMgr, err := repository.NewManager()
+		if err != nil {
+			log.Fatalf("Failed to create repository manager: %v", err)
+		}
+		defer repoMgr.Close()
+
+		currentRepo, err := repoMgr.GetCurrentRepository()
+		if err != nil {
+			log.Fatalf("No Git repository configured: %v", err)
+		}
+
+		pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
+		projectID, err := pcMgr.GetGCPProjectID(projectName)
+		if err != nil {
+			log.Fatalf("GCP project alias '%s' not found in repository configuration.\n"+
+				"Use 'hyve config gcp add-project --name %s --id <project-id>' to add it.", projectName, projectName)
+		}
+		log.Printf("Using GCP project '%s' (ID: %s)", projectName, projectID)
+	}
+
 	clusterDef := types.ClusterDefinition{
 		APIVersion: "v1",
 		Kind:       "Cluster",
@@ -277,9 +307,10 @@ func addClusterFromCLI(clusterName, region, provider string, nodes []string, clu
 			Region: region,
 		},
 		Spec: types.ClusterSpec{
-			Provider:    provider,
+			Provider:    providerName,
 			Nodes:       nodes,
 			ClusterType: clusterType,
+			GCPProject:  projectName,
 			Ingress: types.IngressSpec{
 				Enabled:      true,
 				LoadBalancer: true,
@@ -299,9 +330,12 @@ func addClusterFromCLI(clusterName, region, provider string, nodes []string, clu
 	log.Printf("Created cluster definition file: %s", filePath)
 	log.Printf("Cluster %s configuration:", clusterName)
 	log.Printf("  Region: %s", region)
-	log.Printf("  Provider: %s", provider)
+	log.Printf("  Provider: %s", providerName)
 	log.Printf("  Nodes: %v", nodes)
 	log.Printf("  Cluster Type: %s", clusterType)
+	if projectName != "" {
+		log.Printf("  GCP Project: %s", projectName)
+	}
 
 	// Commit changes to Git if configured
 	commitStateChanges(ctx, stateMgr, fmt.Sprintf("Add cluster %s", clusterName))
