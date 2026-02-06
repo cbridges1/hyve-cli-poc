@@ -142,7 +142,25 @@ Note: This command does not remove configuration files or run reconciliation.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		clusterName := args[0]
 		region, _ := cmd.Flags().GetString("region")
-		forceDeleteClusterFromCloud(clusterName, region)
+		providerName, _ := cmd.Flags().GetString("provider")
+		projectName, _ := cmd.Flags().GetString("project-name")
+
+		// Default to civo for backward compatibility
+		if providerName == "" {
+			providerName = "civo"
+		}
+
+		// Validate provider
+		if !isValidProvider(providerName) {
+			log.Fatalf("Invalid provider '%s'. Valid providers are: %s", providerName, validProvidersString())
+		}
+
+		// Validate project-name is provided for GCP provider
+		if providerName == "gcp" && projectName == "" {
+			log.Fatalf("GCP provider requires --project-name flag. Use 'hyve config gcp list-projects' to see available projects.")
+		}
+
+		forceDeleteClusterFromCloud(clusterName, region, providerName, projectName)
 	},
 }
 
@@ -172,6 +190,8 @@ func init() {
 	deleteCmd.Flags().Bool("force-cloud", false, "Delete from cloud even if no configuration file exists")
 
 	forceDeleteCmd.Flags().StringP("region", "r", "", "Specific region to search (optional, will search common regions if not provided)")
+	forceDeleteCmd.Flags().StringP("provider", "p", "civo", "Cloud provider (civo, aws, gcp, azure)")
+	forceDeleteCmd.Flags().String("project-name", "", "Project/account name alias (required for GCP provider)")
 
 	clusterCmd.AddCommand(addCmd)
 	clusterCmd.AddCommand(listCmd)
@@ -448,10 +468,11 @@ func deleteClusterFromCLI(clusterName string, configOnly bool, forceCloud bool) 
 	// Explicitly delete the cluster by name before removing the YAML file (unless config-only mode)
 	if !configOnly {
 		log.Printf("🗑️ Deleting cluster '%s' from cloud provider...", clusterName)
-		err := deleteClusterExplicitly(ctx, clusterName, clusterDef.Metadata.Region)
+		err := deleteClusterExplicitly(ctx, clusterDef)
 		if err != nil {
-			log.Printf("Warning: Failed to delete cluster %s from cloud provider: %v", clusterName, err)
-			log.Printf("Continuing with configuration file removal...")
+			log.Fatalf("❌ Failed to delete cluster %s from cloud provider: %v\n\n"+
+				"Configuration file was NOT removed to prevent orphaned cluster state.\n"+
+				"Please resolve the issue and try again, or use --config-only to remove only the configuration.", clusterName, err)
 		}
 	} else {
 		log.Printf("📝 Skipping cloud provider deletion (config-only mode)")
@@ -478,16 +499,16 @@ func deleteClusterFromCLI(clusterName string, configOnly bool, forceCloud bool) 
 
 // deleteClusterExplicitly deletes a cluster by name directly from the provider
 // This ensures deletion even if the cluster doesn't appear in provider API listings
-func deleteClusterExplicitly(ctx context.Context, clusterName, region string) error {
-	configMgr := config.NewManager()
-	apiKey := configMgr.GetCivoToken()
-	if apiKey == "" {
-		return fmt.Errorf("CIVO API token not found. Please run 'hyve config set-token civo' or set CIVO_TOKEN environment variable")
+func deleteClusterExplicitly(ctx context.Context, clusterDef types.ClusterDefinition) error {
+	clusterName := clusterDef.Metadata.Name
+	region := clusterDef.Metadata.Region
+	providerName := clusterDef.Spec.Provider
+	if providerName == "" {
+		providerName = "civo" // default for backward compatibility
 	}
 
-	// Create provider factory and provider for the cluster's region
-	providerFactory := provider.NewFactory()
-	prov, err := providerFactory.CreateProvider("civo", apiKey, region)
+	// Create provider with appropriate options
+	prov, err := createProviderForClusterDef(clusterDef)
 	if err != nil {
 		return fmt.Errorf("failed to create provider: %w", err)
 	}
@@ -496,7 +517,7 @@ func deleteClusterExplicitly(ctx context.Context, clusterName, region string) er
 	clusterMgr := cluster.NewManager(prov)
 	ingressMgr := ingress.NewManager(prov)
 
-	log.Printf("🔍 Explicitly searching for cluster '%s' in region %s...", clusterName, region)
+	log.Printf("🔍 Explicitly searching for cluster '%s' in region %s (provider: %s)...", clusterName, region, providerName)
 
 	// Try to find the cluster by name
 	existingCluster, err := clusterMgr.FindByName(ctx, clusterName)
@@ -529,30 +550,121 @@ func deleteClusterExplicitly(ctx context.Context, clusterName, region string) er
 	return nil
 }
 
-// forceDeleteClusterFromCloud deletes a cluster by name from the cloud provider across multiple regions
-func forceDeleteClusterFromCloud(clusterName, region string) {
-	ctx := context.Background()
-
-	configMgr := config.NewManager()
-	apiKey := configMgr.GetCivoToken()
-	if apiKey == "" {
-		log.Fatalf("CIVO API token not found. Please run 'hyve config set-token civo' or set CIVO_TOKEN environment variable")
+// createProviderForClusterDef creates a provider with appropriate options for a cluster definition
+func createProviderForClusterDef(clusterDef types.ClusterDefinition) (provider.Provider, error) {
+	providerName := clusterDef.Spec.Provider
+	if providerName == "" {
+		providerName = "civo" // default
 	}
+
+	providerFactory := provider.NewFactory()
+
+	opts := provider.ProviderOptions{
+		Region: clusterDef.Metadata.Region,
+	}
+
+	// Handle Civo-specific configuration
+	if providerName == "civo" {
+		configMgr := config.NewManager()
+		apiKey := configMgr.GetCivoToken()
+		if apiKey == "" {
+			return nil, fmt.Errorf("Civo API token not found. Please run 'hyve config set-token civo' or set CIVO_TOKEN environment variable")
+		}
+		opts.APIKey = apiKey
+	}
+
+	// Handle GCP-specific configuration
+	if providerName == "gcp" && clusterDef.Spec.GCPProject != "" {
+		// Resolve GCP project alias to project ID
+		repoMgr, err := repository.NewManager()
+		if err != nil {
+			return nil, fmt.Errorf("failed to create repository manager: %w", err)
+		}
+		defer repoMgr.Close()
+
+		currentRepo, err := repoMgr.GetCurrentRepository()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get current repository: %w", err)
+		}
+
+		pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
+		projectID, err := pcMgr.GetGCPProjectID(clusterDef.Spec.GCPProject)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve GCP project '%s': %w", clusterDef.Spec.GCPProject, err)
+		}
+		opts.ProjectID = projectID
+		log.Printf("Using GCP project '%s' (ID: %s)", clusterDef.Spec.GCPProject, projectID)
+	}
+
+	return providerFactory.CreateProviderWithOptions(providerName, opts)
+}
+
+// forceDeleteClusterFromCloud deletes a cluster by name from the cloud provider across multiple regions
+func forceDeleteClusterFromCloud(clusterName, region, providerName, projectName string) {
+	ctx := context.Background()
 
 	regions := []string{region}
 	if region == "" {
-		// Search common regions if none specified
-		regions = []string{"PHX1", "NYC1", "FRA1", "LON1"}
-		log.Printf("🔍 No region specified, searching common regions: %v", regions)
+		// Search common regions based on provider
+		switch providerName {
+		case "civo":
+			regions = []string{"PHX1", "NYC1", "FRA1", "LON1"}
+		case "gcp":
+			regions = []string{"us-central1", "us-east1", "us-west1", "europe-west1"}
+		case "aws":
+			regions = []string{"us-east-1", "us-west-2", "eu-west-1", "ap-southeast-1"}
+		case "azure":
+			regions = []string{"eastus", "westus2", "westeurope", "southeastasia"}
+		default:
+			regions = []string{"PHX1"}
+		}
+		log.Printf("🔍 No region specified, searching common %s regions: %v", providerName, regions)
+	}
+
+	// Build provider options
+	opts := provider.ProviderOptions{}
+
+	// Handle Civo-specific configuration
+	if providerName == "civo" {
+		configMgr := config.NewManager()
+		apiKey := configMgr.GetCivoToken()
+		if apiKey == "" {
+			log.Fatalf("Civo API token not found. Please run 'hyve config set-token civo' or set CIVO_TOKEN environment variable")
+		}
+		opts.APIKey = apiKey
+	}
+
+	// Handle GCP-specific configuration
+	if providerName == "gcp" && projectName != "" {
+		repoMgr, err := repository.NewManager()
+		if err != nil {
+			log.Fatalf("Failed to create repository manager: %v", err)
+		}
+		defer repoMgr.Close()
+
+		currentRepo, err := repoMgr.GetCurrentRepository()
+		if err != nil {
+			log.Fatalf("Failed to get current repository: %v", err)
+		}
+
+		pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
+		projectID, err := pcMgr.GetGCPProjectID(projectName)
+		if err != nil {
+			log.Fatalf("GCP project alias '%s' not found in repository configuration.\n"+
+				"Use 'hyve config gcp add-project --name %s --id <project-id>' to add it.", projectName, projectName)
+		}
+		opts.ProjectID = projectID
+		log.Printf("Using GCP project '%s' (ID: %s)", projectName, projectID)
 	}
 
 	providerFactory := provider.NewFactory()
 	found := false
 
 	for _, r := range regions {
-		log.Printf("🔍 Searching for cluster '%s' in region %s...", clusterName, r)
+		log.Printf("🔍 Searching for cluster '%s' in region %s (provider: %s)...", clusterName, r, providerName)
 
-		prov, err := providerFactory.CreateProvider("civo", apiKey, r)
+		opts.Region = r
+		prov, err := providerFactory.CreateProviderWithOptions(providerName, opts)
 		if err != nil {
 			log.Printf("Failed to create provider for region %s: %v", r, err)
 			continue
