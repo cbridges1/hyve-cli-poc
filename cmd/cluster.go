@@ -21,6 +21,25 @@ import (
 	"civo-cluster-deploy/internal/types"
 )
 
+// ValidProviders is the list of supported cloud providers
+var ValidProviders = []string{"civo", "aws", "gcp", "azure"}
+
+// isValidProvider checks if the given provider is in the list of valid providers
+func isValidProvider(provider string) bool {
+	provider = strings.ToLower(provider)
+	for _, p := range ValidProviders {
+		if p == provider {
+			return true
+		}
+	}
+	return false
+}
+
+// validProvidersString returns a formatted string of valid providers for error messages
+func validProvidersString() string {
+	return strings.Join(ValidProviders, ", ")
+}
+
 var clusterCmd = &cobra.Command{
 	Use:   "cluster",
 	Short: "Manage clusters",
@@ -30,26 +49,55 @@ var clusterCmd = &cobra.Command{
 var addCmd = &cobra.Command{
 	Use:   "add [cluster-name]",
 	Short: "Add a new cluster",
-	Long:  "Create a new cluster configuration YAML file",
-	Args:  cobra.ExactArgs(1),
+	Long: `Create a new cluster configuration YAML file.
+
+Supported cloud providers:
+  - civo    Civo Cloud (K3s/Talos clusters)
+  - aws     Amazon Web Services (EKS)
+  - gcp     Google Cloud Platform (GKE)
+  - azure   Microsoft Azure (AKS)`,
+	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		clusterName := args[0]
 
 		region, _ := cmd.Flags().GetString("region")
-		provider, _ := cmd.Flags().GetString("provider")
+		providerName, _ := cmd.Flags().GetString("provider")
 		nodes, _ := cmd.Flags().GetStringSlice("nodes")
 		clusterType, _ := cmd.Flags().GetString("cluster-type")
-		addClusterFromCLI(clusterName, region, provider, nodes, clusterType)
+
+		// Validate provider
+		if !isValidProvider(providerName) {
+			log.Fatalf("Invalid provider '%s'. Valid providers are: %s", providerName, validProvidersString())
+		}
+
+		// Normalize provider to lowercase
+		providerName = strings.ToLower(providerName)
+
+		addClusterFromCLI(clusterName, region, providerName, nodes, clusterType)
 	},
 }
 
 var modifyCmd = &cobra.Command{
 	Use:   "modify [cluster-name]",
 	Short: "Modify an existing cluster",
-	Long:  "Update an existing cluster configuration YAML file",
-	Args:  cobra.ExactArgs(1),
+	Long: `Update an existing cluster configuration YAML file.
+
+Supported cloud providers (if changing provider):
+  - civo    Civo Cloud (K3s/Talos clusters)
+  - aws     Amazon Web Services (EKS)
+  - gcp     Google Cloud Platform (GKE)
+  - azure   Microsoft Azure (AKS)`,
+	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		clusterName := args[0]
+
+		// Validate provider if it's being changed
+		if cmd.Flags().Changed("provider") {
+			providerName, _ := cmd.Flags().GetString("provider")
+			if !isValidProvider(providerName) {
+				log.Fatalf("Invalid provider '%s'. Valid providers are: %s", providerName, validProvidersString())
+			}
+		}
 
 		modifyClusterFromCLI(cmd, clusterName)
 	},
@@ -102,7 +150,8 @@ var listCmd = &cobra.Command{
 
 func init() {
 	addCmd.Flags().StringP("region", "r", "PHX1", "Region for the cluster")
-	addCmd.Flags().StringP("provider", "p", "civo", "Cloud provider (e.g., civo, aws, gcp, azure)")
+	addCmd.Flags().StringP("provider", "p", "", "Cloud provider (civo, aws, gcp, azure)")
+	addCmd.MarkFlagRequired("provider")
 	addCmd.Flags().StringSliceP("nodes", "n", []string{"g4s.kube.small"}, "Node sizes")
 	addCmd.Flags().StringP("cluster-type", "t", "k3s", "Type of Kubernetes cluster")
 
@@ -294,7 +343,7 @@ func modifyClusterFromCLI(cmd *cobra.Command, clusterName string) {
 	}
 	if cmd.Flags().Changed("provider") {
 		provider, _ := cmd.Flags().GetString("provider")
-		clusterDef.Spec.Provider = provider
+		clusterDef.Spec.Provider = strings.ToLower(provider)
 	}
 	if cmd.Flags().Changed("nodes") {
 		nodes, _ := cmd.Flags().GetStringSlice("nodes")

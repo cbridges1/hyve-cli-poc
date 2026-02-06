@@ -148,6 +148,86 @@ func (m *Manager) GetCivoToken() string {
 	return viper.GetString("CIVO_TOKEN")
 }
 
+// GetAWSCredentials returns AWS access key ID and secret access key
+// Priority: 1) Database 2) Environment variables
+func (m *Manager) GetAWSCredentials() (accessKeyID, secretAccessKey string) {
+	credsMgr, err := credentials.NewManager()
+	if err == nil {
+		defer credsMgr.Close()
+		if key, err := credsMgr.GetAPIToken("aws-access-key"); err == nil && key != "" {
+			accessKeyID = key
+		}
+		if secret, err := credsMgr.GetAPIToken("aws-secret-key"); err == nil && secret != "" {
+			secretAccessKey = secret
+		}
+	}
+
+	// Fallback to environment variables
+	if accessKeyID == "" {
+		accessKeyID = os.Getenv("AWS_ACCESS_KEY_ID")
+	}
+	if secretAccessKey == "" {
+		secretAccessKey = os.Getenv("AWS_SECRET_ACCESS_KEY")
+	}
+
+	return accessKeyID, secretAccessKey
+}
+
+// GetGCPCredentials returns GCP project ID and credentials JSON
+// Priority: 1) Database 2) Environment variables
+func (m *Manager) GetGCPCredentials() (projectID, credentialsJSON string) {
+	credsMgr, err := credentials.NewManager()
+	if err == nil {
+		defer credsMgr.Close()
+		if proj, err := credsMgr.GetAPIToken("gcp-project"); err == nil && proj != "" {
+			projectID = proj
+		}
+		if creds, err := credsMgr.GetAPIToken("gcp-credentials"); err == nil && creds != "" {
+			credentialsJSON = creds
+		}
+	}
+
+	// Fallback to environment variables
+	if projectID == "" {
+		projectID = os.Getenv("GCP_PROJECT_ID")
+	}
+	if credentialsJSON == "" {
+		// Check for credentials file path
+		if credsFile := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS"); credsFile != "" {
+			if data, err := os.ReadFile(credsFile); err == nil {
+				credentialsJSON = string(data)
+			}
+		}
+	}
+
+	return projectID, credentialsJSON
+}
+
+// GetAzureCredentials returns Azure subscription ID and resource group
+// Priority: 1) Database 2) Environment variables
+func (m *Manager) GetAzureCredentials() (subscriptionID, resourceGroup string) {
+	credsMgr, err := credentials.NewManager()
+	if err == nil {
+		defer credsMgr.Close()
+		if sub, err := credsMgr.GetAPIToken("azure-subscription"); err == nil && sub != "" {
+			subscriptionID = sub
+		}
+		if rg, err := credsMgr.GetAPIToken("azure-resource-group"); err == nil && rg != "" {
+			resourceGroup = rg
+		}
+	}
+
+	// Fallback to environment variables
+	if subscriptionID == "" {
+		subscriptionID = os.Getenv("AZURE_SUBSCRIPTION_ID")
+	}
+	if resourceGroup == "" {
+		resourceGroup = os.Getenv("AZURE_RESOURCE_GROUP")
+	}
+
+	return subscriptionID, resourceGroup
+}
+
 // GetGitBackend returns the configured git backend
 // Priority: 1) Config file 2) Environment variable 3) Default to "system"
 func (m *Manager) GetGitBackend() string {
