@@ -22,7 +22,8 @@ type ClusterSpec struct {
 	Workflows   WorkflowsSpec `yaml:"workflows,omitempty"`
 
 	// Provider-specific configuration
-	GCPProject string `yaml:"gcpProject,omitempty"` // GCP project name alias (resolved to project ID at runtime)
+	GCPProject   string `yaml:"gcpProject,omitempty"`   // GCP project name alias
+	GCPProjectID string `yaml:"gcpProjectId,omitempty"` // GCP project ID (resolved from alias)
 }
 
 // ClusterMetadata represents cluster metadata

@@ -118,15 +118,22 @@ func (r *Reconciler) createProviderForCluster(clusterDef types.ClusterDefinition
 	}
 
 	// Handle GCP-specific configuration
-	if providerName == "gcp" && clusterDef.Spec.GCPProject != "" {
-		// Resolve GCP project alias to project ID
-		projectID, err := r.resolveGCPProjectID(clusterDef.Spec.GCPProject)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve GCP project '%s': %w", clusterDef.Spec.GCPProject, err)
+	if providerName == "gcp" {
+		// Use stored project ID if available, otherwise resolve from alias
+		if clusterDef.Spec.GCPProjectID != "" {
+			opts.ProjectID = clusterDef.Spec.GCPProjectID
+			log.Printf("Using GCP project ID '%s' for cluster %s",
+				clusterDef.Spec.GCPProjectID, clusterDef.Metadata.Name)
+		} else if clusterDef.Spec.GCPProject != "" {
+			// Fall back to resolving alias (for backward compatibility)
+			projectID, err := r.resolveGCPProjectID(clusterDef.Spec.GCPProject)
+			if err != nil {
+				return nil, fmt.Errorf("failed to resolve GCP project '%s': %w", clusterDef.Spec.GCPProject, err)
+			}
+			opts.ProjectID = projectID
+			log.Printf("Using GCP project '%s' (ID: %s) for cluster %s",
+				clusterDef.Spec.GCPProject, projectID, clusterDef.Metadata.Name)
 		}
-		opts.ProjectID = projectID
-		log.Printf("Using GCP project '%s' (ID: %s) for cluster %s",
-			clusterDef.Spec.GCPProject, projectID, clusterDef.Metadata.Name)
 	}
 
 	return r.providerFactory.CreateProviderWithOptions(providerName, opts)

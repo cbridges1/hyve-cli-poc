@@ -297,7 +297,8 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 		log.Fatalf("Cluster %s already exists. Use 'modify' action to update it.", clusterName)
 	}
 
-	// Validate GCP project alias exists in repository configuration
+	// Resolve GCP project alias to project ID
+	var gcpProjectID string
 	if providerName == "gcp" && projectName != "" {
 		repoMgr, err := repository.NewManager()
 		if err != nil {
@@ -311,12 +312,12 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 		}
 
 		pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
-		projectID, err := pcMgr.GetGCPProjectID(projectName)
+		gcpProjectID, err = pcMgr.GetGCPProjectID(projectName)
 		if err != nil {
 			log.Fatalf("GCP project alias '%s' not found in repository configuration.\n"+
 				"Use 'hyve config gcp add-project --name %s --id <project-id>' to add it.", projectName, projectName)
 		}
-		log.Printf("Using GCP project '%s' (ID: %s)", projectName, projectID)
+		log.Printf("Using GCP project '%s' (ID: %s)", projectName, gcpProjectID)
 	}
 
 	clusterDef := types.ClusterDefinition{
@@ -327,10 +328,11 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 			Region: region,
 		},
 		Spec: types.ClusterSpec{
-			Provider:    providerName,
-			Nodes:       nodes,
-			ClusterType: clusterType,
-			GCPProject:  projectName,
+			Provider:     providerName,
+			Nodes:        nodes,
+			ClusterType:  clusterType,
+			GCPProject:   projectName,
+			GCPProjectID: gcpProjectID,
 			Ingress: types.IngressSpec{
 				Enabled:      true,
 				LoadBalancer: true,
@@ -354,7 +356,7 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 	log.Printf("  Nodes: %v", nodes)
 	log.Printf("  Cluster Type: %s", clusterType)
 	if projectName != "" {
-		log.Printf("  GCP Project: %s", projectName)
+		log.Printf("  GCP Project: %s (ID: %s)", projectName, gcpProjectID)
 	}
 
 	// Commit changes to Git if configured
@@ -574,26 +576,32 @@ func createProviderForClusterDef(clusterDef types.ClusterDefinition) (provider.P
 	}
 
 	// Handle GCP-specific configuration
-	if providerName == "gcp" && clusterDef.Spec.GCPProject != "" {
-		// Resolve GCP project alias to project ID
-		repoMgr, err := repository.NewManager()
-		if err != nil {
-			return nil, fmt.Errorf("failed to create repository manager: %w", err)
-		}
-		defer repoMgr.Close()
+	if providerName == "gcp" {
+		// Use stored project ID if available, otherwise resolve from alias
+		if clusterDef.Spec.GCPProjectID != "" {
+			opts.ProjectID = clusterDef.Spec.GCPProjectID
+			log.Printf("Using GCP project ID '%s'", clusterDef.Spec.GCPProjectID)
+		} else if clusterDef.Spec.GCPProject != "" {
+			// Fall back to resolving alias (for backward compatibility)
+			repoMgr, err := repository.NewManager()
+			if err != nil {
+				return nil, fmt.Errorf("failed to create repository manager: %w", err)
+			}
+			defer repoMgr.Close()
 
-		currentRepo, err := repoMgr.GetCurrentRepository()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get current repository: %w", err)
-		}
+			currentRepo, err := repoMgr.GetCurrentRepository()
+			if err != nil {
+				return nil, fmt.Errorf("failed to get current repository: %w", err)
+			}
 
-		pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
-		projectID, err := pcMgr.GetGCPProjectID(clusterDef.Spec.GCPProject)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve GCP project '%s': %w", clusterDef.Spec.GCPProject, err)
+			pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
+			projectID, err := pcMgr.GetGCPProjectID(clusterDef.Spec.GCPProject)
+			if err != nil {
+				return nil, fmt.Errorf("failed to resolve GCP project '%s': %w", clusterDef.Spec.GCPProject, err)
+			}
+			opts.ProjectID = projectID
+			log.Printf("Using GCP project '%s' (ID: %s)", clusterDef.Spec.GCPProject, projectID)
 		}
-		opts.ProjectID = projectID
-		log.Printf("Using GCP project '%s' (ID: %s)", clusterDef.Spec.GCPProject, projectID)
 	}
 
 	return providerFactory.CreateProviderWithOptions(providerName, opts)
