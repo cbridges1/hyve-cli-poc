@@ -221,42 +221,56 @@ These configurations are stored in the repository under provider-configs/aws.yam
 and are committed to Git for team sharing.`,
 }
 
-var configAWSAddAccountIDsCmd = &cobra.Command{
-	Use:   "add-account-ids [account-id,...]",
-	Short: "Add AWS account IDs to the repository configuration",
-	Long: `Add one or more AWS account IDs to the repository's provider configuration.
+var configAWSAccountAddCmd = &cobra.Command{
+	Use:   "account-add",
+	Short: "Add an AWS account to the repository configuration",
+	Long: `Add an AWS account with a friendly name/alias to the repository's provider configuration.
 
-The account IDs are stored in provider-configs/aws.yaml in the current repository.
-Multiple account IDs can be specified as comma-separated values or as separate arguments.
+The account is stored in provider-configs/aws.yaml in the current repository.
+The name can then be used as an alias when creating EKS clusters.
 
 Examples:
-  hyve config aws add-account-ids 123456789012
-  hyve config aws add-account-ids 123456789012,987654321098`,
-	Args: cobra.MinimumNArgs(1),
+  hyve config aws account-add --name prod --id 123456789012
+  hyve config aws account-add --name dev --id 987654321098`,
 	Run: func(cmd *cobra.Command, args []string) {
-		addAWSAccountIDs(args)
+		name, _ := cmd.Flags().GetString("name")
+		accountID, _ := cmd.Flags().GetString("id")
+		addAWSAccount(name, accountID)
 	},
 }
 
-var configAWSRemoveAccountIDsCmd = &cobra.Command{
-	Use:   "remove-account-ids [account-id,...]",
-	Short: "Remove AWS account IDs from the repository configuration",
-	Long: `Remove one or more AWS account IDs from the repository's provider configuration.
+var configAWSAccountRemoveCmd = &cobra.Command{
+	Use:   "account-remove [name]",
+	Short: "Remove an AWS account from the repository configuration",
+	Long: `Remove an AWS account by its alias/name from the repository's provider configuration.
 
 Examples:
-  hyve config aws remove-account-ids 123456789012`,
-	Args: cobra.MinimumNArgs(1),
+  hyve config aws account-remove prod`,
+	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		removeAWSAccountIDs(args)
+		removeAWSAccount(args[0])
 	},
 }
 
-var configAWSListAccountIDsCmd = &cobra.Command{
-	Use:   "list-account-ids",
-	Short: "List configured AWS account IDs",
-	Long:  "Display all AWS account IDs configured in the current repository.",
+var configAWSAccountListCmd = &cobra.Command{
+	Use:   "account-list",
+	Short: "List configured AWS accounts",
+	Long:  "Display all AWS accounts configured in the current repository with their aliases.",
 	Run: func(cmd *cobra.Command, args []string) {
-		listAWSAccountIDs()
+		listAWSAccounts()
+	},
+}
+
+var configAWSAccountGetCmd = &cobra.Command{
+	Use:   "account-get [name]",
+	Short: "Get the account ID for an AWS account alias",
+	Long: `Display the AWS account ID associated with a given alias/name.
+
+Examples:
+  hyve config aws account-get prod`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		getAWSAccount(args[0])
 	},
 }
 
@@ -435,10 +449,15 @@ func init() {
 	configGCPCmd.AddCommand(configGCPListProjectsCmd)
 	configGCPCmd.AddCommand(configGCPGetProjectCmd)
 
-	// AWS subcommands
-	configAWSCmd.AddCommand(configAWSAddAccountIDsCmd)
-	configAWSCmd.AddCommand(configAWSRemoveAccountIDsCmd)
-	configAWSCmd.AddCommand(configAWSListAccountIDsCmd)
+	// AWS Account subcommands
+	configAWSAccountAddCmd.Flags().String("name", "", "Friendly name/alias for the account (required)")
+	configAWSAccountAddCmd.Flags().String("id", "", "AWS account ID (required)")
+	configAWSAccountAddCmd.MarkFlagRequired("name")
+	configAWSAccountAddCmd.MarkFlagRequired("id")
+	configAWSCmd.AddCommand(configAWSAccountAddCmd)
+	configAWSCmd.AddCommand(configAWSAccountRemoveCmd)
+	configAWSCmd.AddCommand(configAWSAccountListCmd)
+	configAWSCmd.AddCommand(configAWSAccountGetCmd)
 
 	// AWS EKS Role subcommands
 	configAWSEKSRoleAddCmd.Flags().String("name", "", "Friendly name/alias for the EKS role (required)")
@@ -770,147 +789,94 @@ func getGCPProject(name string) {
 	fmt.Printf("%s\n", projectID)
 }
 
-// AWS helper functions
-func addAWSAccountIDs(args []string) {
-	repoPath := getRepoPath()
-	accountIDs := parseProjectIDs(args) // Reuse the same parsing function
-
-	if len(accountIDs) == 0 {
-		log.Fatal("No account IDs provided")
+// AWS Account helper functions
+func addAWSAccount(name, accountID string) {
+	if name == "" {
+		log.Fatal("Account name is required (--name)")
+	}
+	if accountID == "" {
+		log.Fatal("Account ID is required (--id)")
 	}
 
+	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
-	existingConfig, err := mgr.LoadAWSConfig()
+	exists, err := mgr.HasAWSAccount(name)
 	if err != nil {
-		log.Fatalf("Failed to load AWS config: %v", err)
+		log.Fatalf("Failed to check AWS config: %v", err)
 	}
 
-	existing := make(map[string]bool)
-	for _, id := range existingConfig.AccountIDs {
-		existing[id] = true
+	if err := mgr.AddAWSAccount(name, accountID); err != nil {
+		log.Fatalf("Failed to add AWS account: %v", err)
 	}
 
-	added := []string{}
-	skipped := []string{}
-	for _, id := range accountIDs {
-		if existing[id] {
-			skipped = append(skipped, id)
-		} else {
-			added = append(added, id)
-			existingConfig.AccountIDs = append(existingConfig.AccountIDs, id)
-			existing[id] = true
-		}
+	if exists {
+		log.Printf("✅ Updated AWS account '%s':\n", name)
+	} else {
+		log.Printf("✅ Added AWS account '%s':\n", name)
 	}
-
-	if len(added) > 0 {
-		if err := mgr.SaveAWSConfig(existingConfig); err != nil {
-			log.Fatalf("Failed to save AWS config: %v", err)
-		}
-
-		log.Printf("✅ Added %d AWS account ID(s):\n", len(added))
-		for _, id := range added {
-			log.Printf("   + %s", id)
-		}
-	}
-
-	if len(skipped) > 0 {
-		log.Printf("\nℹ️  Skipped %d account ID(s) (already configured):\n", len(skipped))
-		for _, id := range skipped {
-			log.Printf("   • %s", id)
-		}
-	}
-
-	if len(added) > 0 {
-		log.Println()
-		log.Println("💡 The configuration is stored in provider-configs/aws.yaml")
-	}
+	log.Printf("   Name:       %s", name)
+	log.Printf("   Account ID: %s", accountID)
+	log.Println()
+	log.Println("💡 The configuration is stored in provider-configs/aws.yaml")
 }
 
-func removeAWSAccountIDs(args []string) {
+func removeAWSAccount(name string) {
 	repoPath := getRepoPath()
-	accountIDs := parseProjectIDs(args)
-
-	if len(accountIDs) == 0 {
-		log.Fatal("No account IDs provided")
-	}
-
 	mgr := providerconfig.NewManager(repoPath)
 
-	existingConfig, err := mgr.LoadAWSConfig()
+	accountID, err := mgr.GetAWSAccountID(name)
 	if err != nil {
-		log.Fatalf("Failed to load AWS config: %v", err)
+		log.Fatalf("❌ AWS account '%s' not found", name)
 	}
 
-	existing := make(map[string]bool)
-	for _, id := range existingConfig.AccountIDs {
-		existing[id] = true
+	if err := mgr.RemoveAWSAccount(name); err != nil {
+		log.Fatalf("Failed to remove AWS account: %v", err)
 	}
 
-	removed := []string{}
-	notFound := []string{}
-	toRemove := make(map[string]bool)
-	for _, id := range accountIDs {
-		toRemove[id] = true
-		if existing[id] {
-			removed = append(removed, id)
-		} else {
-			notFound = append(notFound, id)
-		}
-	}
-
-	if len(removed) > 0 {
-		filtered := []string{}
-		for _, id := range existingConfig.AccountIDs {
-			if !toRemove[id] {
-				filtered = append(filtered, id)
-			}
-		}
-		existingConfig.AccountIDs = filtered
-
-		if err := mgr.SaveAWSConfig(existingConfig); err != nil {
-			log.Fatalf("Failed to save AWS config: %v", err)
-		}
-
-		log.Printf("✅ Removed %d AWS account ID(s):\n", len(removed))
-		for _, id := range removed {
-			log.Printf("   - %s", id)
-		}
-	}
-
-	if len(notFound) > 0 {
-		log.Printf("\nℹ️  Skipped %d account ID(s) (not configured):\n", len(notFound))
-		for _, id := range notFound {
-			log.Printf("   • %s", id)
-		}
-	}
+	log.Printf("✅ Removed AWS account '%s' (ID: %s)", name, accountID)
 }
 
-func listAWSAccountIDs() {
+func listAWSAccounts() {
 	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
-	config, err := mgr.LoadAWSConfig()
+	accounts, err := mgr.ListAWSAccounts()
 	if err != nil {
-		log.Fatalf("Failed to load AWS config: %v", err)
+		log.Fatalf("Failed to list AWS accounts: %v", err)
 	}
 
-	if len(config.AccountIDs) == 0 {
-		log.Println("❌ No AWS account IDs configured")
+	if len(accounts) == 0 {
+		log.Println("❌ No AWS accounts configured")
 		log.Println()
-		log.Println("💡 Add account IDs with:")
-		log.Println("   hyve config aws add-account-ids 123456789012")
+		log.Println("💡 Add an account with:")
+		log.Println("   hyve config aws account-add --name prod --id 123456789012")
 		return
 	}
 
-	log.Printf("☁️  AWS Account IDs (%d):\n", len(config.AccountIDs))
-	for _, id := range config.AccountIDs {
-		log.Printf("   • %s", id)
-	}
+	log.Printf("☁️  AWS Accounts (%d):\n", len(accounts))
 	log.Println()
+	for _, a := range accounts {
+		log.Printf("   %s", a.Name)
+		log.Printf("      Account ID: %s", a.AccountID)
+		log.Println()
+	}
 	log.Println("💡 Commands:")
-	log.Println("   hyve config aws add-account-ids <ids>      # Add account IDs")
-	log.Println("   hyve config aws remove-account-ids <ids>   # Remove account IDs")
+	log.Println("   hyve config aws account-add --name <name> --id <id>  # Add/update account")
+	log.Println("   hyve config aws account-remove <name>                # Remove account")
+	log.Println("   hyve config aws account-get <name>                   # Get account ID")
+}
+
+func getAWSAccount(name string) {
+	repoPath := getRepoPath()
+	mgr := providerconfig.NewManager(repoPath)
+
+	accountID, err := mgr.GetAWSAccountID(name)
+	if err != nil {
+		log.Fatalf("❌ AWS account '%s' not found", name)
+	}
+
+	fmt.Printf("%s\n", accountID)
 }
 
 // AWS EKS Role helper functions

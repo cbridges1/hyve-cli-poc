@@ -22,6 +22,12 @@ type GCPConfig struct {
 	Projects []GCPProject `yaml:"projects"`
 }
 
+// AWSAccount represents a named AWS account
+type AWSAccount struct {
+	Name      string `yaml:"name"`
+	AccountID string `yaml:"account_id"`
+}
+
 // AWSEKSRole represents a named EKS IAM role
 type AWSEKSRole struct {
 	Name    string `yaml:"name"`
@@ -36,10 +42,10 @@ type AWSVPC struct {
 
 // AWSConfig represents AWS-specific configuration
 type AWSConfig struct {
-	AccountIDs []string     `yaml:"account_ids,omitempty"`
-	Regions    []string     `yaml:"regions,omitempty"`
-	EKSRoles   []AWSEKSRole `yaml:"eks_roles,omitempty"`
-	VPCs       []AWSVPC     `yaml:"vpcs,omitempty"`
+	Accounts []AWSAccount `yaml:"accounts,omitempty"`
+	Regions  []string     `yaml:"regions,omitempty"`
+	EKSRoles []AWSEKSRole `yaml:"eks_roles,omitempty"`
+	VPCs     []AWSVPC     `yaml:"vpcs,omitempty"`
 }
 
 // AzureConfig represents Azure-specific configuration
@@ -254,6 +260,98 @@ func (m *Manager) SaveAWSConfig(config *AWSConfig) error {
 	}
 
 	return nil
+}
+
+// AddAWSAccount adds a named account to the AWS configuration
+func (m *Manager) AddAWSAccount(name, accountID string) error {
+	config, err := m.LoadAWSConfig()
+	if err != nil {
+		return err
+	}
+
+	// Check if name already exists
+	for i, a := range config.Accounts {
+		if a.Name == name {
+			// Update existing account
+			config.Accounts[i].AccountID = accountID
+			return m.SaveAWSConfig(config)
+		}
+	}
+
+	// Add new account
+	config.Accounts = append(config.Accounts, AWSAccount{
+		Name:      name,
+		AccountID: accountID,
+	})
+
+	return m.SaveAWSConfig(config)
+}
+
+// RemoveAWSAccount removes an account by name from the AWS configuration
+func (m *Manager) RemoveAWSAccount(name string) error {
+	config, err := m.LoadAWSConfig()
+	if err != nil {
+		return err
+	}
+
+	filtered := []AWSAccount{}
+	found := false
+	for _, a := range config.Accounts {
+		if a.Name != name {
+			filtered = append(filtered, a)
+		} else {
+			found = true
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("account '%s' not found", name)
+	}
+
+	config.Accounts = filtered
+	return m.SaveAWSConfig(config)
+}
+
+// GetAWSAccountID returns the account ID for a given name/alias
+func (m *Manager) GetAWSAccountID(name string) (string, error) {
+	config, err := m.LoadAWSConfig()
+	if err != nil {
+		return "", err
+	}
+
+	for _, a := range config.Accounts {
+		if a.Name == name {
+			return a.AccountID, nil
+		}
+	}
+
+	return "", fmt.Errorf("AWS account '%s' not found in repository configuration", name)
+}
+
+// ListAWSAccounts returns all configured AWS accounts
+func (m *Manager) ListAWSAccounts() ([]AWSAccount, error) {
+	config, err := m.LoadAWSConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	return config.Accounts, nil
+}
+
+// HasAWSAccount checks if an account with the given name exists
+func (m *Manager) HasAWSAccount(name string) (bool, error) {
+	config, err := m.LoadAWSConfig()
+	if err != nil {
+		return false, err
+	}
+
+	for _, a := range config.Accounts {
+		if a.Name == name {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 // AddAWSEKSRole adds a named EKS role to the AWS configuration
