@@ -260,6 +260,114 @@ var configAWSListAccountIDsCmd = &cobra.Command{
 	},
 }
 
+// AWS EKS Role commands
+var configAWSEKSRoleAddCmd = &cobra.Command{
+	Use:   "eks-role-add",
+	Short: "Add an EKS IAM role to the repository configuration",
+	Long: `Add an EKS IAM role with a friendly name/alias to the repository's provider configuration.
+
+The role is stored in provider-configs/aws.yaml in the current repository.
+The name can then be used as an alias when creating EKS clusters.
+
+Examples:
+  hyve config aws eks-role-add --name default-role --role-arn arn:aws:iam::123456789012:role/my-eks-cluster-role
+  hyve config aws eks-role-add --name prod-role --role-arn arn:aws:iam::123456789012:role/prod-eks-role`,
+	Run: func(cmd *cobra.Command, args []string) {
+		name, _ := cmd.Flags().GetString("name")
+		roleARN, _ := cmd.Flags().GetString("role-arn")
+		addAWSEKSRole(name, roleARN)
+	},
+}
+
+var configAWSEKSRoleRemoveCmd = &cobra.Command{
+	Use:   "eks-role-remove [name]",
+	Short: "Remove an EKS IAM role from the repository configuration",
+	Long: `Remove an EKS IAM role by its alias/name from the repository's provider configuration.
+
+Examples:
+  hyve config aws eks-role-remove default-role`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		removeAWSEKSRole(args[0])
+	},
+}
+
+var configAWSEKSRoleListCmd = &cobra.Command{
+	Use:   "eks-role-list",
+	Short: "List configured EKS IAM roles",
+	Long:  "Display all EKS IAM roles configured in the current repository with their aliases.",
+	Run: func(cmd *cobra.Command, args []string) {
+		listAWSEKSRoles()
+	},
+}
+
+var configAWSEKSRoleGetCmd = &cobra.Command{
+	Use:   "eks-role-get [name]",
+	Short: "Get the role ARN for an EKS IAM role alias",
+	Long: `Display the EKS IAM role ARN associated with a given alias/name.
+
+Examples:
+  hyve config aws eks-role-get default-role`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		getAWSEKSRole(args[0])
+	},
+}
+
+// AWS VPC commands
+var configAWSVPCAddCmd = &cobra.Command{
+	Use:   "vpc-add",
+	Short: "Add a VPC to the repository configuration",
+	Long: `Add a VPC with a friendly name/alias to the repository's provider configuration.
+
+The VPC is stored in provider-configs/aws.yaml in the current repository.
+The name can then be used as an alias when creating EKS clusters.
+
+Examples:
+  hyve config aws vpc-add --name default-vpc --id vpc-0123456789abcdef0
+  hyve config aws vpc-add --name prod-vpc --id vpc-abcdef0123456789`,
+	Run: func(cmd *cobra.Command, args []string) {
+		name, _ := cmd.Flags().GetString("name")
+		vpcID, _ := cmd.Flags().GetString("id")
+		addAWSVPC(name, vpcID)
+	},
+}
+
+var configAWSVPCRemoveCmd = &cobra.Command{
+	Use:   "vpc-remove [name]",
+	Short: "Remove a VPC from the repository configuration",
+	Long: `Remove a VPC by its alias/name from the repository's provider configuration.
+
+Examples:
+  hyve config aws vpc-remove default-vpc`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		removeAWSVPC(args[0])
+	},
+}
+
+var configAWSVPCListCmd = &cobra.Command{
+	Use:   "vpc-list",
+	Short: "List configured VPCs",
+	Long:  "Display all VPCs configured in the current repository with their aliases.",
+	Run: func(cmd *cobra.Command, args []string) {
+		listAWSVPCs()
+	},
+}
+
+var configAWSVPCGetCmd = &cobra.Command{
+	Use:   "vpc-get [name]",
+	Short: "Get the VPC ID for a VPC alias",
+	Long: `Display the VPC ID associated with a given alias/name.
+
+Examples:
+  hyve config aws vpc-get default-vpc`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		getAWSVPC(args[0])
+	},
+}
+
 // Azure provider config commands
 var configAzureCmd = &cobra.Command{
 	Use:   "azure",
@@ -331,6 +439,26 @@ func init() {
 	configAWSCmd.AddCommand(configAWSAddAccountIDsCmd)
 	configAWSCmd.AddCommand(configAWSRemoveAccountIDsCmd)
 	configAWSCmd.AddCommand(configAWSListAccountIDsCmd)
+
+	// AWS EKS Role subcommands
+	configAWSEKSRoleAddCmd.Flags().String("name", "", "Friendly name/alias for the EKS role (required)")
+	configAWSEKSRoleAddCmd.Flags().String("role-arn", "", "IAM role ARN for EKS (required)")
+	configAWSEKSRoleAddCmd.MarkFlagRequired("name")
+	configAWSEKSRoleAddCmd.MarkFlagRequired("role-arn")
+	configAWSCmd.AddCommand(configAWSEKSRoleAddCmd)
+	configAWSCmd.AddCommand(configAWSEKSRoleRemoveCmd)
+	configAWSCmd.AddCommand(configAWSEKSRoleListCmd)
+	configAWSCmd.AddCommand(configAWSEKSRoleGetCmd)
+
+	// AWS VPC subcommands
+	configAWSVPCAddCmd.Flags().String("name", "", "Friendly name/alias for the VPC (required)")
+	configAWSVPCAddCmd.Flags().String("id", "", "VPC ID (required)")
+	configAWSVPCAddCmd.MarkFlagRequired("name")
+	configAWSVPCAddCmd.MarkFlagRequired("id")
+	configAWSCmd.AddCommand(configAWSVPCAddCmd)
+	configAWSCmd.AddCommand(configAWSVPCRemoveCmd)
+	configAWSCmd.AddCommand(configAWSVPCListCmd)
+	configAWSCmd.AddCommand(configAWSVPCGetCmd)
 
 	// Azure subcommands
 	configAzureCmd.AddCommand(configAzureAddSubscriptionIDsCmd)
@@ -783,6 +911,186 @@ func listAWSAccountIDs() {
 	log.Println("💡 Commands:")
 	log.Println("   hyve config aws add-account-ids <ids>      # Add account IDs")
 	log.Println("   hyve config aws remove-account-ids <ids>   # Remove account IDs")
+}
+
+// AWS EKS Role helper functions
+func addAWSEKSRole(name, roleARN string) {
+	if name == "" {
+		log.Fatal("Role name is required (--name)")
+	}
+	if roleARN == "" {
+		log.Fatal("Role ARN is required (--role-arn)")
+	}
+
+	repoPath := getRepoPath()
+	mgr := providerconfig.NewManager(repoPath)
+
+	exists, err := mgr.HasAWSEKSRole(name)
+	if err != nil {
+		log.Fatalf("Failed to check AWS config: %v", err)
+	}
+
+	if err := mgr.AddAWSEKSRole(name, roleARN); err != nil {
+		log.Fatalf("Failed to add EKS role: %v", err)
+	}
+
+	if exists {
+		log.Printf("✅ Updated EKS role '%s':\n", name)
+	} else {
+		log.Printf("✅ Added EKS role '%s':\n", name)
+	}
+	log.Printf("   Name:     %s", name)
+	log.Printf("   Role ARN: %s", roleARN)
+	log.Println()
+	log.Println("💡 The configuration is stored in provider-configs/aws.yaml")
+}
+
+func removeAWSEKSRole(name string) {
+	repoPath := getRepoPath()
+	mgr := providerconfig.NewManager(repoPath)
+
+	roleARN, err := mgr.GetAWSEKSRoleARN(name)
+	if err != nil {
+		log.Fatalf("❌ EKS role '%s' not found", name)
+	}
+
+	if err := mgr.RemoveAWSEKSRole(name); err != nil {
+		log.Fatalf("Failed to remove EKS role: %v", err)
+	}
+
+	log.Printf("✅ Removed EKS role '%s' (ARN: %s)", name, roleARN)
+}
+
+func listAWSEKSRoles() {
+	repoPath := getRepoPath()
+	mgr := providerconfig.NewManager(repoPath)
+
+	roles, err := mgr.ListAWSEKSRoles()
+	if err != nil {
+		log.Fatalf("Failed to list EKS roles: %v", err)
+	}
+
+	if len(roles) == 0 {
+		log.Println("❌ No EKS roles configured")
+		log.Println()
+		log.Println("💡 Add an EKS role with:")
+		log.Println("   hyve config aws eks-role-add --name default-role --role-arn arn:aws:iam::123456789012:role/my-role")
+		return
+	}
+
+	log.Printf("🔐 EKS IAM Roles (%d):\n", len(roles))
+	log.Println()
+	for _, r := range roles {
+		log.Printf("   %s", r.Name)
+		log.Printf("      Role ARN: %s", r.RoleARN)
+		log.Println()
+	}
+	log.Println("💡 Commands:")
+	log.Println("   hyve config aws eks-role-add --name <name> --role-arn <arn>  # Add/update role")
+	log.Println("   hyve config aws eks-role-remove <name>                       # Remove role")
+	log.Println("   hyve config aws eks-role-get <name>                          # Get role ARN")
+}
+
+func getAWSEKSRole(name string) {
+	repoPath := getRepoPath()
+	mgr := providerconfig.NewManager(repoPath)
+
+	roleARN, err := mgr.GetAWSEKSRoleARN(name)
+	if err != nil {
+		log.Fatalf("❌ EKS role '%s' not found", name)
+	}
+
+	fmt.Printf("%s\n", roleARN)
+}
+
+// AWS VPC helper functions
+func addAWSVPC(name, vpcID string) {
+	if name == "" {
+		log.Fatal("VPC name is required (--name)")
+	}
+	if vpcID == "" {
+		log.Fatal("VPC ID is required (--id)")
+	}
+
+	repoPath := getRepoPath()
+	mgr := providerconfig.NewManager(repoPath)
+
+	exists, err := mgr.HasAWSVPC(name)
+	if err != nil {
+		log.Fatalf("Failed to check AWS config: %v", err)
+	}
+
+	if err := mgr.AddAWSVPC(name, vpcID); err != nil {
+		log.Fatalf("Failed to add VPC: %v", err)
+	}
+
+	if exists {
+		log.Printf("✅ Updated VPC '%s':\n", name)
+	} else {
+		log.Printf("✅ Added VPC '%s':\n", name)
+	}
+	log.Printf("   Name:   %s", name)
+	log.Printf("   VPC ID: %s", vpcID)
+	log.Println()
+	log.Println("💡 The configuration is stored in provider-configs/aws.yaml")
+}
+
+func removeAWSVPC(name string) {
+	repoPath := getRepoPath()
+	mgr := providerconfig.NewManager(repoPath)
+
+	vpcID, err := mgr.GetAWSVPCID(name)
+	if err != nil {
+		log.Fatalf("❌ VPC '%s' not found", name)
+	}
+
+	if err := mgr.RemoveAWSVPC(name); err != nil {
+		log.Fatalf("Failed to remove VPC: %v", err)
+	}
+
+	log.Printf("✅ Removed VPC '%s' (ID: %s)", name, vpcID)
+}
+
+func listAWSVPCs() {
+	repoPath := getRepoPath()
+	mgr := providerconfig.NewManager(repoPath)
+
+	vpcs, err := mgr.ListAWSVPCs()
+	if err != nil {
+		log.Fatalf("Failed to list VPCs: %v", err)
+	}
+
+	if len(vpcs) == 0 {
+		log.Println("❌ No VPCs configured")
+		log.Println()
+		log.Println("💡 Add a VPC with:")
+		log.Println("   hyve config aws vpc-add --name default-vpc --id vpc-0123456789abcdef0")
+		return
+	}
+
+	log.Printf("🌐 VPCs (%d):\n", len(vpcs))
+	log.Println()
+	for _, v := range vpcs {
+		log.Printf("   %s", v.Name)
+		log.Printf("      VPC ID: %s", v.VPCID)
+		log.Println()
+	}
+	log.Println("💡 Commands:")
+	log.Println("   hyve config aws vpc-add --name <name> --id <vpc-id>  # Add/update VPC")
+	log.Println("   hyve config aws vpc-remove <name>                    # Remove VPC")
+	log.Println("   hyve config aws vpc-get <name>                       # Get VPC ID")
+}
+
+func getAWSVPC(name string) {
+	repoPath := getRepoPath()
+	mgr := providerconfig.NewManager(repoPath)
+
+	vpcID, err := mgr.GetAWSVPCID(name)
+	if err != nil {
+		log.Fatalf("❌ VPC '%s' not found", name)
+	}
+
+	fmt.Printf("%s\n", vpcID)
 }
 
 // Azure helper functions

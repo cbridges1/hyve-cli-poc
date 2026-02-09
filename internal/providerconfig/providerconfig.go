@@ -22,10 +22,24 @@ type GCPConfig struct {
 	Projects []GCPProject `yaml:"projects"`
 }
 
+// AWSEKSRole represents a named EKS IAM role
+type AWSEKSRole struct {
+	Name    string `yaml:"name"`
+	RoleARN string `yaml:"role_arn"`
+}
+
+// AWSVPC represents a named VPC
+type AWSVPC struct {
+	Name  string `yaml:"name"`
+	VPCID string `yaml:"vpc_id"`
+}
+
 // AWSConfig represents AWS-specific configuration
 type AWSConfig struct {
-	AccountIDs []string `yaml:"account_ids,omitempty"`
-	Regions    []string `yaml:"regions,omitempty"`
+	AccountIDs []string     `yaml:"account_ids,omitempty"`
+	Regions    []string     `yaml:"regions,omitempty"`
+	EKSRoles   []AWSEKSRole `yaml:"eks_roles,omitempty"`
+	VPCs       []AWSVPC     `yaml:"vpcs,omitempty"`
 }
 
 // AzureConfig represents Azure-specific configuration
@@ -240,6 +254,190 @@ func (m *Manager) SaveAWSConfig(config *AWSConfig) error {
 	}
 
 	return nil
+}
+
+// AddAWSEKSRole adds a named EKS role to the AWS configuration
+func (m *Manager) AddAWSEKSRole(name, roleARN string) error {
+	config, err := m.LoadAWSConfig()
+	if err != nil {
+		return err
+	}
+
+	// Check if name already exists
+	for i, r := range config.EKSRoles {
+		if r.Name == name {
+			// Update existing role
+			config.EKSRoles[i].RoleARN = roleARN
+			return m.SaveAWSConfig(config)
+		}
+	}
+
+	// Add new role
+	config.EKSRoles = append(config.EKSRoles, AWSEKSRole{
+		Name:    name,
+		RoleARN: roleARN,
+	})
+
+	return m.SaveAWSConfig(config)
+}
+
+// RemoveAWSEKSRole removes an EKS role by name from the AWS configuration
+func (m *Manager) RemoveAWSEKSRole(name string) error {
+	config, err := m.LoadAWSConfig()
+	if err != nil {
+		return err
+	}
+
+	filtered := []AWSEKSRole{}
+	found := false
+	for _, r := range config.EKSRoles {
+		if r.Name != name {
+			filtered = append(filtered, r)
+		} else {
+			found = true
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("EKS role '%s' not found", name)
+	}
+
+	config.EKSRoles = filtered
+	return m.SaveAWSConfig(config)
+}
+
+// GetAWSEKSRoleARN returns the role ARN for a given name
+func (m *Manager) GetAWSEKSRoleARN(name string) (string, error) {
+	config, err := m.LoadAWSConfig()
+	if err != nil {
+		return "", err
+	}
+
+	for _, r := range config.EKSRoles {
+		if r.Name == name {
+			return r.RoleARN, nil
+		}
+	}
+
+	return "", fmt.Errorf("EKS role '%s' not found in repository configuration", name)
+}
+
+// ListAWSEKSRoles returns all configured EKS roles
+func (m *Manager) ListAWSEKSRoles() ([]AWSEKSRole, error) {
+	config, err := m.LoadAWSConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	return config.EKSRoles, nil
+}
+
+// HasAWSEKSRole checks if an EKS role with the given name exists
+func (m *Manager) HasAWSEKSRole(name string) (bool, error) {
+	config, err := m.LoadAWSConfig()
+	if err != nil {
+		return false, err
+	}
+
+	for _, r := range config.EKSRoles {
+		if r.Name == name {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// AddAWSVPC adds a named VPC to the AWS configuration
+func (m *Manager) AddAWSVPC(name, vpcID string) error {
+	config, err := m.LoadAWSConfig()
+	if err != nil {
+		return err
+	}
+
+	// Check if name already exists
+	for i, v := range config.VPCs {
+		if v.Name == name {
+			// Update existing VPC
+			config.VPCs[i].VPCID = vpcID
+			return m.SaveAWSConfig(config)
+		}
+	}
+
+	// Add new VPC
+	config.VPCs = append(config.VPCs, AWSVPC{
+		Name:  name,
+		VPCID: vpcID,
+	})
+
+	return m.SaveAWSConfig(config)
+}
+
+// RemoveAWSVPC removes a VPC by name from the AWS configuration
+func (m *Manager) RemoveAWSVPC(name string) error {
+	config, err := m.LoadAWSConfig()
+	if err != nil {
+		return err
+	}
+
+	filtered := []AWSVPC{}
+	found := false
+	for _, v := range config.VPCs {
+		if v.Name != name {
+			filtered = append(filtered, v)
+		} else {
+			found = true
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("VPC '%s' not found", name)
+	}
+
+	config.VPCs = filtered
+	return m.SaveAWSConfig(config)
+}
+
+// GetAWSVPCID returns the VPC ID for a given name
+func (m *Manager) GetAWSVPCID(name string) (string, error) {
+	config, err := m.LoadAWSConfig()
+	if err != nil {
+		return "", err
+	}
+
+	for _, v := range config.VPCs {
+		if v.Name == name {
+			return v.VPCID, nil
+		}
+	}
+
+	return "", fmt.Errorf("VPC '%s' not found in repository configuration", name)
+}
+
+// ListAWSVPCs returns all configured VPCs
+func (m *Manager) ListAWSVPCs() ([]AWSVPC, error) {
+	config, err := m.LoadAWSConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	return config.VPCs, nil
+}
+
+// HasAWSVPC checks if a VPC with the given name exists
+func (m *Manager) HasAWSVPC(name string) (bool, error) {
+	config, err := m.LoadAWSConfig()
+	if err != nil {
+		return false, err
+	}
+
+	for _, v := range config.VPCs {
+		if v.Name == name {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 // LoadAzureConfig loads the Azure configuration from the repository
