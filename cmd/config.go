@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"civo-cluster-deploy/internal/config"
 	"civo-cluster-deploy/internal/credentials"
+	"civo-cluster-deploy/internal/provider/aws"
 	"civo-cluster-deploy/internal/providerconfig"
 	"civo-cluster-deploy/internal/repository"
 )
@@ -382,6 +384,97 @@ Examples:
 	},
 }
 
+// AWS EKS Role create/delete commands (actual AWS operations)
+var configAWSEKSRoleCreateCmd = &cobra.Command{
+	Use:   "eks-role-create",
+	Short: "Create an EKS IAM role in AWS",
+	Long: `Create an IAM role for EKS clusters in AWS and store the alias in the repository configuration.
+
+This command creates an actual IAM role in AWS with the EKS assume role policy and
+attaches the AmazonEKSClusterPolicy. The role ARN is then stored with the given alias.
+
+Requires AWS credentials configured via 'aws configure' or environment variables.
+
+Examples:
+  hyve config aws eks-role-create --name default-role --role-name my-eks-cluster-role --region us-east-1
+  hyve config aws eks-role-create --name prod-role --role-name prod-eks-role --region us-west-2`,
+	Run: func(cmd *cobra.Command, args []string) {
+		name, _ := cmd.Flags().GetString("name")
+		roleName, _ := cmd.Flags().GetString("role-name")
+		region, _ := cmd.Flags().GetString("region")
+		createAWSEKSRole(name, roleName, region)
+	},
+}
+
+var configAWSEKSRoleDeleteCmd = &cobra.Command{
+	Use:   "eks-role-delete [name]",
+	Short: "Delete an EKS IAM role from AWS",
+	Long: `Delete an EKS IAM role from AWS and remove it from the repository configuration.
+
+This command deletes the actual IAM role from AWS (detaching all policies first),
+then removes the alias from the repository configuration.
+
+Use --config-only to remove only the configuration without deleting the AWS role.
+
+Examples:
+  hyve config aws eks-role-delete default-role
+  hyve config aws eks-role-delete default-role --region us-east-1
+  hyve config aws eks-role-delete default-role --config-only`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		region, _ := cmd.Flags().GetString("region")
+		configOnly, _ := cmd.Flags().GetBool("config-only")
+		deleteAWSEKSRole(args[0], region, configOnly)
+	},
+}
+
+// AWS VPC create/delete commands (actual AWS operations)
+var configAWSVPCCreateCmd = &cobra.Command{
+	Use:   "vpc-create",
+	Short: "Create a VPC in AWS",
+	Long: `Create a VPC in AWS and store the alias in the repository configuration.
+
+This command creates an actual VPC in AWS with optional subnets and DNS settings.
+The VPC ID is then stored with the given alias.
+
+Requires AWS credentials configured via 'aws configure' or environment variables.
+
+Examples:
+  hyve config aws vpc-create --name default-vpc --region us-east-1
+  hyve config aws vpc-create --name prod-vpc --region us-west-2 --cidr 10.1.0.0/16
+  hyve config aws vpc-create --name dev-vpc --region us-east-1 --cidr 10.0.0.0/16 --subnets 10.0.1.0/24,10.0.2.0/24`,
+	Run: func(cmd *cobra.Command, args []string) {
+		name, _ := cmd.Flags().GetString("name")
+		region, _ := cmd.Flags().GetString("region")
+		cidr, _ := cmd.Flags().GetString("cidr")
+		subnets, _ := cmd.Flags().GetString("subnets")
+		enableDNS, _ := cmd.Flags().GetBool("enable-dns")
+		createAWSVPC(name, region, cidr, subnets, enableDNS)
+	},
+}
+
+var configAWSVPCDeleteCmd = &cobra.Command{
+	Use:   "vpc-delete [name]",
+	Short: "Delete a VPC from AWS",
+	Long: `Delete a VPC from AWS and remove it from the repository configuration.
+
+This command deletes the actual VPC from AWS (including subnets and internet gateways),
+then removes the alias from the repository configuration.
+
+Use --config-only to remove only the configuration without deleting the AWS VPC.
+
+Examples:
+  hyve config aws vpc-delete default-vpc
+  hyve config aws vpc-delete default-vpc --region us-east-1
+  hyve config aws vpc-delete default-vpc --config-only`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		region, _ := cmd.Flags().GetString("region")
+		configOnly, _ := cmd.Flags().GetBool("config-only")
+		deleteAWSVPC(args[0], region, configOnly)
+	},
+}
+
 // Azure provider config commands
 var configAzureCmd = &cobra.Command{
 	Use:   "azure",
@@ -478,6 +571,31 @@ func init() {
 	configAWSCmd.AddCommand(configAWSVPCRemoveCmd)
 	configAWSCmd.AddCommand(configAWSVPCListCmd)
 	configAWSCmd.AddCommand(configAWSVPCGetCmd)
+
+	// AWS EKS Role create/delete subcommands (actual AWS operations)
+	configAWSEKSRoleCreateCmd.Flags().String("name", "", "Friendly name/alias for the EKS role (required)")
+	configAWSEKSRoleCreateCmd.Flags().String("role-name", "", "IAM role name to create in AWS (required)")
+	configAWSEKSRoleCreateCmd.Flags().String("region", "us-east-1", "AWS region")
+	configAWSEKSRoleCreateCmd.MarkFlagRequired("name")
+	configAWSEKSRoleCreateCmd.MarkFlagRequired("role-name")
+	configAWSCmd.AddCommand(configAWSEKSRoleCreateCmd)
+
+	configAWSEKSRoleDeleteCmd.Flags().String("region", "us-east-1", "AWS region")
+	configAWSEKSRoleDeleteCmd.Flags().Bool("config-only", false, "Only remove from configuration, don't delete from AWS")
+	configAWSCmd.AddCommand(configAWSEKSRoleDeleteCmd)
+
+	// AWS VPC create/delete subcommands (actual AWS operations)
+	configAWSVPCCreateCmd.Flags().String("name", "", "Friendly name/alias for the VPC (required)")
+	configAWSVPCCreateCmd.Flags().String("region", "us-east-1", "AWS region")
+	configAWSVPCCreateCmd.Flags().String("cidr", "10.0.0.0/16", "CIDR block for the VPC")
+	configAWSVPCCreateCmd.Flags().String("subnets", "", "Comma-separated subnet CIDRs to create (e.g., 10.0.1.0/24,10.0.2.0/24)")
+	configAWSVPCCreateCmd.Flags().Bool("enable-dns", true, "Enable DNS support and hostnames")
+	configAWSVPCCreateCmd.MarkFlagRequired("name")
+	configAWSCmd.AddCommand(configAWSVPCCreateCmd)
+
+	configAWSVPCDeleteCmd.Flags().String("region", "us-east-1", "AWS region")
+	configAWSVPCDeleteCmd.Flags().Bool("config-only", false, "Only remove from configuration, don't delete from AWS")
+	configAWSCmd.AddCommand(configAWSVPCDeleteCmd)
 
 	// Azure subcommands
 	configAzureCmd.AddCommand(configAzureAddSubscriptionIDsCmd)
@@ -1057,6 +1175,265 @@ func getAWSVPC(name string) {
 	}
 
 	fmt.Printf("%s\n", vpcID)
+}
+
+// AWS EKS Role create/delete helper functions (actual AWS operations)
+func createAWSEKSRole(name, roleName, region string) {
+	if name == "" {
+		log.Fatal("Role alias name is required (--name)")
+	}
+	if roleName == "" {
+		log.Fatal("IAM role name is required (--role-name)")
+	}
+	if region == "" {
+		region = "us-east-1"
+	}
+
+	repoPath := getRepoPath()
+	configMgr := providerconfig.NewManager(repoPath)
+
+	// Check if alias already exists
+	exists, err := configMgr.HasAWSEKSRole(name)
+	if err != nil {
+		log.Fatalf("Failed to check AWS config: %v", err)
+	}
+	if exists {
+		log.Fatalf("❌ EKS role alias '%s' already exists. Use 'eks-role-remove' first or choose a different name.", name)
+	}
+
+	log.Printf("🔐 Creating EKS IAM role '%s' in AWS region %s...", roleName, region)
+
+	// Create the AWS resource manager
+	resourceMgr, err := aws.NewResourceManager(region)
+	if err != nil {
+		log.Fatalf("Failed to create AWS resource manager: %v", err)
+	}
+
+	// Create the IAM role
+	ctx := context.Background()
+	roleInfo, err := resourceMgr.CreateEKSRole(ctx, roleName)
+	if err != nil {
+		log.Fatalf("Failed to create EKS IAM role in AWS: %v", err)
+	}
+
+	log.Printf("✅ Created IAM role '%s' in AWS", roleInfo.Name)
+	log.Printf("   Role ARN: %s", roleInfo.ARN)
+
+	// Store the alias in configuration
+	if err := configMgr.AddAWSEKSRole(name, roleInfo.ARN); err != nil {
+		log.Printf("⚠️  Warning: Role created in AWS but failed to save alias: %v", err)
+		log.Printf("   You can manually add it with: hyve config aws eks-role-add --name %s --role-arn %s", name, roleInfo.ARN)
+		return
+	}
+
+	log.Printf("✅ Stored alias '%s' in configuration", name)
+	log.Println()
+	log.Println("💡 The configuration is stored in provider-configs/aws.yaml")
+	log.Printf("💡 Use this role when creating EKS clusters with: --eks-role %s", name)
+}
+
+func deleteAWSEKSRole(name, region string, configOnly bool) {
+	if region == "" {
+		region = "us-east-1"
+	}
+
+	repoPath := getRepoPath()
+	configMgr := providerconfig.NewManager(repoPath)
+
+	// Get the role ARN from config
+	roleARN, err := configMgr.GetAWSEKSRoleARN(name)
+	if err != nil {
+		log.Fatalf("❌ EKS role alias '%s' not found in configuration", name)
+	}
+
+	if configOnly {
+		// Only remove from configuration
+		if err := configMgr.RemoveAWSEKSRole(name); err != nil {
+			log.Fatalf("Failed to remove EKS role from configuration: %v", err)
+		}
+		log.Printf("✅ Removed EKS role alias '%s' from configuration", name)
+		log.Printf("   Note: The IAM role still exists in AWS (ARN: %s)", roleARN)
+		return
+	}
+
+	// Extract role name from ARN (format: arn:aws:iam::123456789012:role/role-name)
+	roleName := extractRoleNameFromARN(roleARN)
+	if roleName == "" {
+		log.Fatalf("❌ Could not extract role name from ARN: %s", roleARN)
+	}
+
+	log.Printf("🗑️  Deleting EKS IAM role '%s' from AWS...", roleName)
+
+	// Create the AWS resource manager
+	resourceMgr, err := aws.NewResourceManager(region)
+	if err != nil {
+		log.Fatalf("Failed to create AWS resource manager: %v", err)
+	}
+
+	// Delete the IAM role
+	ctx := context.Background()
+	if err := resourceMgr.DeleteEKSRole(ctx, roleName); err != nil {
+		log.Fatalf("Failed to delete EKS IAM role from AWS: %v\n\n"+
+			"Configuration was NOT updated to prevent inconsistent state.\n"+
+			"Use --config-only to remove only the configuration.", err)
+	}
+
+	log.Printf("✅ Deleted IAM role '%s' from AWS", roleName)
+
+	// Remove from configuration
+	if err := configMgr.RemoveAWSEKSRole(name); err != nil {
+		log.Printf("⚠️  Warning: Role deleted from AWS but failed to remove alias: %v", err)
+		return
+	}
+
+	log.Printf("✅ Removed alias '%s' from configuration", name)
+}
+
+// extractRoleNameFromARN extracts the role name from an IAM role ARN
+func extractRoleNameFromARN(arn string) string {
+	// ARN format: arn:aws:iam::123456789012:role/role-name
+	parts := strings.Split(arn, "/")
+	if len(parts) >= 2 {
+		return parts[len(parts)-1]
+	}
+	return ""
+}
+
+// AWS VPC create/delete helper functions (actual AWS operations)
+func createAWSVPC(name, region, cidr, subnets string, enableDNS bool) {
+	if name == "" {
+		log.Fatal("VPC alias name is required (--name)")
+	}
+	if region == "" {
+		region = "us-east-1"
+	}
+	if cidr == "" {
+		cidr = "10.0.0.0/16"
+	}
+
+	repoPath := getRepoPath()
+	configMgr := providerconfig.NewManager(repoPath)
+
+	// Check if alias already exists
+	exists, err := configMgr.HasAWSVPC(name)
+	if err != nil {
+		log.Fatalf("Failed to check AWS config: %v", err)
+	}
+	if exists {
+		log.Fatalf("❌ VPC alias '%s' already exists. Use 'vpc-remove' first or choose a different name.", name)
+	}
+
+	log.Printf("🌐 Creating VPC '%s' in AWS region %s...", name, region)
+	log.Printf("   CIDR: %s", cidr)
+
+	// Create the AWS resource manager
+	resourceMgr, err := aws.NewResourceManager(region)
+	if err != nil {
+		log.Fatalf("Failed to create AWS resource manager: %v", err)
+	}
+
+	// Parse subnet CIDRs
+	var subnetCIDRs []string
+	if subnets != "" {
+		parts := strings.Split(subnets, ",")
+		for _, part := range parts {
+			trimmed := strings.TrimSpace(part)
+			if trimmed != "" {
+				subnetCIDRs = append(subnetCIDRs, trimmed)
+			}
+		}
+	}
+
+	// Create the VPC
+	ctx := context.Background()
+	vpcInput := &aws.CreateVPCInput{
+		Name:              name,
+		CIDR:              cidr,
+		EnableDNSSupport:  enableDNS,
+		EnableDNSHostname: enableDNS,
+		CreateSubnets:     len(subnetCIDRs) > 0,
+		SubnetCIDRs:       subnetCIDRs,
+	}
+
+	vpcInfo, err := resourceMgr.CreateVPC(ctx, vpcInput)
+	if err != nil {
+		log.Fatalf("Failed to create VPC in AWS: %v", err)
+	}
+
+	log.Printf("✅ Created VPC '%s' in AWS", vpcInfo.Name)
+	log.Printf("   VPC ID: %s", vpcInfo.ID)
+	log.Printf("   CIDR:   %s", vpcInfo.CIDR)
+	log.Printf("   State:  %s", vpcInfo.State)
+
+	if len(vpcInfo.Subnets) > 0 {
+		log.Printf("   Subnets:")
+		for _, subnet := range vpcInfo.Subnets {
+			log.Printf("      %s (%s) - %s", subnet.ID, subnet.CIDR, subnet.AvailabilityZone)
+		}
+	}
+
+	// Store the alias in configuration
+	if err := configMgr.AddAWSVPC(name, vpcInfo.ID); err != nil {
+		log.Printf("⚠️  Warning: VPC created in AWS but failed to save alias: %v", err)
+		log.Printf("   You can manually add it with: hyve config aws vpc-add --name %s --id %s", name, vpcInfo.ID)
+		return
+	}
+
+	log.Printf("✅ Stored alias '%s' in configuration", name)
+	log.Println()
+	log.Println("💡 The configuration is stored in provider-configs/aws.yaml")
+	log.Printf("💡 Use this VPC when creating EKS clusters with: --vpc %s", name)
+}
+
+func deleteAWSVPC(name, region string, configOnly bool) {
+	if region == "" {
+		region = "us-east-1"
+	}
+
+	repoPath := getRepoPath()
+	configMgr := providerconfig.NewManager(repoPath)
+
+	// Get the VPC ID from config
+	vpcID, err := configMgr.GetAWSVPCID(name)
+	if err != nil {
+		log.Fatalf("❌ VPC alias '%s' not found in configuration", name)
+	}
+
+	if configOnly {
+		// Only remove from configuration
+		if err := configMgr.RemoveAWSVPC(name); err != nil {
+			log.Fatalf("Failed to remove VPC from configuration: %v", err)
+		}
+		log.Printf("✅ Removed VPC alias '%s' from configuration", name)
+		log.Printf("   Note: The VPC still exists in AWS (ID: %s)", vpcID)
+		return
+	}
+
+	log.Printf("🗑️  Deleting VPC '%s' from AWS...", vpcID)
+
+	// Create the AWS resource manager
+	resourceMgr, err := aws.NewResourceManager(region)
+	if err != nil {
+		log.Fatalf("Failed to create AWS resource manager: %v", err)
+	}
+
+	// Delete the VPC
+	ctx := context.Background()
+	if err := resourceMgr.DeleteVPC(ctx, vpcID); err != nil {
+		log.Fatalf("Failed to delete VPC from AWS: %v\n\n"+
+			"Configuration was NOT updated to prevent inconsistent state.\n"+
+			"Use --config-only to remove only the configuration.", err)
+	}
+
+	log.Printf("✅ Deleted VPC '%s' from AWS", vpcID)
+
+	// Remove from configuration
+	if err := configMgr.RemoveAWSVPC(name); err != nil {
+		log.Printf("⚠️  Warning: VPC deleted from AWS but failed to remove alias: %v", err)
+		return
+	}
+
+	log.Printf("✅ Removed alias '%s' from configuration", name)
 }
 
 // Azure helper functions

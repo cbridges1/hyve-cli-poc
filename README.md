@@ -12,10 +12,14 @@ A declarative GitOps Kubernetes cluster management tool with multi-cloud support
 ## Features
 
 - **GitOps Native** - All cluster state managed through Git repositories
+- **Multi-Cloud Support** - Civo, AWS EKS, GCP GKE, and Azure AKS
+- **Native Cloud Authentication** - Uses AWS CLI, gcloud, and Azure CLI for authentication
 - **Multi-Repository** - Separate repos for dev/staging/prod environments
 - **Automated Workflows** - Define deployment pipelines with requirements validation
 - **Cluster Templates** - Reusable cluster patterns with automated workflows
-- **Secure Credentials** - AES-GCM encrypted storage for tokens and kubeconfigs
+- **Secure Credentials** - AES-GCM encrypted storage for Civo tokens and kubeconfigs
+- **AWS Resource Management** - Create and manage EKS IAM roles and VPCs directly
+- **Provider Aliases** - Named aliases for GCP projects, AWS accounts, roles, and VPCs
 - **Variable Substitution** - Full shell support with workflow and environment variables
 
 ## Quick Start
@@ -40,8 +44,9 @@ go build -o hyve .
 ./hyve cluster add my-cluster --provider civo --region PHX1 --nodes g4s.kube.medium
 # or
 ./hyve cluster add my-cluster --provider aws --region us-east-1 --nodes t3.medium
-# or
-./hyve cluster add my-cluster --provider gcp --region us-central1 --nodes e2-medium
+# or (GCP requires project alias configured first)
+./hyve config gcp add-project --name dev --id my-gcp-project-id
+./hyve cluster add my-cluster --provider gcp --gcp-project dev --region us-central1 --nodes e2-medium
 # or
 ./hyve cluster add my-cluster --provider azure --region eastus --nodes Standard_D2s_v3
 
@@ -85,26 +90,31 @@ git --version
 
 # Option 2: AWS (uses native AWS CLI authentication)
 aws configure
-# Required environment variable:
-# - AWS_ACCESS_KEY_ID (or ~/.aws/credentials)
-# - AWS_SECRET_ACCESS_KEY (or ~/.aws/credentials)
+# Or use environment variables:
+# - AWS_ACCESS_KEY_ID
+# - AWS_SECRET_ACCESS_KEY
 
 # Option 3: GCP (uses Application Default Credentials)
 gcloud auth application-default login
-# Required environment variable:
-# - GCP_PROJECT_ID or GOOGLE_CLOUD_PROJECT
 
 # Option 4: Azure (uses Azure CLI authentication)
 az login
-# Required environment variables:
-# - AZURE_SUBSCRIPTION_ID
-# - AZURE_RESOURCE_GROUP
 
 # Configure Git credentials (for private repos)
 ./hyve git credentials --username your-username --password your-token
 
 # Add your first repository
 ./hyve git add production --repo-url https://github.com/company/hyve-state.git
+
+# Configure provider-specific settings (stored in repository)
+# GCP: Add project aliases
+./hyve config gcp add-project --name dev --id my-gcp-project-id
+
+# AWS: Create EKS IAM role (optional - creates actual AWS resource)
+./hyve config aws eks-role-create --name default-role --role-name hyve-eks-role --region us-east-1
+
+# AWS: Create VPC (optional - creates actual AWS resource)
+./hyve config aws vpc-create --name dev-vpc --region us-east-1 --cidr 10.0.0.0/16
 ```
 
 <details>
@@ -138,6 +148,28 @@ The preference is stored in `~/.hyve/config.yaml` and persists across sessions.
 - [Workflows](https://docs.hyve.dev/workflows/overview)
 - [Templates](https://docs.hyve.dev/guides/template-management)
 - [CLI Reference](https://docs.hyve.dev/cli/overview)
+
+## Authentication
+
+Hyve uses different authentication methods depending on the cloud provider:
+
+| Provider | Authentication Method | How to Configure |
+|----------|----------------------|------------------|
+| **Civo** | API token stored encrypted in Hyve | `hyve config set-token civo` |
+| **AWS** | Native AWS CLI credentials | `aws configure` or environment variables |
+| **GCP** | Application Default Credentials | `gcloud auth application-default login` |
+| **Azure** | Azure CLI authentication | `az login` |
+
+### Why Native CLI Authentication?
+
+For AWS, GCP, and Azure, Hyve uses the native cloud CLI authentication instead of storing credentials. This provides:
+
+- **Security**: Credentials are managed by the official cloud CLIs with their security features
+- **Consistency**: Same credentials used by other tools (Terraform, kubectl, etc.)
+- **SSO Support**: Works with corporate SSO, MFA, and identity federation
+- **No Duplication**: No need to manage credentials in multiple places
+
+Civo is the exception because it doesn't have a widely-used CLI, so Hyve stores Civo API tokens securely using AES-GCM encryption.
 
 ## Key Concepts
 
@@ -180,7 +212,7 @@ spec:
     - t3.large
     - t3.large
 ---
-# GCP GKE cluster
+# GCP GKE cluster (with project alias and ID)
 apiVersion: v1
 kind: Cluster
 metadata:
@@ -188,6 +220,8 @@ metadata:
   region: us-central1
 spec:
   provider: gcp
+  gcpProject: dev           # Project alias (configured via hyve config gcp add-project)
+  gcpProjectId: my-project  # Resolved project ID (auto-populated)
   nodes:
     - e2-standard-4
 ---
@@ -252,27 +286,85 @@ hyve template execute prod-template prod-cluster-01
 | `hyve template` | Manage cluster templates |
 | `hyve kubeconfig` | Manage cluster kubeconfigs |
 | `hyve config` | Configure API tokens and provider settings |
-| `hyve config gcp` | Manage GCP provider configuration |
-| `hyve config aws` | Manage AWS provider configuration |
-| `hyve config azure` | Manage Azure provider configuration |
+| `hyve config gcp` | Manage GCP provider configuration (projects) |
+| `hyve config aws` | Manage AWS provider configuration (accounts, EKS roles, VPCs) |
+| `hyve config azure` | Manage Azure provider configuration (subscriptions) |
 | `hyve reconcile` | Reconcile cluster state |
+
+### AWS Resource Commands
+
+Hyve can create and manage actual AWS resources:
+
+| Command | Description |
+|---------|-------------|
+| `hyve config aws eks-role-create` | Create an EKS IAM role in AWS |
+| `hyve config aws eks-role-delete` | Delete an EKS IAM role from AWS |
+| `hyve config aws vpc-create` | Create a VPC in AWS (with optional subnets) |
+| `hyve config aws vpc-delete` | Delete a VPC from AWS |
+
+These commands use native AWS SDK authentication (via `aws configure` or environment variables).
 
 ### Provider Configuration Commands
 
-Store provider-specific configurations in your repository for team sharing:
+Store provider-specific configurations in your repository for team sharing. All provider configs support aliases for easier reference.
+
+#### GCP Configuration
 
 ```bash
-# GCP - Add project IDs
-hyve config gcp add-project-ids my-project-1,my-project-2
-hyve config gcp list-project-ids
-hyve config gcp remove-project-ids my-project-1
+# Add GCP projects with aliases
+hyve config gcp add-project --name dev --id my-dev-project-123
+hyve config gcp add-project --name prod --id my-prod-project-456
 
-# AWS - Add account IDs
-hyve config aws add-account-ids 123456789012,987654321098
-hyve config aws list-account-ids
-hyve config aws remove-account-ids 123456789012
+# List configured projects
+hyve config gcp list-projects
 
-# Azure - Add subscription IDs
+# Get project ID by alias
+hyve config gcp get-project dev
+
+# Remove a project
+hyve config gcp remove-project dev
+
+# Use alias when creating clusters
+hyve cluster add my-cluster --provider gcp --gcp-project dev --region us-central1
+```
+
+#### AWS Configuration
+
+```bash
+# Account management (with aliases)
+hyve config aws account-add --name prod --id 123456789012
+hyve config aws account-list
+hyve config aws account-get prod
+hyve config aws account-remove prod
+
+# EKS IAM Role management (configuration only)
+hyve config aws eks-role-add --name default-role --role-arn arn:aws:iam::123456789012:role/my-eks-role
+hyve config aws eks-role-list
+hyve config aws eks-role-get default-role
+hyve config aws eks-role-remove default-role
+
+# EKS IAM Role creation (creates actual AWS resources)
+hyve config aws eks-role-create --name default-role --role-name my-eks-cluster-role --region us-east-1
+hyve config aws eks-role-delete default-role --region us-east-1
+hyve config aws eks-role-delete default-role --config-only  # Remove from config only
+
+# VPC management (configuration only)
+hyve config aws vpc-add --name default-vpc --id vpc-0123456789abcdef0
+hyve config aws vpc-list
+hyve config aws vpc-get default-vpc
+hyve config aws vpc-remove default-vpc
+
+# VPC creation (creates actual AWS resources)
+hyve config aws vpc-create --name dev-vpc --region us-east-1 --cidr 10.0.0.0/16
+hyve config aws vpc-create --name dev-vpc --region us-east-1 --subnets 10.0.1.0/24,10.0.2.0/24
+hyve config aws vpc-delete dev-vpc --region us-east-1
+hyve config aws vpc-delete dev-vpc --config-only  # Remove from config only
+```
+
+#### Azure Configuration
+
+```bash
+# Add subscription IDs
 hyve config azure add-subscription-ids sub-id-1,sub-id-2
 hyve config azure list-subscription-ids
 hyve config azure remove-subscription-ids sub-id-1
@@ -288,6 +380,7 @@ Hyve stores all data in `~/.hyve/`:
 
 ```
 ~/.hyve/
+├── config.yaml          # Global configuration (git backend preference)
 ├── repositories.db      # Repository configurations (SQLite)
 ├── credentials.db       # Encrypted Civo tokens and Git credentials (AES-GCM)
 ├── kubeconfigs.db      # Encrypted cluster kubeconfigs (AES-GCM)
@@ -298,10 +391,36 @@ Hyve stores all data in `~/.hyve/`:
     │   ├── workflows/        # Workflow definitions
     │   ├── templates/        # Cluster templates
     │   └── provider-configs/ # Provider-specific configuration
-    │       ├── gcp.yaml      # GCP project IDs
-    │       ├── aws.yaml      # AWS account IDs
+    │       ├── gcp.yaml      # GCP projects (name/ID aliases)
+    │       ├── aws.yaml      # AWS accounts, EKS roles, VPCs (with aliases)
     │       └── azure.yaml    # Azure subscription IDs
     └── development/
+```
+
+### Provider Config File Examples
+
+**provider-configs/gcp.yaml:**
+```yaml
+projects:
+  - name: dev
+    project_id: my-dev-project-123
+  - name: prod
+    project_id: my-prod-project-456
+```
+
+**provider-configs/aws.yaml:**
+```yaml
+accounts:
+  - name: prod
+    account_id: "123456789012"
+  - name: dev
+    account_id: "987654321098"
+eks_roles:
+  - name: default-role
+    role_arn: arn:aws:iam::123456789012:role/my-eks-role
+vpcs:
+  - name: default-vpc
+    vpc_id: vpc-0123456789abcdef0
 ```
 
 ## Testing
