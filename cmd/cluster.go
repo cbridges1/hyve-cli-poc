@@ -67,6 +67,11 @@ Supported cloud providers:
 		clusterType, _ := cmd.Flags().GetString("cluster-type")
 		projectName, _ := cmd.Flags().GetString("project-name")
 
+		// AWS-specific flags
+		awsAccount, _ := cmd.Flags().GetString("aws-account")
+		vpcName, _ := cmd.Flags().GetString("vpc-name")
+		eksRoleName, _ := cmd.Flags().GetString("eks-role-name")
+
 		// Validate provider
 		if !isValidProvider(providerName) {
 			log.Fatalf("Invalid provider '%s'. Valid providers are: %s", providerName, validProvidersString())
@@ -77,10 +82,20 @@ Supported cloud providers:
 
 		// Validate name is provided for GCP provider (used as project alias)
 		if providerName == "gcp" && projectName == "" {
-			log.Fatalf("GCP provider requires --name flag (GCP project alias). Use 'hyve config gcp list-projects' to see available projects.")
+			log.Fatalf("GCP provider requires --project-name flag (GCP project alias). Use 'hyve config gcp list-projects' to see available projects.")
 		}
 
-		addClusterFromCLI(clusterName, region, providerName, nodes, clusterType, projectName)
+		// Validate AWS-specific flags
+		if providerName == "aws" {
+			if vpcName == "" {
+				log.Fatalf("AWS provider requires --vpc-name flag. Use 'hyve config aws vpc-list' to see available VPCs.")
+			}
+			if eksRoleName == "" {
+				log.Fatalf("AWS provider requires --eks-role-name flag. Use 'hyve config aws eks-role-list' to see available roles.")
+			}
+		}
+
+		addClusterFromCLI(clusterName, region, providerName, nodes, clusterType, projectName, awsAccount, vpcName, eksRoleName)
 	},
 }
 
@@ -179,7 +194,12 @@ func init() {
 	addCmd.MarkFlagRequired("provider")
 	addCmd.Flags().StringSliceP("nodes", "n", []string{"g4s.kube.small"}, "Node sizes")
 	addCmd.Flags().StringP("cluster-type", "t", "k3s", "Type of Kubernetes cluster")
-	addCmd.Flags().String("project-name", "", "Project/account name alias (required for GCP provider, use 'hyve config gcp list-projects' to see available)")
+	addCmd.Flags().String("project-name", "", "GCP project name alias (required for GCP provider)")
+
+	// AWS-specific flags
+	addCmd.Flags().String("aws-account", "", "AWS account name alias (optional, use 'hyve config aws account-list' to see available)")
+	addCmd.Flags().String("vpc-name", "", "AWS VPC name alias (required for AWS provider, use 'hyve config aws vpc-list' to see available)")
+	addCmd.Flags().String("eks-role-name", "", "AWS EKS IAM role name alias (required for AWS provider, use 'hyve config aws eks-role-list' to see available)")
 
 	modifyCmd.Flags().StringP("region", "r", "", "Region for the cluster")
 	modifyCmd.Flags().StringP("provider", "p", "", "Cloud provider")
@@ -283,7 +303,7 @@ func commitStateChanges(ctx context.Context, stateMgr *state.Manager, message st
 	log.Println("✅ Changes committed and pushed to remote repository successfully")
 }
 
-func addClusterFromCLI(clusterName, region, providerName string, nodes []string, clusterType, projectName string) {
+func addClusterFromCLI(clusterName, region, providerName string, nodes []string, clusterType, projectName, awsAccount, vpcName, eksRoleName string) {
 	ctx := context.Background()
 	stateMgr, stateDir := createStateManager(ctx)
 
@@ -297,27 +317,65 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 		log.Fatalf("Cluster %s already exists. Use 'modify' action to update it.", clusterName)
 	}
 
+	// Get repository manager for provider config resolution
+	repoMgr, err := repository.NewManager()
+	if err != nil {
+		log.Fatalf("Failed to create repository manager: %v", err)
+	}
+	defer repoMgr.Close()
+
+	currentRepo, err := repoMgr.GetCurrentRepository()
+	if err != nil {
+		log.Fatalf("No Git repository configured: %v", err)
+	}
+
+	pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
+
 	// Resolve GCP project alias to project ID
 	var gcpProjectID string
 	if providerName == "gcp" && projectName != "" {
-		repoMgr, err := repository.NewManager()
-		if err != nil {
-			log.Fatalf("Failed to create repository manager: %v", err)
-		}
-		defer repoMgr.Close()
-
-		currentRepo, err := repoMgr.GetCurrentRepository()
-		if err != nil {
-			log.Fatalf("No Git repository configured: %v", err)
-		}
-
-		pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
 		gcpProjectID, err = pcMgr.GetGCPProjectID(projectName)
 		if err != nil {
 			log.Fatalf("GCP project alias '%s' not found in repository configuration.\n"+
 				"Use 'hyve config gcp add-project --name %s --id <project-id>' to add it.", projectName, projectName)
 		}
 		log.Printf("Using GCP project '%s' (ID: %s)", projectName, gcpProjectID)
+	}
+
+	// Resolve AWS aliases
+	var awsAccountID, awsVPCID, awsEKSRoleARN string
+	if providerName == "aws" {
+		// Resolve AWS account alias (optional)
+		if awsAccount != "" {
+			awsAccountID, err = pcMgr.GetAWSAccountID(awsAccount)
+			if err != nil {
+				log.Fatalf("AWS account alias '%s' not found in repository configuration.\n"+
+					"Use 'hyve config aws account-add --name %s --id <account-id>' to add it.", awsAccount, awsAccount)
+			}
+			log.Printf("Using AWS account '%s' (ID: %s)", awsAccount, awsAccountID)
+		}
+
+		// Resolve VPC alias (required for AWS)
+		if vpcName != "" {
+			awsVPCID, err = pcMgr.GetAWSVPCID(vpcName)
+			if err != nil {
+				log.Fatalf("AWS VPC alias '%s' not found in repository configuration.\n"+
+					"Use 'hyve config aws vpc-add --name %s --id <vpc-id>' to add it,\n"+
+					"or use 'hyve config aws vpc-create --name %s --region %s' to create one.", vpcName, vpcName, vpcName, region)
+			}
+			log.Printf("Using AWS VPC '%s' (ID: %s)", vpcName, awsVPCID)
+		}
+
+		// Resolve EKS role alias (required for AWS)
+		if eksRoleName != "" {
+			awsEKSRoleARN, err = pcMgr.GetAWSEKSRoleARN(eksRoleName)
+			if err != nil {
+				log.Fatalf("AWS EKS role alias '%s' not found in repository configuration.\n"+
+					"Use 'hyve config aws eks-role-add --name %s --role-arn <arn>' to add it,\n"+
+					"or use 'hyve config aws eks-role-create --name %s --role-name <name> --region %s' to create one.", eksRoleName, eksRoleName, eksRoleName, region)
+			}
+			log.Printf("Using AWS EKS role '%s' (ARN: %s)", eksRoleName, awsEKSRoleARN)
+		}
 	}
 
 	clusterDef := types.ClusterDefinition{
@@ -328,11 +386,19 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 			Region: region,
 		},
 		Spec: types.ClusterSpec{
-			Provider:     providerName,
-			Nodes:        nodes,
-			ClusterType:  clusterType,
+			Provider:    providerName,
+			Nodes:       nodes,
+			ClusterType: clusterType,
+			// GCP-specific
 			GCPProject:   projectName,
 			GCPProjectID: gcpProjectID,
+			// AWS-specific
+			AWSAccount:    awsAccount,
+			AWSAccountID:  awsAccountID,
+			AWSVPCName:    vpcName,
+			AWSVPCID:      awsVPCID,
+			AWSEKSRole:    eksRoleName,
+			AWSEKSRoleARN: awsEKSRoleARN,
 			Ingress: types.IngressSpec{
 				Enabled:      true,
 				LoadBalancer: true,
@@ -357,6 +423,12 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 	log.Printf("  Cluster Type: %s", clusterType)
 	if projectName != "" {
 		log.Printf("  GCP Project: %s (ID: %s)", projectName, gcpProjectID)
+	}
+	if awsVPCID != "" {
+		log.Printf("  AWS VPC: %s (ID: %s)", vpcName, awsVPCID)
+	}
+	if awsEKSRoleARN != "" {
+		log.Printf("  AWS EKS Role: %s", eksRoleName)
 	}
 
 	// Commit changes to Git if configured

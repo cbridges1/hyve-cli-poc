@@ -21,9 +21,17 @@ type ClusterSpec struct {
 	Ingress     IngressSpec   `yaml:"ingress"`
 	Workflows   WorkflowsSpec `yaml:"workflows,omitempty"`
 
-	// Provider-specific configuration
+	// GCP-specific configuration
 	GCPProject   string `yaml:"gcpProject,omitempty"`   // GCP project name alias
 	GCPProjectID string `yaml:"gcpProjectId,omitempty"` // GCP project ID (resolved from alias)
+
+	// AWS-specific configuration
+	AWSAccount    string `yaml:"awsAccount,omitempty"`    // AWS account name alias
+	AWSAccountID  string `yaml:"awsAccountId,omitempty"`  // AWS account ID (resolved from alias)
+	AWSVPCName    string `yaml:"awsVpcName,omitempty"`    // AWS VPC name alias
+	AWSVPCID      string `yaml:"awsVpcId,omitempty"`      // AWS VPC ID (resolved from alias)
+	AWSEKSRole    string `yaml:"awsEksRole,omitempty"`    // AWS EKS role name alias
+	AWSEKSRoleARN string `yaml:"awsEksRoleArn,omitempty"` // AWS EKS role ARN (resolved from alias)
 }
 
 // ClusterMetadata represents cluster metadata

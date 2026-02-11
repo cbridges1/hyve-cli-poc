@@ -50,6 +50,11 @@ type ClusterConfig struct {
 	ClusterType  string
 	FirewallID   string
 	Applications []string
+
+	// AWS-specific configuration
+	AWSRoleARN   string   // IAM role ARN for EKS cluster
+	AWSVPCID     string   // VPC ID for EKS cluster
+	AWSSubnetIDs []string // Subnet IDs for EKS cluster (optional, discovered from VPC if not provided)
 }
 
 // ClusterUpdateConfig represents cluster update configuration

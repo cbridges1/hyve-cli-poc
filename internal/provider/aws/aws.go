@@ -6,8 +6,11 @@ import (
 	"log"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
 
@@ -57,6 +60,10 @@ type ClusterConfig struct {
 	ClusterType  string
 	FirewallID   string
 	Applications []string
+	// EKS-specific configuration
+	RoleARN   string   // IAM role ARN for the EKS cluster
+	VPCID     string   // VPC ID where the cluster will be created
+	SubnetIDs []string // Subnet IDs for the cluster (if empty, will be discovered from VPC)
 }
 
 // ClusterUpdateConfig represents cluster update configuration
@@ -84,6 +91,7 @@ type ClusterInfo struct {
 // Provider implements the provider interfaces for AWS
 type Provider struct {
 	eksClient *eks.Client
+	ec2Client *ec2.Client
 	region    string
 }
 
@@ -104,9 +112,11 @@ func NewProvider(accessKeyID, secretAccessKey, region string) (*Provider, error)
 	}
 
 	eksClient := eks.NewFromConfig(cfg)
+	ec2Client := ec2.NewFromConfig(cfg)
 
 	return &Provider{
 		eksClient: eksClient,
+		ec2Client: ec2Client,
 		region:    region,
 	}, nil
 }
@@ -162,24 +172,155 @@ func (p *Provider) FindClusterByName(ctx context.Context, name string) (*Cluster
 }
 
 // CreateCluster creates a new cluster
-func (p *Provider) CreateCluster(ctx context.Context, config *ClusterConfig) (*Cluster, error) {
-	log.Printf("Creating EKS cluster %s in region %s", config.Name, p.region)
+func (p *Provider) CreateCluster(ctx context.Context, clusterConfig *ClusterConfig) (*Cluster, error) {
+	log.Printf("Creating EKS cluster %s in region %s", clusterConfig.Name, p.region)
 
-	// Note: EKS cluster creation requires additional parameters like roleArn and subnets
-	// This is a simplified version - real implementation needs VPC/subnet configuration
+	// Validate required configuration
+	if clusterConfig.RoleARN == "" {
+		return nil, fmt.Errorf("EKS cluster creation requires a role ARN. Use --eks-role-name flag")
+	}
+	if clusterConfig.VPCID == "" {
+		return nil, fmt.Errorf("EKS cluster creation requires a VPC ID. Use --vpc-name flag")
+	}
+
+	// Get subnets from VPC if not provided
+	subnetIDs := clusterConfig.SubnetIDs
+	if len(subnetIDs) == 0 {
+		var err error
+		subnetIDs, err = p.getVPCSubnets(ctx, clusterConfig.VPCID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get subnets from VPC: %w", err)
+		}
+		if len(subnetIDs) < 2 {
+			return nil, fmt.Errorf("EKS requires at least 2 subnets in different availability zones, found %d", len(subnetIDs))
+		}
+		log.Printf("Discovered %d subnets from VPC %s", len(subnetIDs), clusterConfig.VPCID)
+	}
+
+	// Create a security group for the cluster
+	securityGroupID, err := p.createClusterSecurityGroup(ctx, clusterConfig.VPCID, clusterConfig.Name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create security group: %w", err)
+	}
+	log.Printf("Created security group %s for cluster %s", securityGroupID, clusterConfig.Name)
+
+	// Create the EKS cluster
 	createInput := &eks.CreateClusterInput{
-		Name: &config.Name,
-		// RoleArn and ResourcesVpcConfig would need to be provided
+		Name:    aws.String(clusterConfig.Name),
+		RoleArn: aws.String(clusterConfig.RoleARN),
+		ResourcesVpcConfig: &ekstypes.VpcConfigRequest{
+			SubnetIds:        subnetIDs,
+			SecurityGroupIds: []string{securityGroupID},
+		},
+		Tags: map[string]string{
+			"CreatedBy": "hyve",
+		},
 	}
 
 	resp, err := p.eksClient.CreateCluster(ctx, createInput)
 	if err != nil {
+		// Clean up security group if cluster creation fails
+		log.Printf("Cluster creation failed, cleaning up security group %s", securityGroupID)
+		_ = p.deleteSecurityGroup(ctx, securityGroupID)
 		return nil, fmt.Errorf("failed to create EKS cluster: %w", err)
 	}
 
 	log.Printf("EKS cluster creation started: %s", *resp.Cluster.Name)
 
 	return p.convertCluster(resp.Cluster), nil
+}
+
+// getVPCSubnets gets all subnets in a VPC
+func (p *Provider) getVPCSubnets(ctx context.Context, vpcID string) ([]string, error) {
+	resp, err := p.ec2Client.DescribeSubnets(ctx, &ec2.DescribeSubnetsInput{
+		Filters: []ec2types.Filter{
+			{Name: aws.String("vpc-id"), Values: []string{vpcID}},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to describe subnets: %w", err)
+	}
+
+	var subnetIDs []string
+	for _, subnet := range resp.Subnets {
+		if subnet.SubnetId != nil {
+			subnetIDs = append(subnetIDs, *subnet.SubnetId)
+		}
+	}
+
+	return subnetIDs, nil
+}
+
+// createClusterSecurityGroup creates a security group for the EKS cluster
+func (p *Provider) createClusterSecurityGroup(ctx context.Context, vpcID, clusterName string) (string, error) {
+	sgName := fmt.Sprintf("hyve-eks-%s-sg", clusterName)
+	sgDescription := fmt.Sprintf("Security group for EKS cluster %s created by Hyve", clusterName)
+
+	createResp, err := p.ec2Client.CreateSecurityGroup(ctx, &ec2.CreateSecurityGroupInput{
+		GroupName:   aws.String(sgName),
+		Description: aws.String(sgDescription),
+		VpcId:       aws.String(vpcID),
+		TagSpecifications: []ec2types.TagSpecification{
+			{
+				ResourceType: ec2types.ResourceTypeSecurityGroup,
+				Tags: []ec2types.Tag{
+					{Key: aws.String("Name"), Value: aws.String(sgName)},
+					{Key: aws.String("CreatedBy"), Value: aws.String("hyve")},
+					{Key: aws.String("EKSCluster"), Value: aws.String(clusterName)},
+				},
+			},
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to create security group: %w", err)
+	}
+
+	sgID := *createResp.GroupId
+
+	// Add ingress rules for EKS cluster communication
+	// Allow all traffic within the security group
+	_, err = p.ec2Client.AuthorizeSecurityGroupIngress(ctx, &ec2.AuthorizeSecurityGroupIngressInput{
+		GroupId: aws.String(sgID),
+		IpPermissions: []ec2types.IpPermission{
+			{
+				IpProtocol: aws.String("-1"), // All protocols
+				UserIdGroupPairs: []ec2types.UserIdGroupPair{
+					{GroupId: aws.String(sgID)},
+				},
+			},
+		},
+	})
+	if err != nil {
+		log.Printf("Warning: Failed to add self-referencing ingress rule: %v", err)
+	}
+
+	// Allow HTTPS from anywhere (for kubectl access)
+	_, err = p.ec2Client.AuthorizeSecurityGroupIngress(ctx, &ec2.AuthorizeSecurityGroupIngressInput{
+		GroupId: aws.String(sgID),
+		IpPermissions: []ec2types.IpPermission{
+			{
+				IpProtocol: aws.String("tcp"),
+				FromPort:   aws.Int32(443),
+				ToPort:     aws.Int32(443),
+				IpRanges: []ec2types.IpRange{
+					{CidrIp: aws.String("0.0.0.0/0"), Description: aws.String("HTTPS access for kubectl")},
+				},
+			},
+		},
+	})
+	if err != nil {
+		log.Printf("Warning: Failed to add HTTPS ingress rule: %v", err)
+	}
+
+	return sgID, nil
+}
+
+// deleteSecurityGroup deletes a security group
+func (p *Provider) deleteSecurityGroup(ctx context.Context, securityGroupID string) error {
+	_, err := p.ec2Client.DeleteSecurityGroup(ctx, &ec2.DeleteSecurityGroupInput{
+		GroupId: aws.String(securityGroupID),
+	})
+	return err
 }
 
 // UpdateCluster updates an existing cluster
