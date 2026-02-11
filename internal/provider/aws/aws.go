@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -329,13 +330,96 @@ func (p *Provider) UpdateCluster(ctx context.Context, clusterID string, config *
 	return p.GetCluster(ctx, clusterID)
 }
 
-// DeleteCluster deletes a cluster
+// DeleteCluster deletes a cluster and cleans up associated resources
 func (p *Provider) DeleteCluster(ctx context.Context, clusterID string) error {
-	_, err := p.eksClient.DeleteCluster(ctx, &eks.DeleteClusterInput{Name: &clusterID})
+	log.Printf("Deleting EKS cluster %s and cleaning up resources...", clusterID)
+
+	// Find security groups created by Hyve for this cluster before deletion
+	securityGroupIDs, err := p.findClusterSecurityGroups(ctx, clusterID)
+	if err != nil {
+		log.Printf("Warning: Failed to find security groups for cluster %s: %v", clusterID, err)
+	}
+
+	// Delete the EKS cluster
+	_, err = p.eksClient.DeleteCluster(ctx, &eks.DeleteClusterInput{Name: &clusterID})
 	if err != nil {
 		return fmt.Errorf("failed to delete EKS cluster: %w", err)
 	}
+
+	// Wait for cluster to be deleted before cleaning up security groups
+	log.Printf("Waiting for EKS cluster %s to be deleted...", clusterID)
+	if err := p.waitForClusterDeleted(ctx, clusterID); err != nil {
+		log.Printf("Warning: Error waiting for cluster deletion: %v", err)
+		// Continue with cleanup anyway
+	}
+
+	// Clean up security groups created by Hyve
+	for _, sgID := range securityGroupIDs {
+		log.Printf("Deleting security group %s created for cluster %s", sgID, clusterID)
+		if err := p.deleteSecurityGroup(ctx, sgID); err != nil {
+			log.Printf("Warning: Failed to delete security group %s: %v", sgID, err)
+		} else {
+			log.Printf("Successfully deleted security group %s", sgID)
+		}
+	}
+
 	return nil
+}
+
+// findClusterSecurityGroups finds security groups created by Hyve for a cluster
+func (p *Provider) findClusterSecurityGroups(ctx context.Context, clusterName string) ([]string, error) {
+	// Find security groups tagged with EKSCluster: clusterName and CreatedBy: hyve
+	resp, err := p.ec2Client.DescribeSecurityGroups(ctx, &ec2.DescribeSecurityGroupsInput{
+		Filters: []ec2types.Filter{
+			{Name: aws.String("tag:EKSCluster"), Values: []string{clusterName}},
+			{Name: aws.String("tag:CreatedBy"), Values: []string{"hyve"}},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to describe security groups: %w", err)
+	}
+
+	var sgIDs []string
+	for _, sg := range resp.SecurityGroups {
+		if sg.GroupId != nil {
+			sgIDs = append(sgIDs, *sg.GroupId)
+		}
+	}
+
+	return sgIDs, nil
+}
+
+// waitForClusterDeleted waits for a cluster to be fully deleted
+func (p *Provider) waitForClusterDeleted(ctx context.Context, clusterID string) error {
+	for {
+		_, err := p.eksClient.DescribeCluster(ctx, &eks.DescribeClusterInput{Name: &clusterID})
+		if err != nil {
+			// Check if it's a not found error (cluster deleted)
+			if isClusterNotFoundError(err) {
+				log.Printf("EKS cluster %s has been deleted", clusterID)
+				return nil
+			}
+			return fmt.Errorf("failed to check cluster status: %w", err)
+		}
+
+		log.Printf("EKS cluster %s still deleting, waiting...")
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(30 * time.Second):
+		}
+	}
+}
+
+// isClusterNotFoundError checks if the error indicates the cluster was not found
+func isClusterNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Check for ResourceNotFoundException
+	return strings.Contains(err.Error(), "ResourceNotFoundException") ||
+		strings.Contains(err.Error(), "not found")
 }
 
 // WaitForClusterReady waits for cluster to be ready
