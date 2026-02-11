@@ -96,9 +96,56 @@ type Provider struct {
 	region    string
 }
 
+// validAWSRegions contains common AWS regions for validation
+var validAWSRegions = map[string]bool{
+	"us-east-1":      true,
+	"us-east-2":      true,
+	"us-west-1":      true,
+	"us-west-2":      true,
+	"af-south-1":     true,
+	"ap-east-1":      true,
+	"ap-south-1":     true,
+	"ap-south-2":     true,
+	"ap-southeast-1": true,
+	"ap-southeast-2": true,
+	"ap-southeast-3": true,
+	"ap-southeast-4": true,
+	"ap-northeast-1": true,
+	"ap-northeast-2": true,
+	"ap-northeast-3": true,
+	"ca-central-1":   true,
+	"eu-central-1":   true,
+	"eu-central-2":   true,
+	"eu-west-1":      true,
+	"eu-west-2":      true,
+	"eu-west-3":      true,
+	"eu-south-1":     true,
+	"eu-south-2":     true,
+	"eu-north-1":     true,
+	"me-south-1":     true,
+	"me-central-1":   true,
+	"sa-east-1":      true,
+}
+
 // NewProvider creates a new AWS provider
 func NewProvider(accessKeyID, secretAccessKey, region string) (*Provider, error) {
 	ctx := context.Background()
+
+	// Validate and normalize region
+	if region == "" {
+		region = "us-east-1" // Default region
+		log.Printf("No AWS region specified, using default: %s", region)
+	}
+
+	// Check if the region looks like a valid AWS region
+	if !validAWSRegions[region] {
+		// Check if it looks like a non-AWS region (e.g., Civo regions like PHX1)
+		if !strings.Contains(region, "-") {
+			return nil, fmt.Errorf("invalid AWS region '%s'. AWS regions use format like 'us-east-1', 'eu-west-1', etc. "+
+				"The provided region appears to be for a different provider (e.g., Civo uses regions like PHX1)", region)
+		}
+		log.Printf("Warning: Region '%s' not in known AWS regions list, proceeding anyway", region)
+	}
 
 	var opts []func(*config.LoadOptions) error
 	opts = append(opts, config.WithRegion(region))
@@ -676,13 +723,54 @@ func (p *Provider) GetClusterInfo(ctx context.Context, name string) (*ClusterInf
 		endpoint = *cluster.Endpoint
 	}
 
+	// Generate kubeconfig for EKS cluster
+	kubeconfig := ""
+	if cluster.CertificateAuthority != nil && cluster.CertificateAuthority.Data != nil {
+		kubeconfig = p.generateEKSKubeconfig(name, endpoint, *cluster.CertificateAuthority.Data)
+	}
+
 	return &ClusterInfo{
 		Name:       *cluster.Name,
 		IPAddress:  endpoint,
 		AccessPort: "443",
+		Kubeconfig: kubeconfig,
 		Status:     string(cluster.Status),
 		ID:         *cluster.Name,
 	}, nil
+}
+
+// generateEKSKubeconfig generates a kubeconfig for an EKS cluster
+func (p *Provider) generateEKSKubeconfig(clusterName, endpoint, caData string) string {
+	// Generate kubeconfig that uses aws eks get-token for authentication
+	kubeconfig := fmt.Sprintf(`apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: %s
+    certificate-authority-data: %s
+  name: %s
+contexts:
+- context:
+    cluster: %s
+    user: %s
+  name: %s
+current-context: %s
+users:
+- name: %s
+  user:
+    exec:
+      apiVersion: client.authentication.k8s.io/v1beta1
+      command: aws
+      args:
+        - eks
+        - get-token
+        - --cluster-name
+        - %s
+        - --region
+        - %s
+`, endpoint, caData, clusterName, clusterName, clusterName, clusterName, clusterName, clusterName, clusterName, p.region)
+
+	return kubeconfig
 }
 
 // ListFirewalls lists all firewalls (security groups in AWS)

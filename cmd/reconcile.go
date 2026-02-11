@@ -26,12 +26,6 @@ and ensuring the actual infrastructure matches the desired state.`,
 }
 
 func runReconciliation() {
-	configMgr := config.NewManager()
-	apiKey := configMgr.GetCivoToken()
-	if apiKey == "" {
-		log.Fatal("CIVO API token not found. Please run 'hyve config set-token civo' or set CIVO_TOKEN environment variable")
-	}
-
 	ctx := context.Background()
 
 	// Create state manager from current repository configuration
@@ -48,6 +42,22 @@ func runReconciliation() {
 	}
 
 	clusterDefs = stateMgr.OrderClusters(clusterDefs)
+
+	// Check if any clusters require Civo - only then require the token
+	configMgr := config.NewManager()
+	apiKey := configMgr.GetCivoToken()
+
+	hasCivoClusters := false
+	for _, clusterDef := range clusterDefs {
+		if clusterDef.Spec.Provider == "" || clusterDef.Spec.Provider == "civo" {
+			hasCivoClusters = true
+			break
+		}
+	}
+
+	if hasCivoClusters && apiKey == "" {
+		log.Fatal("CIVO API token not found. Please run 'hyve config set-token civo' or set CIVO_TOKEN environment variable")
+	}
 
 	reconciler := reconcile.NewReconciler(apiKey, stateMgr)
 	err = reconciler.ReconcileAll(ctx, clusterDefs)

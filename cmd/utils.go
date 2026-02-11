@@ -8,12 +8,49 @@ import (
 
 	"civo-cluster-deploy/internal/cluster"
 	"civo-cluster-deploy/internal/provider"
+	"civo-cluster-deploy/internal/providerconfig"
+	"civo-cluster-deploy/internal/repository"
 	"civo-cluster-deploy/internal/types"
 )
 
 func exportClusterInfo(ctx context.Context, apiKey string, clusterDef types.ClusterDefinition) error {
 	factory := provider.NewFactory()
-	prov, err := factory.CreateProvider(clusterDef.Spec.Provider, apiKey, clusterDef.Metadata.Region)
+
+	// Build provider options based on cluster type
+	providerName := clusterDef.Spec.Provider
+	if providerName == "" {
+		providerName = "civo"
+	}
+
+	opts := provider.ProviderOptions{
+		Region: clusterDef.Metadata.Region,
+	}
+
+	// Only set API key for Civo provider
+	if providerName == "civo" {
+		opts.APIKey = apiKey
+	}
+
+	// Handle GCP-specific configuration
+	if providerName == "gcp" {
+		if clusterDef.Spec.GCPProjectID != "" {
+			opts.ProjectID = clusterDef.Spec.GCPProjectID
+		} else if clusterDef.Spec.GCPProject != "" {
+			// Resolve from alias
+			repoMgr, err := repository.NewManager()
+			if err == nil {
+				defer repoMgr.Close()
+				if currentRepo, err := repoMgr.GetCurrentRepository(); err == nil {
+					pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
+					if projectID, err := pcMgr.GetGCPProjectID(clusterDef.Spec.GCPProject); err == nil {
+						opts.ProjectID = projectID
+					}
+				}
+			}
+		}
+	}
+
+	prov, err := factory.CreateProviderWithOptions(providerName, opts)
 	if err != nil {
 		return fmt.Errorf("failed to create provider: %w", err)
 	}
