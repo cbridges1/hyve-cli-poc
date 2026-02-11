@@ -184,7 +184,23 @@ func (p *Provider) CreateCluster(ctx context.Context, clusterConfig *ClusterConf
 		return nil, fmt.Errorf("EKS cluster creation requires a VPC ID. Use --vpc-name flag")
 	}
 
-	// Get subnets from VPC if not provided
+	// Track resources created for cleanup on failure
+	var createdSubnetIDs []string
+	var securityGroupID string
+
+	// Cleanup function for failure cases
+	cleanup := func() {
+		for _, subnetID := range createdSubnetIDs {
+			log.Printf("Cleaning up subnet %s", subnetID)
+			_ = p.deleteSubnet(ctx, subnetID)
+		}
+		if securityGroupID != "" {
+			log.Printf("Cleaning up security group %s", securityGroupID)
+			_ = p.deleteSecurityGroup(ctx, securityGroupID)
+		}
+	}
+
+	// Get existing subnets from VPC
 	subnetIDs := clusterConfig.SubnetIDs
 	if len(subnetIDs) == 0 {
 		var err error
@@ -192,15 +208,43 @@ func (p *Provider) CreateCluster(ctx context.Context, clusterConfig *ClusterConf
 		if err != nil {
 			return nil, fmt.Errorf("failed to get subnets from VPC: %w", err)
 		}
-		if len(subnetIDs) < 2 {
-			return nil, fmt.Errorf("EKS requires at least 2 subnets in different availability zones, found %d", len(subnetIDs))
+		log.Printf("Found %d existing subnets in VPC %s", len(subnetIDs), clusterConfig.VPCID)
+	}
+
+	// Check if we have at least 2 subnets in different AZs
+	if len(subnetIDs) < 2 {
+		log.Printf("EKS requires at least 2 subnets in different availability zones, creating subnets...")
+
+		// Get VPC CIDR to calculate subnet CIDRs
+		vpcCIDR, err := p.getVPCCIDR(ctx, clusterConfig.VPCID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get VPC CIDR: %w", err)
 		}
-		log.Printf("Discovered %d subnets from VPC %s", len(subnetIDs), clusterConfig.VPCID)
+
+		// Get available availability zones
+		azs, err := p.getAvailabilityZones(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get availability zones: %w", err)
+		}
+		if len(azs) < 2 {
+			return nil, fmt.Errorf("need at least 2 availability zones, found %d", len(azs))
+		}
+
+		// Create subnets in at least 2 different AZs
+		createdSubnetIDs, err = p.createClusterSubnets(ctx, clusterConfig.VPCID, clusterConfig.Name, vpcCIDR, azs[:2])
+		if err != nil {
+			cleanup()
+			return nil, fmt.Errorf("failed to create subnets: %w", err)
+		}
+		subnetIDs = createdSubnetIDs
+		log.Printf("Created %d subnets for cluster %s", len(createdSubnetIDs), clusterConfig.Name)
 	}
 
 	// Create a security group for the cluster
-	securityGroupID, err := p.createClusterSecurityGroup(ctx, clusterConfig.VPCID, clusterConfig.Name)
+	var err error
+	securityGroupID, err = p.createClusterSecurityGroup(ctx, clusterConfig.VPCID, clusterConfig.Name)
 	if err != nil {
+		cleanup()
 		return nil, fmt.Errorf("failed to create security group: %w", err)
 	}
 	log.Printf("Created security group %s for cluster %s", securityGroupID, clusterConfig.Name)
@@ -220,9 +264,7 @@ func (p *Provider) CreateCluster(ctx context.Context, clusterConfig *ClusterConf
 
 	resp, err := p.eksClient.CreateCluster(ctx, createInput)
 	if err != nil {
-		// Clean up security group if cluster creation fails
-		log.Printf("Cluster creation failed, cleaning up security group %s", securityGroupID)
-		_ = p.deleteSecurityGroup(ctx, securityGroupID)
+		cleanup()
 		return nil, fmt.Errorf("failed to create EKS cluster: %w", err)
 	}
 
@@ -250,6 +292,138 @@ func (p *Provider) getVPCSubnets(ctx context.Context, vpcID string) ([]string, e
 	}
 
 	return subnetIDs, nil
+}
+
+// getVPCCIDR gets the CIDR block for a VPC
+func (p *Provider) getVPCCIDR(ctx context.Context, vpcID string) (string, error) {
+	resp, err := p.ec2Client.DescribeVpcs(ctx, &ec2.DescribeVpcsInput{
+		VpcIds: []string{vpcID},
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to describe VPC: %w", err)
+	}
+
+	if len(resp.Vpcs) == 0 {
+		return "", fmt.Errorf("VPC %s not found", vpcID)
+	}
+
+	if resp.Vpcs[0].CidrBlock == nil {
+		return "", fmt.Errorf("VPC %s has no CIDR block", vpcID)
+	}
+
+	return *resp.Vpcs[0].CidrBlock, nil
+}
+
+// getAvailabilityZones gets available availability zones in the region
+func (p *Provider) getAvailabilityZones(ctx context.Context) ([]string, error) {
+	resp, err := p.ec2Client.DescribeAvailabilityZones(ctx, &ec2.DescribeAvailabilityZonesInput{
+		Filters: []ec2types.Filter{
+			{Name: aws.String("state"), Values: []string{"available"}},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to describe availability zones: %w", err)
+	}
+
+	var azs []string
+	for _, az := range resp.AvailabilityZones {
+		if az.ZoneName != nil {
+			azs = append(azs, *az.ZoneName)
+		}
+	}
+
+	return azs, nil
+}
+
+// createClusterSubnets creates subnets for the EKS cluster in different AZs
+func (p *Provider) createClusterSubnets(ctx context.Context, vpcID, clusterName, vpcCIDR string, azs []string) ([]string, error) {
+	// Parse the VPC CIDR to generate subnet CIDRs
+	// For a /16 VPC, we'll create /24 subnets
+	// For example: 10.0.0.0/16 -> 10.0.1.0/24, 10.0.2.0/24
+	subnetCIDRs, err := generateSubnetCIDRs(vpcCIDR, len(azs))
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate subnet CIDRs: %w", err)
+	}
+
+	var createdSubnetIDs []string
+
+	for i, az := range azs {
+		if i >= len(subnetCIDRs) {
+			break
+		}
+
+		subnetName := fmt.Sprintf("hyve-eks-%s-subnet-%d", clusterName, i+1)
+		log.Printf("Creating subnet %s in %s with CIDR %s", subnetName, az, subnetCIDRs[i])
+
+		createResp, err := p.ec2Client.CreateSubnet(ctx, &ec2.CreateSubnetInput{
+			VpcId:            aws.String(vpcID),
+			CidrBlock:        aws.String(subnetCIDRs[i]),
+			AvailabilityZone: aws.String(az),
+			TagSpecifications: []ec2types.TagSpecification{
+				{
+					ResourceType: ec2types.ResourceTypeSubnet,
+					Tags: []ec2types.Tag{
+						{Key: aws.String("Name"), Value: aws.String(subnetName)},
+						{Key: aws.String("CreatedBy"), Value: aws.String("hyve")},
+						{Key: aws.String("EKSCluster"), Value: aws.String(clusterName)},
+					},
+				},
+			},
+		})
+		if err != nil {
+			// Clean up already created subnets on failure
+			for _, subnetID := range createdSubnetIDs {
+				_ = p.deleteSubnet(ctx, subnetID)
+			}
+			return nil, fmt.Errorf("failed to create subnet in %s: %w", az, err)
+		}
+
+		subnetID := *createResp.Subnet.SubnetId
+		createdSubnetIDs = append(createdSubnetIDs, subnetID)
+		log.Printf("Created subnet %s (%s) in %s", subnetName, subnetID, az)
+
+		// Enable auto-assign public IP for the subnet (required for EKS nodes to access internet)
+		_, err = p.ec2Client.ModifySubnetAttribute(ctx, &ec2.ModifySubnetAttributeInput{
+			SubnetId:            aws.String(subnetID),
+			MapPublicIpOnLaunch: &ec2types.AttributeBooleanValue{Value: aws.Bool(true)},
+		})
+		if err != nil {
+			log.Printf("Warning: Failed to enable auto-assign public IP for subnet %s: %v", subnetID, err)
+		}
+	}
+
+	return createdSubnetIDs, nil
+}
+
+// generateSubnetCIDRs generates subnet CIDRs from a VPC CIDR
+func generateSubnetCIDRs(vpcCIDR string, count int) ([]string, error) {
+	// Parse the VPC CIDR (e.g., "10.0.0.0/16")
+	parts := strings.Split(vpcCIDR, "/")
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("invalid CIDR format: %s", vpcCIDR)
+	}
+
+	ipParts := strings.Split(parts[0], ".")
+	if len(ipParts) != 4 {
+		return nil, fmt.Errorf("invalid IP format: %s", parts[0])
+	}
+
+	// Generate /24 subnets starting from .1.0, .2.0, etc.
+	var cidrs []string
+	for i := 1; i <= count; i++ {
+		cidr := fmt.Sprintf("%s.%s.%d.0/24", ipParts[0], ipParts[1], i)
+		cidrs = append(cidrs, cidr)
+	}
+
+	return cidrs, nil
+}
+
+// deleteSubnet deletes a subnet
+func (p *Provider) deleteSubnet(ctx context.Context, subnetID string) error {
+	_, err := p.ec2Client.DeleteSubnet(ctx, &ec2.DeleteSubnetInput{
+		SubnetId: aws.String(subnetID),
+	})
+	return err
 }
 
 // createClusterSecurityGroup creates a security group for the EKS cluster
@@ -334,10 +508,15 @@ func (p *Provider) UpdateCluster(ctx context.Context, clusterID string, config *
 func (p *Provider) DeleteCluster(ctx context.Context, clusterID string) error {
 	log.Printf("Deleting EKS cluster %s and cleaning up resources...", clusterID)
 
-	// Find security groups created by Hyve for this cluster before deletion
+	// Find resources created by Hyve for this cluster before deletion
 	securityGroupIDs, err := p.findClusterSecurityGroups(ctx, clusterID)
 	if err != nil {
 		log.Printf("Warning: Failed to find security groups for cluster %s: %v", clusterID, err)
+	}
+
+	subnetIDs, err := p.findClusterSubnets(ctx, clusterID)
+	if err != nil {
+		log.Printf("Warning: Failed to find subnets for cluster %s: %v", clusterID, err)
 	}
 
 	// Delete the EKS cluster
@@ -346,7 +525,7 @@ func (p *Provider) DeleteCluster(ctx context.Context, clusterID string) error {
 		return fmt.Errorf("failed to delete EKS cluster: %w", err)
 	}
 
-	// Wait for cluster to be deleted before cleaning up security groups
+	// Wait for cluster to be deleted before cleaning up resources
 	log.Printf("Waiting for EKS cluster %s to be deleted...", clusterID)
 	if err := p.waitForClusterDeleted(ctx, clusterID); err != nil {
 		log.Printf("Warning: Error waiting for cluster deletion: %v", err)
@@ -360,6 +539,16 @@ func (p *Provider) DeleteCluster(ctx context.Context, clusterID string) error {
 			log.Printf("Warning: Failed to delete security group %s: %v", sgID, err)
 		} else {
 			log.Printf("Successfully deleted security group %s", sgID)
+		}
+	}
+
+	// Clean up subnets created by Hyve
+	for _, subnetID := range subnetIDs {
+		log.Printf("Deleting subnet %s created for cluster %s", subnetID, clusterID)
+		if err := p.deleteSubnet(ctx, subnetID); err != nil {
+			log.Printf("Warning: Failed to delete subnet %s: %v", subnetID, err)
+		} else {
+			log.Printf("Successfully deleted subnet %s", subnetID)
 		}
 	}
 
@@ -387,6 +576,29 @@ func (p *Provider) findClusterSecurityGroups(ctx context.Context, clusterName st
 	}
 
 	return sgIDs, nil
+}
+
+// findClusterSubnets finds subnets created by Hyve for a cluster
+func (p *Provider) findClusterSubnets(ctx context.Context, clusterName string) ([]string, error) {
+	// Find subnets tagged with EKSCluster: clusterName and CreatedBy: hyve
+	resp, err := p.ec2Client.DescribeSubnets(ctx, &ec2.DescribeSubnetsInput{
+		Filters: []ec2types.Filter{
+			{Name: aws.String("tag:EKSCluster"), Values: []string{clusterName}},
+			{Name: aws.String("tag:CreatedBy"), Values: []string{"hyve"}},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to describe subnets: %w", err)
+	}
+
+	var subnetIDs []string
+	for _, subnet := range resp.Subnets {
+		if subnet.SubnetId != nil {
+			subnetIDs = append(subnetIDs, *subnet.SubnetId)
+		}
+	}
+
+	return subnetIDs, nil
 }
 
 // waitForClusterDeleted waits for a cluster to be fully deleted
