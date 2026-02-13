@@ -73,8 +73,9 @@ func (m *Manager) Create(ctx context.Context, clusterDef types.ClusterDefinition
 		Nodes:       clusterDef.Spec.Nodes,
 		ClusterType: clusterDef.Spec.ClusterType,
 		// AWS-specific configuration
-		AWSRoleARN: clusterDef.Spec.AWSEKSRoleARN,
-		AWSVPCID:   clusterDef.Spec.AWSVPCID,
+		AWSRoleARN:     clusterDef.Spec.AWSEKSRoleARN,
+		AWSNodeRoleARN: clusterDef.Spec.AWSNodeRoleARN,
+		AWSVPCID:       clusterDef.Spec.AWSVPCID,
 	}
 
 	return m.provider.CreateCluster(ctx, config)

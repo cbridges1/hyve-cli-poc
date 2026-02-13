@@ -34,6 +34,12 @@ type AWSEKSRole struct {
 	RoleARN string `yaml:"role_arn"`
 }
 
+// AWSNodeRole represents a named EKS node IAM role
+type AWSNodeRole struct {
+	Name    string `yaml:"name"`
+	RoleARN string `yaml:"role_arn"`
+}
+
 // AWSVPC represents a named VPC
 type AWSVPC struct {
 	Name  string `yaml:"name"`
@@ -42,10 +48,11 @@ type AWSVPC struct {
 
 // AWSConfig represents AWS-specific configuration
 type AWSConfig struct {
-	Accounts []AWSAccount `yaml:"accounts,omitempty"`
-	Regions  []string     `yaml:"regions,omitempty"`
-	EKSRoles []AWSEKSRole `yaml:"eks_roles,omitempty"`
-	VPCs     []AWSVPC     `yaml:"vpcs,omitempty"`
+	Accounts  []AWSAccount  `yaml:"accounts,omitempty"`
+	Regions   []string      `yaml:"regions,omitempty"`
+	EKSRoles  []AWSEKSRole  `yaml:"eks_roles,omitempty"`
+	NodeRoles []AWSNodeRole `yaml:"node_roles,omitempty"`
+	VPCs      []AWSVPC      `yaml:"vpcs,omitempty"`
 }
 
 // AzureConfig represents Azure-specific configuration
@@ -438,6 +445,98 @@ func (m *Manager) HasAWSEKSRole(name string) (bool, error) {
 	}
 
 	for _, r := range config.EKSRoles {
+		if r.Name == name {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// AddAWSNodeRole adds a named node role to the AWS configuration
+func (m *Manager) AddAWSNodeRole(name, roleARN string) error {
+	config, err := m.LoadAWSConfig()
+	if err != nil {
+		return err
+	}
+
+	// Check if name already exists
+	for i, r := range config.NodeRoles {
+		if r.Name == name {
+			// Update existing role
+			config.NodeRoles[i].RoleARN = roleARN
+			return m.SaveAWSConfig(config)
+		}
+	}
+
+	// Add new role
+	config.NodeRoles = append(config.NodeRoles, AWSNodeRole{
+		Name:    name,
+		RoleARN: roleARN,
+	})
+
+	return m.SaveAWSConfig(config)
+}
+
+// RemoveAWSNodeRole removes a node role by name from the AWS configuration
+func (m *Manager) RemoveAWSNodeRole(name string) error {
+	config, err := m.LoadAWSConfig()
+	if err != nil {
+		return err
+	}
+
+	filtered := []AWSNodeRole{}
+	found := false
+	for _, r := range config.NodeRoles {
+		if r.Name != name {
+			filtered = append(filtered, r)
+		} else {
+			found = true
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("node role '%s' not found", name)
+	}
+
+	config.NodeRoles = filtered
+	return m.SaveAWSConfig(config)
+}
+
+// GetAWSNodeRoleARN returns the role ARN for a given node role name
+func (m *Manager) GetAWSNodeRoleARN(name string) (string, error) {
+	config, err := m.LoadAWSConfig()
+	if err != nil {
+		return "", err
+	}
+
+	for _, r := range config.NodeRoles {
+		if r.Name == name {
+			return r.RoleARN, nil
+		}
+	}
+
+	return "", fmt.Errorf("node role '%s' not found in repository configuration", name)
+}
+
+// ListAWSNodeRoles returns all configured node roles
+func (m *Manager) ListAWSNodeRoles() ([]AWSNodeRole, error) {
+	config, err := m.LoadAWSConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	return config.NodeRoles, nil
+}
+
+// HasAWSNodeRole checks if a node role with the given name exists
+func (m *Manager) HasAWSNodeRole(name string) (bool, error) {
+	config, err := m.LoadAWSConfig()
+	if err != nil {
+		return false, err
+	}
+
+	for _, r := range config.NodeRoles {
 		if r.Name == name {
 			return true, nil
 		}

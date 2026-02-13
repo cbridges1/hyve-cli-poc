@@ -184,9 +184,10 @@ func (a *ProviderAdapter) CreateCluster(ctx context.Context, config *ClusterConf
 			FirewallID:   config.FirewallID,
 			Applications: config.Applications,
 			// EKS-specific configuration
-			RoleARN:   config.AWSRoleARN,
-			VPCID:     config.AWSVPCID,
-			SubnetIDs: config.AWSSubnetIDs,
+			RoleARN:     config.AWSRoleARN,
+			NodeRoleARN: config.AWSNodeRoleARN,
+			VPCID:       config.AWSVPCID,
+			SubnetIDs:   config.AWSSubnetIDs,
 		}
 		log.Printf("Creating AWS cluster with configuration: %+v", awsConfig)
 		awsCluster, err := a.aws.CreateCluster(ctx, awsConfig)

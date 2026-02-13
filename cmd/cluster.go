@@ -71,6 +71,7 @@ Supported cloud providers:
 		awsAccount, _ := cmd.Flags().GetString("aws-account")
 		vpcName, _ := cmd.Flags().GetString("vpc-name")
 		eksRoleName, _ := cmd.Flags().GetString("eks-role-name")
+		nodeRoleName, _ := cmd.Flags().GetString("node-role-name")
 
 		// Validate provider
 		if !isValidProvider(providerName) {
@@ -93,9 +94,12 @@ Supported cloud providers:
 			if eksRoleName == "" {
 				log.Fatalf("AWS provider requires --eks-role-name flag. Use 'hyve config aws eks-role-list' to see available roles.")
 			}
+			if nodeRoleName == "" {
+				log.Fatalf("AWS provider requires --node-role-name flag. Use 'hyve config aws node-role-list' to see available roles.")
+			}
 		}
 
-		addClusterFromCLI(clusterName, region, providerName, nodes, clusterType, projectName, awsAccount, vpcName, eksRoleName)
+		addClusterFromCLI(clusterName, region, providerName, nodes, clusterType, projectName, awsAccount, vpcName, eksRoleName, nodeRoleName)
 	},
 }
 
@@ -200,6 +204,7 @@ func init() {
 	addCmd.Flags().String("aws-account", "", "AWS account name alias (optional, use 'hyve config aws account-list' to see available)")
 	addCmd.Flags().String("vpc-name", "", "AWS VPC name alias (required for AWS provider, use 'hyve config aws vpc-list' to see available)")
 	addCmd.Flags().String("eks-role-name", "", "AWS EKS IAM role name alias (required for AWS provider, use 'hyve config aws eks-role-list' to see available)")
+	addCmd.Flags().String("node-role-name", "", "AWS EKS node IAM role name alias (required for AWS provider, use 'hyve config aws node-role-list' to see available)")
 
 	modifyCmd.Flags().StringP("region", "r", "", "Region for the cluster")
 	modifyCmd.Flags().StringP("provider", "p", "", "Cloud provider")
@@ -303,7 +308,7 @@ func commitStateChanges(ctx context.Context, stateMgr *state.Manager, message st
 	log.Println("✅ Changes committed and pushed to remote repository successfully")
 }
 
-func addClusterFromCLI(clusterName, region, providerName string, nodes []string, clusterType, projectName, awsAccount, vpcName, eksRoleName string) {
+func addClusterFromCLI(clusterName, region, providerName string, nodes []string, clusterType, projectName, awsAccount, vpcName, eksRoleName, nodeRoleName string) {
 	ctx := context.Background()
 	stateMgr, stateDir := createStateManager(ctx)
 
@@ -343,7 +348,7 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 	}
 
 	// Resolve AWS aliases
-	var awsAccountID, awsVPCID, awsEKSRoleARN string
+	var awsAccountID, awsVPCID, awsEKSRoleARN, awsNodeRoleARN string
 	if providerName == "aws" {
 		// Resolve AWS account alias (optional)
 		if awsAccount != "" {
@@ -376,6 +381,17 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 			}
 			log.Printf("Using AWS EKS role '%s' (ARN: %s)", eksRoleName, awsEKSRoleARN)
 		}
+
+		// Resolve node role alias (required for AWS)
+		if nodeRoleName != "" {
+			awsNodeRoleARN, err = pcMgr.GetAWSNodeRoleARN(nodeRoleName)
+			if err != nil {
+				log.Fatalf("AWS node role alias '%s' not found in repository configuration.\n"+
+					"Use 'hyve config aws node-role-add --name %s --role-arn <arn>' to add it,\n"+
+					"or use 'hyve config aws node-role-create --name %s --role-name <name> --region %s' to create one.", nodeRoleName, nodeRoleName, nodeRoleName, region)
+			}
+			log.Printf("Using AWS node role '%s' (ARN: %s)", nodeRoleName, awsNodeRoleARN)
+		}
 	}
 
 	clusterDef := types.ClusterDefinition{
@@ -393,12 +409,14 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 			GCPProject:   projectName,
 			GCPProjectID: gcpProjectID,
 			// AWS-specific
-			AWSAccount:    awsAccount,
-			AWSAccountID:  awsAccountID,
-			AWSVPCName:    vpcName,
-			AWSVPCID:      awsVPCID,
-			AWSEKSRole:    eksRoleName,
-			AWSEKSRoleARN: awsEKSRoleARN,
+			AWSAccount:     awsAccount,
+			AWSAccountID:   awsAccountID,
+			AWSVPCName:     vpcName,
+			AWSVPCID:       awsVPCID,
+			AWSEKSRole:     eksRoleName,
+			AWSEKSRoleARN:  awsEKSRoleARN,
+			AWSNodeRole:    nodeRoleName,
+			AWSNodeRoleARN: awsNodeRoleARN,
 			Ingress: types.IngressSpec{
 				Enabled:      true,
 				LoadBalancer: true,
@@ -429,6 +447,9 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 	}
 	if awsEKSRoleARN != "" {
 		log.Printf("  AWS EKS Role: %s", eksRoleName)
+	}
+	if awsNodeRoleARN != "" {
+		log.Printf("  AWS Node Role: %s", nodeRoleName)
 	}
 
 	// Commit changes to Git if configured

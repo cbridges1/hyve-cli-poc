@@ -62,9 +62,10 @@ type ClusterConfig struct {
 	FirewallID   string
 	Applications []string
 	// EKS-specific configuration
-	RoleARN   string   // IAM role ARN for the EKS cluster
-	VPCID     string   // VPC ID where the cluster will be created
-	SubnetIDs []string // Subnet IDs for the cluster (if empty, will be discovered from VPC)
+	RoleARN     string   // IAM role ARN for the EKS cluster
+	NodeRoleARN string   // IAM role ARN for the EKS node group
+	VPCID       string   // VPC ID where the cluster will be created
+	SubnetIDs   []string // Subnet IDs for the cluster (if empty, will be discovered from VPC)
 }
 
 // ClusterUpdateConfig represents cluster update configuration
@@ -219,7 +220,7 @@ func (p *Provider) FindClusterByName(ctx context.Context, name string) (*Cluster
 	return p.convertCluster(resp.Cluster), nil
 }
 
-// CreateCluster creates a new cluster
+// CreateCluster creates a new cluster with a node group
 func (p *Provider) CreateCluster(ctx context.Context, clusterConfig *ClusterConfig) (*Cluster, error) {
 	log.Printf("Creating EKS cluster %s in region %s", clusterConfig.Name, p.region)
 
@@ -229,6 +230,9 @@ func (p *Provider) CreateCluster(ctx context.Context, clusterConfig *ClusterConf
 	}
 	if clusterConfig.VPCID == "" {
 		return nil, fmt.Errorf("EKS cluster creation requires a VPC ID. Use --vpc-name flag")
+	}
+	if clusterConfig.NodeRoleARN == "" {
+		return nil, fmt.Errorf("EKS cluster creation requires a node role ARN. Use --node-role-name flag")
 	}
 
 	// Track resources created for cleanup on failure
@@ -317,7 +321,29 @@ func (p *Provider) CreateCluster(ctx context.Context, clusterConfig *ClusterConf
 
 	log.Printf("EKS cluster creation started: %s", *resp.Cluster.Name)
 
-	return p.convertCluster(resp.Cluster), nil
+	// Wait for cluster to be active before creating node group
+	log.Printf("Waiting for EKS cluster %s to become active...", clusterConfig.Name)
+	if err := p.WaitForClusterReady(ctx, clusterConfig.Name); err != nil {
+		// Don't cleanup cluster resources on wait failure - cluster may still be creating
+		return nil, fmt.Errorf("failed waiting for cluster to be ready: %w", err)
+	}
+
+	// Create node group with the specified nodes
+	log.Printf("Creating node group for cluster %s...", clusterConfig.Name)
+	if err := p.createNodeGroup(ctx, clusterConfig.Name, clusterConfig.NodeRoleARN, subnetIDs, clusterConfig.Nodes); err != nil {
+		log.Printf("Warning: Failed to create node group: %v", err)
+		// Return the cluster even if node group creation fails - cluster is still usable
+	} else {
+		log.Printf("Node group creation started for cluster %s", clusterConfig.Name)
+	}
+
+	// Refresh cluster info
+	cluster, err := p.GetCluster(ctx, clusterConfig.Name)
+	if err != nil {
+		return p.convertCluster(resp.Cluster), nil
+	}
+
+	return cluster, nil
 }
 
 // getVPCSubnets gets all subnets in a VPC
@@ -545,6 +571,117 @@ func (p *Provider) deleteSecurityGroup(ctx context.Context, securityGroupID stri
 	return err
 }
 
+// createNodeGroup creates a managed node group for an EKS cluster
+func (p *Provider) createNodeGroup(ctx context.Context, clusterName, nodeRoleARN string, subnetIDs, nodes []string) error {
+	nodeGroupName := fmt.Sprintf("%s-nodes", clusterName)
+
+	// Determine instance type and count from nodes config
+	instanceType := "t3.medium" // Default instance type
+	desiredSize := int32(2)     // Default node count
+
+	if len(nodes) > 0 {
+		// First node entry is the instance type
+		instanceType = nodes[0]
+		// Use the number of node entries as the desired count (minimum 1)
+		desiredSize = int32(len(nodes))
+		if desiredSize < 1 {
+			desiredSize = 1
+		}
+	}
+
+	log.Printf("Creating node group %s with instance type %s and %d nodes", nodeGroupName, instanceType, desiredSize)
+
+	createInput := &eks.CreateNodegroupInput{
+		ClusterName:   aws.String(clusterName),
+		NodegroupName: aws.String(nodeGroupName),
+		NodeRole:      aws.String(nodeRoleARN),
+		Subnets:       subnetIDs,
+		ScalingConfig: &ekstypes.NodegroupScalingConfig{
+			DesiredSize: aws.Int32(desiredSize),
+			MinSize:     aws.Int32(1),
+			MaxSize:     aws.Int32(desiredSize + 2), // Allow some scaling headroom
+		},
+		InstanceTypes: []string{instanceType},
+		Tags: map[string]string{
+			"CreatedBy":  "hyve",
+			"EKSCluster": clusterName,
+		},
+	}
+
+	_, err := p.eksClient.CreateNodegroup(ctx, createInput)
+	if err != nil {
+		return fmt.Errorf("failed to create node group: %w", err)
+	}
+
+	return nil
+}
+
+// deleteNodeGroups deletes all node groups for a cluster
+func (p *Provider) deleteNodeGroups(ctx context.Context, clusterName string) error {
+	// List all node groups for the cluster
+	listResp, err := p.eksClient.ListNodegroups(ctx, &eks.ListNodegroupsInput{
+		ClusterName: aws.String(clusterName),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to list node groups: %w", err)
+	}
+
+	if len(listResp.Nodegroups) == 0 {
+		log.Printf("No node groups found for cluster %s", clusterName)
+		return nil
+	}
+
+	// Delete each node group
+	for _, nodeGroupName := range listResp.Nodegroups {
+		log.Printf("Deleting node group %s from cluster %s", nodeGroupName, clusterName)
+		_, err := p.eksClient.DeleteNodegroup(ctx, &eks.DeleteNodegroupInput{
+			ClusterName:   aws.String(clusterName),
+			NodegroupName: aws.String(nodeGroupName),
+		})
+		if err != nil {
+			log.Printf("Warning: Failed to delete node group %s: %v", nodeGroupName, err)
+			continue
+		}
+	}
+
+	// Wait for all node groups to be deleted
+	log.Printf("Waiting for node groups to be deleted...")
+	for _, nodeGroupName := range listResp.Nodegroups {
+		if err := p.waitForNodeGroupDeleted(ctx, clusterName, nodeGroupName); err != nil {
+			log.Printf("Warning: Error waiting for node group %s deletion: %v", nodeGroupName, err)
+		}
+	}
+
+	return nil
+}
+
+// waitForNodeGroupDeleted waits for a node group to be fully deleted
+func (p *Provider) waitForNodeGroupDeleted(ctx context.Context, clusterName, nodeGroupName string) error {
+	for {
+		_, err := p.eksClient.DescribeNodegroup(ctx, &eks.DescribeNodegroupInput{
+			ClusterName:   aws.String(clusterName),
+			NodegroupName: aws.String(nodeGroupName),
+		})
+		if err != nil {
+			// Check if it's a not found error (node group deleted)
+			if strings.Contains(err.Error(), "ResourceNotFoundException") ||
+				strings.Contains(err.Error(), "not found") {
+				log.Printf("Node group %s has been deleted", nodeGroupName)
+				return nil
+			}
+			return fmt.Errorf("failed to check node group status: %w", err)
+		}
+
+		log.Printf("Node group %s still deleting, waiting...", nodeGroupName)
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(30 * time.Second):
+		}
+	}
+}
+
 // UpdateCluster updates an existing cluster
 func (p *Provider) UpdateCluster(ctx context.Context, clusterID string, config *ClusterUpdateConfig) (*Cluster, error) {
 	// EKS cluster updates are limited - return current cluster
@@ -564,6 +701,13 @@ func (p *Provider) DeleteCluster(ctx context.Context, clusterID string) error {
 	subnetIDs, err := p.findClusterSubnets(ctx, clusterID)
 	if err != nil {
 		log.Printf("Warning: Failed to find subnets for cluster %s: %v", clusterID, err)
+	}
+
+	// Delete node groups first - EKS requires this before cluster deletion
+	log.Printf("Deleting node groups for cluster %s...", clusterID)
+	if err := p.deleteNodeGroups(ctx, clusterID); err != nil {
+		log.Printf("Warning: Failed to delete node groups: %v", err)
+		// Continue anyway - cluster deletion may still work
 	}
 
 	// Delete the EKS cluster
