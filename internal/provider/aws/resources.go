@@ -51,6 +51,20 @@ const eksAssumeRolePolicyDocument = `{
   ]
 }`
 
+// EC2 assume role policy document (for EKS node groups)
+const ec2AssumeRolePolicyDocument = `{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "ec2.amazonaws.com"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}`
+
 // EKSRoleInfo contains information about an EKS IAM role
 type EKSRoleInfo struct {
 	Name      string
@@ -143,6 +157,106 @@ func (m *ResourceManager) GetEKSRole(ctx context.Context, roleName string) (*EKS
 	}
 
 	return &EKSRoleInfo{
+		Name:      *resp.Role.RoleName,
+		ARN:       *resp.Role.Arn,
+		CreatedAt: *resp.Role.CreateDate,
+	}, nil
+}
+
+// NodeRoleInfo contains information about an EKS node IAM role
+type NodeRoleInfo struct {
+	Name      string
+	ARN       string
+	CreatedAt time.Time
+}
+
+// CreateNodeRole creates an IAM role for EKS node groups
+func (m *ResourceManager) CreateNodeRole(ctx context.Context, roleName string) (*NodeRoleInfo, error) {
+	// Create the IAM role with EC2 assume role policy
+	createRoleInput := &iam.CreateRoleInput{
+		RoleName:                 aws.String(roleName),
+		AssumeRolePolicyDocument: aws.String(ec2AssumeRolePolicyDocument),
+		Description:              aws.String("IAM role for EKS node group created by Hyve"),
+		Tags: []iamtypes.Tag{
+			{
+				Key:   aws.String("CreatedBy"),
+				Value: aws.String("hyve"),
+			},
+		},
+	}
+
+	createResp, err := m.iamClient.CreateRole(ctx, createRoleInput)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create IAM role: %w", err)
+	}
+
+	// Attach required EKS node policies
+	policies := []string{
+		"arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy",
+		"arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy",
+		"arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly",
+	}
+
+	for _, policyARN := range policies {
+		_, err := m.iamClient.AttachRolePolicy(ctx, &iam.AttachRolePolicyInput{
+			RoleName:  aws.String(roleName),
+			PolicyArn: aws.String(policyARN),
+		})
+		if err != nil {
+			// Try to clean up the role if policy attachment fails
+			_, _ = m.iamClient.DeleteRole(ctx, &iam.DeleteRoleInput{RoleName: aws.String(roleName)})
+			return nil, fmt.Errorf("failed to attach policy %s: %w", policyARN, err)
+		}
+	}
+
+	return &NodeRoleInfo{
+		Name:      *createResp.Role.RoleName,
+		ARN:       *createResp.Role.Arn,
+		CreatedAt: *createResp.Role.CreateDate,
+	}, nil
+}
+
+// DeleteNodeRole deletes an IAM role for EKS node groups
+func (m *ResourceManager) DeleteNodeRole(ctx context.Context, roleName string) error {
+	// First, detach all attached policies
+	listPoliciesResp, err := m.iamClient.ListAttachedRolePolicies(ctx, &iam.ListAttachedRolePoliciesInput{
+		RoleName: aws.String(roleName),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to list attached policies: %w", err)
+	}
+
+	for _, policy := range listPoliciesResp.AttachedPolicies {
+		_, err := m.iamClient.DetachRolePolicy(ctx, &iam.DetachRolePolicyInput{
+			RoleName:  aws.String(roleName),
+			PolicyArn: policy.PolicyArn,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to detach policy %s: %w", *policy.PolicyArn, err)
+		}
+	}
+
+	// Delete the role
+	_, err = m.iamClient.DeleteRole(ctx, &iam.DeleteRoleInput{
+		RoleName: aws.String(roleName),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to delete IAM role: %w", err)
+	}
+
+	return nil
+}
+
+// GetNodeRole gets information about an EKS node IAM role
+func (m *ResourceManager) GetNodeRole(ctx context.Context, roleName string) (*NodeRoleInfo, error) {
+	resp, err := m.iamClient.GetRole(ctx, &iam.GetRoleInput{
+		RoleName: aws.String(roleName),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get IAM role: %w", err)
+	}
+
+	return &NodeRoleInfo{
 		Name:      *resp.Role.RoleName,
 		ARN:       *resp.Role.Arn,
 		CreatedAt: *resp.Role.CreateDate,

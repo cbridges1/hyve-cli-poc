@@ -211,12 +211,21 @@ func (p *Provider) GetCluster(ctx context.Context, clusterID string) (*Cluster, 
 
 // FindClusterByName finds a cluster by name
 func (p *Provider) FindClusterByName(ctx context.Context, name string) (*Cluster, error) {
+	log.Printf("Looking for EKS cluster '%s' in region %s", name, p.region)
+
 	resp, err := p.eksClient.DescribeCluster(ctx, &eks.DescribeClusterInput{Name: &name})
 	if err != nil {
-		// Check if it's a not found error
-		return nil, nil
+		// Only return nil for actual "not found" errors
+		if isClusterNotFoundError(err) {
+			log.Printf("EKS cluster '%s' not found in region %s", name, p.region)
+			return nil, nil
+		}
+		// Return the actual error for other issues (auth, permissions, etc.)
+		log.Printf("Error looking up EKS cluster '%s': %v", name, err)
+		return nil, fmt.Errorf("failed to describe EKS cluster '%s': %w", name, err)
 	}
 
+	log.Printf("Found EKS cluster '%s' in region %s (status: %s)", name, p.region, resp.Cluster.Status)
 	return p.convertCluster(resp.Cluster), nil
 }
 
@@ -805,7 +814,7 @@ func (p *Provider) waitForClusterDeleted(ctx context.Context, clusterID string) 
 			return fmt.Errorf("failed to check cluster status: %w", err)
 		}
 
-		log.Printf("EKS cluster %s still deleting, waiting...")
+		log.Printf("EKS cluster %s still deleting, waiting...", clusterID)
 
 		select {
 		case <-ctx.Done():
@@ -820,9 +829,12 @@ func isClusterNotFoundError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// Check for ResourceNotFoundException
-	return strings.Contains(err.Error(), "ResourceNotFoundException") ||
-		strings.Contains(err.Error(), "not found")
+	errStr := err.Error()
+	// Check for AWS ResourceNotFoundException
+	// Also check for specific EKS "cluster not found" messages
+	return strings.Contains(errStr, "ResourceNotFoundException") ||
+		strings.Contains(errStr, "No cluster found") ||
+		(strings.Contains(errStr, "cluster") && strings.Contains(errStr, "not found"))
 }
 
 // WaitForClusterReady waits for cluster to be ready

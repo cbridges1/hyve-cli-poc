@@ -330,6 +330,105 @@ Examples:
 	},
 }
 
+// AWS Node Role commands
+var configAWSNodeRoleAddCmd = &cobra.Command{
+	Use:   "node-role-add",
+	Short: "Add an EKS node IAM role to the repository configuration",
+	Long: `Add an EKS node IAM role with a friendly name/alias to the repository's provider configuration.
+
+The role is stored in provider-configs/aws.yaml in the current repository.
+The name can then be used as an alias when creating EKS clusters.
+
+Examples:
+  hyve config aws node-role-add --name default-node-role --role-arn arn:aws:iam::123456789012:role/my-eks-node-role
+  hyve config aws node-role-add --name prod-node-role --role-arn arn:aws:iam::123456789012:role/prod-eks-node-role`,
+	Run: func(cmd *cobra.Command, args []string) {
+		name, _ := cmd.Flags().GetString("name")
+		roleARN, _ := cmd.Flags().GetString("role-arn")
+		addAWSNodeRole(name, roleARN)
+	},
+}
+
+var configAWSNodeRoleRemoveCmd = &cobra.Command{
+	Use:   "node-role-remove [name]",
+	Short: "Remove an EKS node IAM role from the repository configuration",
+	Long: `Remove an EKS node IAM role by its alias/name from the repository's provider configuration.
+
+Examples:
+  hyve config aws node-role-remove default-node-role`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		removeAWSNodeRole(args[0])
+	},
+}
+
+var configAWSNodeRoleListCmd = &cobra.Command{
+	Use:   "node-role-list",
+	Short: "List configured EKS node IAM roles",
+	Long:  "Display all EKS node IAM roles configured in the current repository with their aliases.",
+	Run: func(cmd *cobra.Command, args []string) {
+		listAWSNodeRoles()
+	},
+}
+
+var configAWSNodeRoleGetCmd = &cobra.Command{
+	Use:   "node-role-get [name]",
+	Short: "Get the role ARN for an EKS node IAM role alias",
+	Long: `Display the EKS node IAM role ARN associated with a given alias/name.
+
+Examples:
+  hyve config aws node-role-get default-node-role`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		getAWSNodeRole(args[0])
+	},
+}
+
+// AWS Node Role create/delete commands (actual AWS operations)
+var configAWSNodeRoleCreateCmd = &cobra.Command{
+	Use:   "node-role-create",
+	Short: "Create an EKS node IAM role in AWS",
+	Long: `Create an IAM role for EKS worker nodes in AWS and store the alias in the repository configuration.
+
+This command creates an actual IAM role in AWS with the EC2 assume role policy and
+attaches the required EKS node policies (AmazonEKSWorkerNodePolicy, AmazonEKS_CNI_Policy,
+AmazonEC2ContainerRegistryReadOnly). The role ARN is then stored with the given alias.
+
+Requires AWS credentials configured via 'aws configure' or environment variables.
+
+Examples:
+  hyve config aws node-role-create --name default-node-role --role-name my-eks-node-role --region us-east-1
+  hyve config aws node-role-create --name prod-node-role --role-name prod-eks-node-role --region us-west-2`,
+	Run: func(cmd *cobra.Command, args []string) {
+		name, _ := cmd.Flags().GetString("name")
+		roleName, _ := cmd.Flags().GetString("role-name")
+		region, _ := cmd.Flags().GetString("region")
+		createAWSNodeRole(name, roleName, region)
+	},
+}
+
+var configAWSNodeRoleDeleteCmd = &cobra.Command{
+	Use:   "node-role-delete [name]",
+	Short: "Delete an EKS node IAM role from AWS",
+	Long: `Delete an EKS node IAM role from AWS and remove it from the repository configuration.
+
+This command deletes the actual IAM role from AWS (detaching all policies first),
+then removes the alias from the repository configuration.
+
+Use --config-only to remove only the configuration without deleting the AWS role.
+
+Examples:
+  hyve config aws node-role-delete default-node-role
+  hyve config aws node-role-delete default-node-role --region us-east-1
+  hyve config aws node-role-delete default-node-role --config-only`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		region, _ := cmd.Flags().GetString("region")
+		configOnly, _ := cmd.Flags().GetBool("config-only")
+		deleteAWSNodeRole(args[0], region, configOnly)
+	},
+}
+
 // AWS VPC commands
 var configAWSVPCAddCmd = &cobra.Command{
 	Use:   "vpc-add",
@@ -561,6 +660,28 @@ func init() {
 	configAWSCmd.AddCommand(configAWSEKSRoleRemoveCmd)
 	configAWSCmd.AddCommand(configAWSEKSRoleListCmd)
 	configAWSCmd.AddCommand(configAWSEKSRoleGetCmd)
+
+	// AWS Node Role subcommands
+	configAWSNodeRoleAddCmd.Flags().String("name", "", "Friendly name/alias for the node role (required)")
+	configAWSNodeRoleAddCmd.Flags().String("role-arn", "", "IAM role ARN for EKS nodes (required)")
+	configAWSNodeRoleAddCmd.MarkFlagRequired("name")
+	configAWSNodeRoleAddCmd.MarkFlagRequired("role-arn")
+	configAWSCmd.AddCommand(configAWSNodeRoleAddCmd)
+	configAWSCmd.AddCommand(configAWSNodeRoleRemoveCmd)
+	configAWSCmd.AddCommand(configAWSNodeRoleListCmd)
+	configAWSCmd.AddCommand(configAWSNodeRoleGetCmd)
+
+	// AWS Node Role create/delete subcommands (actual AWS operations)
+	configAWSNodeRoleCreateCmd.Flags().String("name", "", "Friendly name/alias for the node role (required)")
+	configAWSNodeRoleCreateCmd.Flags().String("role-name", "", "IAM role name to create in AWS (required)")
+	configAWSNodeRoleCreateCmd.Flags().String("region", "us-east-1", "AWS region")
+	configAWSNodeRoleCreateCmd.MarkFlagRequired("name")
+	configAWSNodeRoleCreateCmd.MarkFlagRequired("role-name")
+	configAWSCmd.AddCommand(configAWSNodeRoleCreateCmd)
+
+	configAWSNodeRoleDeleteCmd.Flags().String("region", "us-east-1", "AWS region")
+	configAWSNodeRoleDeleteCmd.Flags().Bool("config-only", false, "Only remove from configuration, don't delete from AWS")
+	configAWSCmd.AddCommand(configAWSNodeRoleDeleteCmd)
 
 	// AWS VPC subcommands
 	configAWSVPCAddCmd.Flags().String("name", "", "Friendly name/alias for the VPC (required)")
@@ -1085,6 +1206,208 @@ func getAWSEKSRole(name string) {
 	}
 
 	fmt.Printf("%s\n", roleARN)
+}
+
+// AWS Node Role helper functions
+func addAWSNodeRole(name, roleARN string) {
+	if name == "" {
+		log.Fatal("Role name is required (--name)")
+	}
+	if roleARN == "" {
+		log.Fatal("Role ARN is required (--role-arn)")
+	}
+
+	repoPath := getRepoPath()
+	mgr := providerconfig.NewManager(repoPath)
+
+	exists, err := mgr.HasAWSNodeRole(name)
+	if err != nil {
+		log.Fatalf("Failed to check AWS config: %v", err)
+	}
+
+	if err := mgr.AddAWSNodeRole(name, roleARN); err != nil {
+		log.Fatalf("Failed to add node role: %v", err)
+	}
+
+	if exists {
+		log.Printf("✅ Updated node role '%s':\n", name)
+	} else {
+		log.Printf("✅ Added node role '%s':\n", name)
+	}
+	log.Printf("   Name:     %s", name)
+	log.Printf("   Role ARN: %s", roleARN)
+	log.Println()
+	log.Println("💡 The configuration is stored in provider-configs/aws.yaml")
+}
+
+func removeAWSNodeRole(name string) {
+	repoPath := getRepoPath()
+	mgr := providerconfig.NewManager(repoPath)
+
+	roleARN, err := mgr.GetAWSNodeRoleARN(name)
+	if err != nil {
+		log.Fatalf("❌ Node role '%s' not found", name)
+	}
+
+	if err := mgr.RemoveAWSNodeRole(name); err != nil {
+		log.Fatalf("Failed to remove node role: %v", err)
+	}
+
+	log.Printf("✅ Removed node role '%s' (ARN: %s)", name, roleARN)
+}
+
+func listAWSNodeRoles() {
+	repoPath := getRepoPath()
+	mgr := providerconfig.NewManager(repoPath)
+
+	roles, err := mgr.ListAWSNodeRoles()
+	if err != nil {
+		log.Fatalf("Failed to list node roles: %v", err)
+	}
+
+	if len(roles) == 0 {
+		log.Println("❌ No node roles configured")
+		log.Println()
+		log.Println("💡 Add a node role with:")
+		log.Println("   hyve config aws node-role-add --name default-node-role --role-arn arn:aws:iam::123456789012:role/my-node-role")
+		return
+	}
+
+	log.Printf("🔐 EKS Node IAM Roles (%d):\n", len(roles))
+	log.Println()
+	for _, r := range roles {
+		log.Printf("   %s", r.Name)
+		log.Printf("      Role ARN: %s", r.RoleARN)
+		log.Println()
+	}
+	log.Println("💡 Commands:")
+	log.Println("   hyve config aws node-role-add --name <name> --role-arn <arn>  # Add/update role")
+	log.Println("   hyve config aws node-role-remove <name>                       # Remove role")
+	log.Println("   hyve config aws node-role-get <name>                          # Get role ARN")
+}
+
+func getAWSNodeRole(name string) {
+	repoPath := getRepoPath()
+	mgr := providerconfig.NewManager(repoPath)
+
+	roleARN, err := mgr.GetAWSNodeRoleARN(name)
+	if err != nil {
+		log.Fatalf("❌ Node role '%s' not found", name)
+	}
+
+	fmt.Printf("%s\n", roleARN)
+}
+
+// AWS Node Role create/delete helper functions (actual AWS operations)
+func createAWSNodeRole(name, roleName, region string) {
+	if name == "" {
+		log.Fatal("Role alias name is required (--name)")
+	}
+	if roleName == "" {
+		log.Fatal("IAM role name is required (--role-name)")
+	}
+	if region == "" {
+		region = "us-east-1"
+	}
+
+	repoPath := getRepoPath()
+	configMgr := providerconfig.NewManager(repoPath)
+
+	// Check if alias already exists
+	exists, err := configMgr.HasAWSNodeRole(name)
+	if err != nil {
+		log.Fatalf("Failed to check AWS config: %v", err)
+	}
+	if exists {
+		log.Fatalf("❌ Node role alias '%s' already exists. Use 'node-role-remove' first or choose a different name.", name)
+	}
+
+	log.Printf("🔐 Creating EKS node IAM role '%s' in AWS region %s...", roleName, region)
+
+	// Create the AWS resource manager
+	resourceMgr, err := aws.NewResourceManager(region)
+	if err != nil {
+		log.Fatalf("Failed to create AWS resource manager: %v", err)
+	}
+
+	// Create the IAM role for nodes
+	ctx := context.Background()
+	roleInfo, err := resourceMgr.CreateNodeRole(ctx, roleName)
+	if err != nil {
+		log.Fatalf("Failed to create node IAM role in AWS: %v", err)
+	}
+
+	log.Printf("✅ Created IAM role '%s' in AWS", roleInfo.Name)
+	log.Printf("   Role ARN: %s", roleInfo.ARN)
+
+	// Store the alias in configuration
+	if err := configMgr.AddAWSNodeRole(name, roleInfo.ARN); err != nil {
+		log.Printf("⚠️  Warning: Role created in AWS but failed to save alias: %v", err)
+		log.Printf("   You can manually add it with: hyve config aws node-role-add --name %s --role-arn %s", name, roleInfo.ARN)
+		return
+	}
+
+	log.Printf("✅ Stored alias '%s' in configuration", name)
+	log.Println()
+	log.Println("💡 The configuration is stored in provider-configs/aws.yaml")
+	log.Printf("💡 Use this role when creating EKS clusters with: --node-role-name %s", name)
+}
+
+func deleteAWSNodeRole(name, region string, configOnly bool) {
+	if region == "" {
+		region = "us-east-1"
+	}
+
+	repoPath := getRepoPath()
+	configMgr := providerconfig.NewManager(repoPath)
+
+	// Get the role ARN from config
+	roleARN, err := configMgr.GetAWSNodeRoleARN(name)
+	if err != nil {
+		log.Fatalf("❌ Node role alias '%s' not found in configuration", name)
+	}
+
+	if configOnly {
+		// Only remove from configuration
+		if err := configMgr.RemoveAWSNodeRole(name); err != nil {
+			log.Fatalf("Failed to remove node role from configuration: %v", err)
+		}
+		log.Printf("✅ Removed node role alias '%s' from configuration", name)
+		log.Printf("   Note: The IAM role still exists in AWS (ARN: %s)", roleARN)
+		return
+	}
+
+	// Extract role name from ARN (format: arn:aws:iam::123456789012:role/role-name)
+	roleName := extractRoleNameFromARN(roleARN)
+	if roleName == "" {
+		log.Fatalf("❌ Could not extract role name from ARN: %s", roleARN)
+	}
+
+	log.Printf("🗑️  Deleting node IAM role '%s' from AWS...", roleName)
+
+	// Create the AWS resource manager
+	resourceMgr, err := aws.NewResourceManager(region)
+	if err != nil {
+		log.Fatalf("Failed to create AWS resource manager: %v", err)
+	}
+
+	// Delete the IAM role
+	ctx := context.Background()
+	if err := resourceMgr.DeleteNodeRole(ctx, roleName); err != nil {
+		log.Fatalf("Failed to delete node IAM role from AWS: %v\n\n"+
+			"Configuration was NOT updated to prevent inconsistent state.\n"+
+			"Use --config-only to remove only the configuration.", err)
+	}
+
+	log.Printf("✅ Deleted IAM role '%s' from AWS", roleName)
+
+	// Remove from configuration
+	if err := configMgr.RemoveAWSNodeRole(name); err != nil {
+		log.Printf("⚠️  Warning: Role deleted from AWS but failed to remove alias: %v", err)
+		return
+	}
+
+	log.Printf("✅ Removed alias '%s' from configuration", name)
 }
 
 // AWS VPC helper functions
