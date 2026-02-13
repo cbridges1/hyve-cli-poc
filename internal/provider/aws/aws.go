@@ -508,7 +508,7 @@ func (p *Provider) deleteSubnet(ctx context.Context, subnetID string) error {
 	return err
 }
 
-// createClusterSecurityGroup creates a security group for the EKS cluster
+// createClusterSecurityGroup creates a security group for the EKS cluster or returns existing one
 func (p *Provider) createClusterSecurityGroup(ctx context.Context, vpcID, clusterName string) (string, error) {
 	sgName := fmt.Sprintf("hyve-eks-%s-sg", clusterName)
 	sgDescription := fmt.Sprintf("Security group for EKS cluster %s created by Hyve", clusterName)
@@ -529,6 +529,16 @@ func (p *Provider) createClusterSecurityGroup(ctx context.Context, vpcID, cluste
 		},
 	})
 	if err != nil {
+		// Check if security group already exists
+		if isSecurityGroupDuplicateError(err) {
+			log.Printf("Security group %s already exists, looking it up", sgName)
+			existingSgID, lookupErr := p.findSecurityGroupByName(ctx, vpcID, sgName)
+			if lookupErr != nil {
+				return "", fmt.Errorf("security group exists but failed to look up: %w", lookupErr)
+			}
+			log.Printf("Found existing security group %s", existingSgID)
+			return existingSgID, nil
+		}
 		return "", fmt.Errorf("failed to create security group: %w", err)
 	}
 
@@ -578,6 +588,35 @@ func (p *Provider) deleteSecurityGroup(ctx context.Context, securityGroupID stri
 		GroupId: aws.String(securityGroupID),
 	})
 	return err
+}
+
+// isSecurityGroupDuplicateError checks if the error indicates a duplicate security group
+func isSecurityGroupDuplicateError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Check for AWS API error code InvalidGroup.Duplicate
+	errStr := err.Error()
+	return strings.Contains(errStr, "InvalidGroup.Duplicate")
+}
+
+// findSecurityGroupByName finds a security group by name in a VPC
+func (p *Provider) findSecurityGroupByName(ctx context.Context, vpcID, sgName string) (string, error) {
+	resp, err := p.ec2Client.DescribeSecurityGroups(ctx, &ec2.DescribeSecurityGroupsInput{
+		Filters: []ec2types.Filter{
+			{Name: aws.String("vpc-id"), Values: []string{vpcID}},
+			{Name: aws.String("group-name"), Values: []string{sgName}},
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to describe security groups: %w", err)
+	}
+
+	if len(resp.SecurityGroups) == 0 {
+		return "", fmt.Errorf("security group %s not found in VPC %s", sgName, vpcID)
+	}
+
+	return *resp.SecurityGroups[0].GroupId, nil
 }
 
 // createNodeGroup creates a managed node group for an EKS cluster
