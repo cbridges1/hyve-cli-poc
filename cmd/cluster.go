@@ -362,33 +362,36 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 
 		// Resolve VPC alias (required for AWS)
 		if vpcName != "" {
-			awsVPCID, err = pcMgr.GetAWSVPCID(vpcName)
+			awsVPCID, err = pcMgr.GetAWSVPCID(awsAccount, vpcName)
 			if err != nil {
-				log.Fatalf("AWS VPC alias '%s' not found in repository configuration.\n"+
-					"Use 'hyve config aws vpc-add --name %s --id <vpc-id>' to add it,\n"+
-					"or use 'hyve config aws vpc-create --name %s --region %s' to create one.", vpcName, vpcName, vpcName, region)
+				log.Fatalf("AWS VPC alias '%s' not found in account '%s'.\n"+
+					"Use 'hyve config use aws %s' to set the account, then:\n"+
+					"  hyve config aws vpc-add --name %s --id <vpc-id>\n"+
+					"Or use 'hyve config aws vpc-create --name %s --region %s' to create one.", vpcName, awsAccount, awsAccount, vpcName, vpcName, region)
 			}
 			log.Printf("Using AWS VPC '%s' (ID: %s)", vpcName, awsVPCID)
 		}
 
 		// Resolve EKS role alias (required for AWS)
 		if eksRoleName != "" {
-			awsEKSRoleARN, err = pcMgr.GetAWSEKSRoleARN(eksRoleName)
+			awsEKSRoleARN, err = pcMgr.GetAWSEKSRoleARN(awsAccount, eksRoleName)
 			if err != nil {
-				log.Fatalf("AWS EKS role alias '%s' not found in repository configuration.\n"+
-					"Use 'hyve config aws eks-role-add --name %s --role-arn <arn>' to add it,\n"+
-					"or use 'hyve config aws eks-role-create --name %s --role-name <name> --region %s' to create one.", eksRoleName, eksRoleName, eksRoleName, region)
+				log.Fatalf("AWS EKS role alias '%s' not found in account '%s'.\n"+
+					"Use 'hyve config use aws %s' to set the account, then:\n"+
+					"  hyve config aws eks-role-add --name %s --role-arn <arn>\n"+
+					"Or use 'hyve config aws eks-role-create --name %s --role-name <name> --region %s' to create one.", eksRoleName, awsAccount, awsAccount, eksRoleName, eksRoleName, region)
 			}
 			log.Printf("Using AWS EKS role '%s' (ARN: %s)", eksRoleName, awsEKSRoleARN)
 		}
 
 		// Resolve node role alias (required for AWS)
 		if nodeRoleName != "" {
-			awsNodeRoleARN, err = pcMgr.GetAWSNodeRoleARN(nodeRoleName)
+			awsNodeRoleARN, err = pcMgr.GetAWSNodeRoleARN(awsAccount, nodeRoleName)
 			if err != nil {
-				log.Fatalf("AWS node role alias '%s' not found in repository configuration.\n"+
-					"Use 'hyve config aws node-role-add --name %s --role-arn <arn>' to add it,\n"+
-					"or use 'hyve config aws node-role-create --name %s --role-name <name> --region %s' to create one.", nodeRoleName, nodeRoleName, nodeRoleName, region)
+				log.Fatalf("AWS node role alias '%s' not found in account '%s'.\n"+
+					"Use 'hyve config use aws %s' to set the account, then:\n"+
+					"  hyve config aws node-role-add --name %s --role-arn <arn>\n"+
+					"Or use 'hyve config aws node-role-create --name %s --role-name <name> --region %s' to create one.", nodeRoleName, awsAccount, awsAccount, nodeRoleName, nodeRoleName, region)
 			}
 			log.Printf("Using AWS node role '%s' (ARN: %s)", nodeRoleName, awsNodeRoleARN)
 		}

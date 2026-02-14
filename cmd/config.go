@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"context"
+	gocontext "context"
 	"fmt"
 	"log"
 	"strings"
@@ -11,6 +11,7 @@ import (
 	"golang.org/x/term"
 
 	"civo-cluster-deploy/internal/config"
+	"civo-cluster-deploy/internal/context"
 	"civo-cluster-deploy/internal/credentials"
 	"civo-cluster-deploy/internal/provider/aws"
 	"civo-cluster-deploy/internal/providerconfig"
@@ -574,6 +575,61 @@ Examples:
 	},
 }
 
+// Context commands
+var configUseCmd = &cobra.Command{
+	Use:   "use [provider] [account]",
+	Short: "Set the current account/project/subscription for a provider",
+	Long: `Set the current context for a cloud provider. This determines which account's
+resources will be used by default when running commands.
+
+The context is stored locally in ~/.hyve/context.yaml and is NOT committed to Git.
+
+Providers:
+  aws   - Set the current AWS account
+  gcp   - Set the current GCP project
+  azure - Set the current Azure subscription
+  civo  - Set the current Civo organization
+
+Examples:
+  hyve config use aws prod
+  hyve config use gcp my-project
+  hyve config use azure my-subscription
+  hyve config use civo my-org`,
+	Args: cobra.ExactArgs(2),
+	Run: func(cmd *cobra.Command, args []string) {
+		setContext(args[0], args[1])
+	},
+}
+
+var configContextCmd = &cobra.Command{
+	Use:   "context",
+	Short: "Show current context for all providers",
+	Long: `Display the currently selected account/project/subscription for each provider.
+
+The context is stored locally in ~/.hyve/context.yaml and is NOT committed to Git.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		showContext()
+	},
+}
+
+var configContextClearCmd = &cobra.Command{
+	Use:   "context-clear [provider]",
+	Short: "Clear the current context",
+	Long: `Clear the current context for a provider or all providers.
+
+Examples:
+  hyve config context-clear        # Clear all
+  hyve config context-clear aws    # Clear only AWS`,
+	Args: cobra.MaximumNArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		if len(args) == 0 {
+			clearAllContext()
+		} else {
+			clearContext(args[0])
+		}
+	},
+}
+
 // Azure provider config commands
 var configAzureCmd = &cobra.Command{
 	Use:   "azure",
@@ -620,6 +676,60 @@ var configAzureListSubscriptionIDsCmd = &cobra.Command{
 	Long:  "Display all Azure subscription IDs configured in the current repository.",
 	Run: func(cmd *cobra.Command, args []string) {
 		listAzureSubscriptionIDs()
+	},
+}
+
+// Civo provider config commands
+var configCivoCmd = &cobra.Command{
+	Use:   "civo",
+	Short: "Manage Civo provider configuration",
+	Long: `Manage Civo-specific configuration stored in the current repository.
+
+These configurations are stored in the repository under provider-configs/civo.yaml
+and are committed to Git for team sharing.`,
+}
+
+var configCivoOrgAddCmd = &cobra.Command{
+	Use:   "org-add",
+	Short: "Add a Civo organization to the repository configuration",
+	Long: `Add a Civo organization with a friendly name/alias to the repository's provider configuration.
+
+The organization is stored in provider-configs/civo.yaml in the current repository.
+The name can then be used as an alias when creating clusters.
+
+Examples:
+  hyve config civo org-add --name prod --id org-abc123
+  hyve config civo org-add --name dev --id org-def456`,
+	Run: func(cmd *cobra.Command, args []string) {
+		name, _ := cmd.Flags().GetString("name")
+		orgID, _ := cmd.Flags().GetString("id")
+		addCivoOrganization(name, orgID)
+	},
+}
+
+var configCivoOrgRemoveCmd = &cobra.Command{
+	Use:   "org-remove [name]",
+	Short: "Remove a Civo organization from the repository configuration",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		removeCivoOrganization(args[0])
+	},
+}
+
+var configCivoOrgListCmd = &cobra.Command{
+	Use:   "org-list",
+	Short: "List configured Civo organizations",
+	Run: func(cmd *cobra.Command, args []string) {
+		listCivoOrganizations()
+	},
+}
+
+var configCivoOrgGetCmd = &cobra.Command{
+	Use:   "org-get [name]",
+	Short: "Get the organization ID for a Civo organization alias",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		getCivoOrganization(args[0])
 	},
 }
 
@@ -723,6 +833,16 @@ func init() {
 	configAzureCmd.AddCommand(configAzureRemoveSubscriptionIDsCmd)
 	configAzureCmd.AddCommand(configAzureListSubscriptionIDsCmd)
 
+	// Civo subcommands
+	configCivoOrgAddCmd.Flags().String("name", "", "Friendly name/alias for the organization (required)")
+	configCivoOrgAddCmd.Flags().String("id", "", "Civo organization ID (required)")
+	configCivoOrgAddCmd.MarkFlagRequired("name")
+	configCivoOrgAddCmd.MarkFlagRequired("id")
+	configCivoCmd.AddCommand(configCivoOrgAddCmd)
+	configCivoCmd.AddCommand(configCivoOrgRemoveCmd)
+	configCivoCmd.AddCommand(configCivoOrgListCmd)
+	configCivoCmd.AddCommand(configCivoOrgGetCmd)
+
 	configCmd.AddCommand(configSetTokenCmd)
 	configCmd.AddCommand(configGetTokenCmd)
 	configCmd.AddCommand(configClearTokenCmd)
@@ -732,6 +852,151 @@ func init() {
 	configCmd.AddCommand(configGCPCmd)
 	configCmd.AddCommand(configAWSCmd)
 	configCmd.AddCommand(configAzureCmd)
+	configCmd.AddCommand(configCivoCmd)
+	configCmd.AddCommand(configUseCmd)
+	configCmd.AddCommand(configContextCmd)
+	configCmd.AddCommand(configContextClearCmd)
+}
+
+// Context helper functions
+func setContext(provider, account string) {
+	ctxMgr, err := context.NewManager()
+	if err != nil {
+		log.Fatalf("Failed to create context manager: %v", err)
+	}
+
+	// Validate the account exists in config
+	repoPath := getRepoPath()
+	pcMgr := providerconfig.NewManager(repoPath)
+
+	switch provider {
+	case "aws":
+		exists, err := pcMgr.HasAWSAccount(account)
+		if err != nil {
+			log.Fatalf("Failed to check AWS account: %v", err)
+		}
+		if !exists {
+			log.Fatalf("AWS account '%s' not found. Add it with: hyve config aws account-add --name %s --id <account-id>", account, account)
+		}
+	case "gcp":
+		exists, err := pcMgr.HasGCPProject(account)
+		if err != nil {
+			log.Fatalf("Failed to check GCP project: %v", err)
+		}
+		if !exists {
+			log.Fatalf("GCP project '%s' not found. Add it with: hyve config gcp add-project --name %s --id <project-id>", account, account)
+		}
+	case "azure":
+		exists, err := pcMgr.HasAzureSubscription(account)
+		if err != nil {
+			log.Fatalf("Failed to check Azure subscription: %v", err)
+		}
+		if !exists {
+			log.Fatalf("Azure subscription '%s' not found. Add it with: hyve config azure subscription-add --name %s --id <subscription-id>", account, account)
+		}
+	case "civo":
+		exists, err := pcMgr.HasCivoOrganization(account)
+		if err != nil {
+			log.Fatalf("Failed to check Civo organization: %v", err)
+		}
+		if !exists {
+			log.Fatalf("Civo organization '%s' not found. Add it with: hyve config civo org-add --name %s --id <org-id>", account, account)
+		}
+	default:
+		log.Fatalf("Unknown provider: %s. Valid providers: aws, gcp, azure, civo", provider)
+	}
+
+	if err := ctxMgr.SetCurrentAccount(provider, account); err != nil {
+		log.Fatalf("Failed to set context: %v", err)
+	}
+
+	log.Printf("✅ Set current %s account to '%s'", provider, account)
+	log.Println()
+	log.Println("💡 Context is stored locally in ~/.hyve/context.yaml")
+}
+
+func showContext() {
+	ctxMgr, err := context.NewManager()
+	if err != nil {
+		log.Fatalf("Failed to create context manager: %v", err)
+	}
+
+	ctx := ctxMgr.GetContext()
+
+	log.Println("🔧 Current Context:")
+	log.Println()
+
+	if ctx.AWS.Account != "" {
+		log.Printf("   AWS:   %s", ctx.AWS.Account)
+	} else {
+		log.Println("   AWS:   (not set)")
+	}
+
+	if ctx.GCP.Account != "" {
+		log.Printf("   GCP:   %s", ctx.GCP.Account)
+	} else {
+		log.Println("   GCP:   (not set)")
+	}
+
+	if ctx.Azure.Account != "" {
+		log.Printf("   Azure: %s", ctx.Azure.Account)
+	} else {
+		log.Println("   Azure: (not set)")
+	}
+
+	if ctx.Civo.Account != "" {
+		log.Printf("   Civo:  %s", ctx.Civo.Account)
+	} else {
+		log.Println("   Civo:  (not set)")
+	}
+
+	log.Println()
+	log.Println("💡 Set context with: hyve config use <provider> <account>")
+}
+
+func clearContext(provider string) {
+	ctxMgr, err := context.NewManager()
+	if err != nil {
+		log.Fatalf("Failed to create context manager: %v", err)
+	}
+
+	if err := ctxMgr.ClearProvider(provider); err != nil {
+		log.Fatalf("Failed to clear context: %v", err)
+	}
+
+	log.Printf("✅ Cleared %s context", provider)
+}
+
+func clearAllContext() {
+	ctxMgr, err := context.NewManager()
+	if err != nil {
+		log.Fatalf("Failed to create context manager: %v", err)
+	}
+
+	if err := ctxMgr.Clear(); err != nil {
+		log.Fatalf("Failed to clear context: %v", err)
+	}
+
+	log.Println("✅ Cleared all context")
+}
+
+// getCurrentAWSAccount returns the current AWS account from context or fatally exits
+func getCurrentAWSAccount() string {
+	ctxMgr, err := context.NewManager()
+	if err != nil {
+		log.Fatalf("Failed to create context manager: %v", err)
+	}
+
+	account := ctxMgr.GetAWSAccount()
+	if account == "" {
+		log.Fatalf("❌ No AWS account selected.\n\n" +
+			"Set the current account with:\n" +
+			"  hyve config use aws <account-name>\n\n" +
+			"Or list available accounts:\n" +
+			"  hyve config aws account-list")
+	}
+
+	return account
 }
 
 func setCivoToken(accountID, token string) {
@@ -1127,22 +1392,23 @@ func addAWSEKSRole(name, roleARN string) {
 		log.Fatal("Role ARN is required (--role-arn)")
 	}
 
+	accountName := getCurrentAWSAccount()
 	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
-	exists, err := mgr.HasAWSEKSRole(name)
+	exists, err := mgr.HasAWSEKSRole(accountName, name)
 	if err != nil {
 		log.Fatalf("Failed to check AWS config: %v", err)
 	}
 
-	if err := mgr.AddAWSEKSRole(name, roleARN); err != nil {
+	if err := mgr.AddAWSEKSRole(accountName, name, roleARN); err != nil {
 		log.Fatalf("Failed to add EKS role: %v", err)
 	}
 
 	if exists {
-		log.Printf("✅ Updated EKS role '%s':\n", name)
+		log.Printf("✅ Updated EKS role '%s' in account '%s':\n", name, accountName)
 	} else {
-		log.Printf("✅ Added EKS role '%s':\n", name)
+		log.Printf("✅ Added EKS role '%s' to account '%s':\n", name, accountName)
 	}
 	log.Printf("   Name:     %s", name)
 	log.Printf("   Role ARN: %s", roleARN)
@@ -1151,39 +1417,41 @@ func addAWSEKSRole(name, roleARN string) {
 }
 
 func removeAWSEKSRole(name string) {
+	accountName := getCurrentAWSAccount()
 	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
-	roleARN, err := mgr.GetAWSEKSRoleARN(name)
+	roleARN, err := mgr.GetAWSEKSRoleARN(accountName, name)
 	if err != nil {
-		log.Fatalf("❌ EKS role '%s' not found", name)
+		log.Fatalf("❌ EKS role '%s' not found in account '%s'", name, accountName)
 	}
 
-	if err := mgr.RemoveAWSEKSRole(name); err != nil {
+	if err := mgr.RemoveAWSEKSRole(accountName, name); err != nil {
 		log.Fatalf("Failed to remove EKS role: %v", err)
 	}
 
-	log.Printf("✅ Removed EKS role '%s' (ARN: %s)", name, roleARN)
+	log.Printf("✅ Removed EKS role '%s' from account '%s' (ARN: %s)", name, accountName, roleARN)
 }
 
 func listAWSEKSRoles() {
+	accountName := getCurrentAWSAccount()
 	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
-	roles, err := mgr.ListAWSEKSRoles()
+	roles, err := mgr.ListAWSEKSRoles(accountName)
 	if err != nil {
 		log.Fatalf("Failed to list EKS roles: %v", err)
 	}
 
 	if len(roles) == 0 {
-		log.Println("❌ No EKS roles configured")
+		log.Printf("❌ No EKS roles configured for account '%s'", accountName)
 		log.Println()
 		log.Println("💡 Add an EKS role with:")
 		log.Println("   hyve config aws eks-role-add --name default-role --role-arn arn:aws:iam::123456789012:role/my-role")
 		return
 	}
 
-	log.Printf("🔐 EKS IAM Roles (%d):\n", len(roles))
+	log.Printf("🔐 EKS IAM Roles for account '%s' (%d):\n", accountName, len(roles))
 	log.Println()
 	for _, r := range roles {
 		log.Printf("   %s", r.Name)
@@ -1197,12 +1465,13 @@ func listAWSEKSRoles() {
 }
 
 func getAWSEKSRole(name string) {
+	accountName := getCurrentAWSAccount()
 	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
-	roleARN, err := mgr.GetAWSEKSRoleARN(name)
+	roleARN, err := mgr.GetAWSEKSRoleARN(accountName, name)
 	if err != nil {
-		log.Fatalf("❌ EKS role '%s' not found", name)
+		log.Fatalf("❌ EKS role '%s' not found in account '%s'", name, accountName)
 	}
 
 	fmt.Printf("%s\n", roleARN)
@@ -1217,22 +1486,23 @@ func addAWSNodeRole(name, roleARN string) {
 		log.Fatal("Role ARN is required (--role-arn)")
 	}
 
+	accountName := getCurrentAWSAccount()
 	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
-	exists, err := mgr.HasAWSNodeRole(name)
+	exists, err := mgr.HasAWSNodeRole(accountName, name)
 	if err != nil {
 		log.Fatalf("Failed to check AWS config: %v", err)
 	}
 
-	if err := mgr.AddAWSNodeRole(name, roleARN); err != nil {
+	if err := mgr.AddAWSNodeRole(accountName, name, roleARN); err != nil {
 		log.Fatalf("Failed to add node role: %v", err)
 	}
 
 	if exists {
-		log.Printf("✅ Updated node role '%s':\n", name)
+		log.Printf("✅ Updated node role '%s' in account '%s':\n", name, accountName)
 	} else {
-		log.Printf("✅ Added node role '%s':\n", name)
+		log.Printf("✅ Added node role '%s' to account '%s':\n", name, accountName)
 	}
 	log.Printf("   Name:     %s", name)
 	log.Printf("   Role ARN: %s", roleARN)
@@ -1241,39 +1511,41 @@ func addAWSNodeRole(name, roleARN string) {
 }
 
 func removeAWSNodeRole(name string) {
+	accountName := getCurrentAWSAccount()
 	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
-	roleARN, err := mgr.GetAWSNodeRoleARN(name)
+	roleARN, err := mgr.GetAWSNodeRoleARN(accountName, name)
 	if err != nil {
-		log.Fatalf("❌ Node role '%s' not found", name)
+		log.Fatalf("❌ Node role '%s' not found in account '%s'", name, accountName)
 	}
 
-	if err := mgr.RemoveAWSNodeRole(name); err != nil {
+	if err := mgr.RemoveAWSNodeRole(accountName, name); err != nil {
 		log.Fatalf("Failed to remove node role: %v", err)
 	}
 
-	log.Printf("✅ Removed node role '%s' (ARN: %s)", name, roleARN)
+	log.Printf("✅ Removed node role '%s' from account '%s' (ARN: %s)", name, accountName, roleARN)
 }
 
 func listAWSNodeRoles() {
+	accountName := getCurrentAWSAccount()
 	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
-	roles, err := mgr.ListAWSNodeRoles()
+	roles, err := mgr.ListAWSNodeRoles(accountName)
 	if err != nil {
 		log.Fatalf("Failed to list node roles: %v", err)
 	}
 
 	if len(roles) == 0 {
-		log.Println("❌ No node roles configured")
+		log.Printf("❌ No node roles configured for account '%s'", accountName)
 		log.Println()
 		log.Println("💡 Add a node role with:")
 		log.Println("   hyve config aws node-role-add --name default-node-role --role-arn arn:aws:iam::123456789012:role/my-node-role")
 		return
 	}
 
-	log.Printf("🔐 EKS Node IAM Roles (%d):\n", len(roles))
+	log.Printf("🔐 EKS Node IAM Roles for account '%s' (%d):\n", accountName, len(roles))
 	log.Println()
 	for _, r := range roles {
 		log.Printf("   %s", r.Name)
@@ -1287,12 +1559,13 @@ func listAWSNodeRoles() {
 }
 
 func getAWSNodeRole(name string) {
+	accountName := getCurrentAWSAccount()
 	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
-	roleARN, err := mgr.GetAWSNodeRoleARN(name)
+	roleARN, err := mgr.GetAWSNodeRoleARN(accountName, name)
 	if err != nil {
-		log.Fatalf("❌ Node role '%s' not found", name)
+		log.Fatalf("❌ Node role '%s' not found in account '%s'", name, accountName)
 	}
 
 	fmt.Printf("%s\n", roleARN)
@@ -1310,16 +1583,17 @@ func createAWSNodeRole(name, roleName, region string) {
 		region = "us-east-1"
 	}
 
+	accountName := getCurrentAWSAccount()
 	repoPath := getRepoPath()
 	configMgr := providerconfig.NewManager(repoPath)
 
 	// Check if alias already exists
-	exists, err := configMgr.HasAWSNodeRole(name)
+	exists, err := configMgr.HasAWSNodeRole(accountName, name)
 	if err != nil {
 		log.Fatalf("Failed to check AWS config: %v", err)
 	}
 	if exists {
-		log.Fatalf("❌ Node role alias '%s' already exists. Use 'node-role-remove' first or choose a different name.", name)
+		log.Fatalf("❌ Node role alias '%s' already exists in account '%s'. Use 'node-role-remove' first or choose a different name.", name, accountName)
 	}
 
 	log.Printf("🔐 Creating EKS node IAM role '%s' in AWS region %s...", roleName, region)
@@ -1331,7 +1605,7 @@ func createAWSNodeRole(name, roleName, region string) {
 	}
 
 	// Create the IAM role for nodes
-	ctx := context.Background()
+	ctx := gocontext.Background()
 	roleInfo, err := resourceMgr.CreateNodeRole(ctx, roleName)
 	if err != nil {
 		log.Fatalf("Failed to create node IAM role in AWS: %v", err)
@@ -1341,13 +1615,13 @@ func createAWSNodeRole(name, roleName, region string) {
 	log.Printf("   Role ARN: %s", roleInfo.ARN)
 
 	// Store the alias in configuration
-	if err := configMgr.AddAWSNodeRole(name, roleInfo.ARN); err != nil {
+	if err := configMgr.AddAWSNodeRole(accountName, name, roleInfo.ARN); err != nil {
 		log.Printf("⚠️  Warning: Role created in AWS but failed to save alias: %v", err)
 		log.Printf("   You can manually add it with: hyve config aws node-role-add --name %s --role-arn %s", name, roleInfo.ARN)
 		return
 	}
 
-	log.Printf("✅ Stored alias '%s' in configuration", name)
+	log.Printf("✅ Stored alias '%s' in account '%s'", name, accountName)
 	log.Println()
 	log.Println("💡 The configuration is stored in provider-configs/aws.yaml")
 	log.Printf("💡 Use this role when creating EKS clusters with: --node-role-name %s", name)
@@ -1358,21 +1632,22 @@ func deleteAWSNodeRole(name, region string, configOnly bool) {
 		region = "us-east-1"
 	}
 
+	accountName := getCurrentAWSAccount()
 	repoPath := getRepoPath()
 	configMgr := providerconfig.NewManager(repoPath)
 
 	// Get the role ARN from config
-	roleARN, err := configMgr.GetAWSNodeRoleARN(name)
+	roleARN, err := configMgr.GetAWSNodeRoleARN(accountName, name)
 	if err != nil {
-		log.Fatalf("❌ Node role alias '%s' not found in configuration", name)
+		log.Fatalf("❌ Node role alias '%s' not found in account '%s'", name, accountName)
 	}
 
 	if configOnly {
 		// Only remove from configuration
-		if err := configMgr.RemoveAWSNodeRole(name); err != nil {
+		if err := configMgr.RemoveAWSNodeRole(accountName, name); err != nil {
 			log.Fatalf("Failed to remove node role from configuration: %v", err)
 		}
-		log.Printf("✅ Removed node role alias '%s' from configuration", name)
+		log.Printf("✅ Removed node role alias '%s' from account '%s'", name, accountName)
 		log.Printf("   Note: The IAM role still exists in AWS (ARN: %s)", roleARN)
 		return
 	}
@@ -1392,7 +1667,7 @@ func deleteAWSNodeRole(name, region string, configOnly bool) {
 	}
 
 	// Delete the IAM role
-	ctx := context.Background()
+	ctx := gocontext.Background()
 	if err := resourceMgr.DeleteNodeRole(ctx, roleName); err != nil {
 		log.Fatalf("Failed to delete node IAM role from AWS: %v\n\n"+
 			"Configuration was NOT updated to prevent inconsistent state.\n"+
@@ -1402,12 +1677,12 @@ func deleteAWSNodeRole(name, region string, configOnly bool) {
 	log.Printf("✅ Deleted IAM role '%s' from AWS", roleName)
 
 	// Remove from configuration
-	if err := configMgr.RemoveAWSNodeRole(name); err != nil {
+	if err := configMgr.RemoveAWSNodeRole(accountName, name); err != nil {
 		log.Printf("⚠️  Warning: Role deleted from AWS but failed to remove alias: %v", err)
 		return
 	}
 
-	log.Printf("✅ Removed alias '%s' from configuration", name)
+	log.Printf("✅ Removed alias '%s' from account '%s'", name, accountName)
 }
 
 // AWS VPC helper functions
@@ -1419,22 +1694,23 @@ func addAWSVPC(name, vpcID string) {
 		log.Fatal("VPC ID is required (--id)")
 	}
 
+	accountName := getCurrentAWSAccount()
 	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
-	exists, err := mgr.HasAWSVPC(name)
+	exists, err := mgr.HasAWSVPC(accountName, name)
 	if err != nil {
 		log.Fatalf("Failed to check AWS config: %v", err)
 	}
 
-	if err := mgr.AddAWSVPC(name, vpcID); err != nil {
+	if err := mgr.AddAWSVPC(accountName, name, vpcID); err != nil {
 		log.Fatalf("Failed to add VPC: %v", err)
 	}
 
 	if exists {
-		log.Printf("✅ Updated VPC '%s':\n", name)
+		log.Printf("✅ Updated VPC '%s' in account '%s':\n", name, accountName)
 	} else {
-		log.Printf("✅ Added VPC '%s':\n", name)
+		log.Printf("✅ Added VPC '%s' to account '%s':\n", name, accountName)
 	}
 	log.Printf("   Name:   %s", name)
 	log.Printf("   VPC ID: %s", vpcID)
@@ -1443,39 +1719,41 @@ func addAWSVPC(name, vpcID string) {
 }
 
 func removeAWSVPC(name string) {
+	accountName := getCurrentAWSAccount()
 	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
-	vpcID, err := mgr.GetAWSVPCID(name)
+	vpcID, err := mgr.GetAWSVPCID(accountName, name)
 	if err != nil {
-		log.Fatalf("❌ VPC '%s' not found", name)
+		log.Fatalf("❌ VPC '%s' not found in account '%s'", name, accountName)
 	}
 
-	if err := mgr.RemoveAWSVPC(name); err != nil {
+	if err := mgr.RemoveAWSVPC(accountName, name); err != nil {
 		log.Fatalf("Failed to remove VPC: %v", err)
 	}
 
-	log.Printf("✅ Removed VPC '%s' (ID: %s)", name, vpcID)
+	log.Printf("✅ Removed VPC '%s' from account '%s' (ID: %s)", name, accountName, vpcID)
 }
 
 func listAWSVPCs() {
+	accountName := getCurrentAWSAccount()
 	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
-	vpcs, err := mgr.ListAWSVPCs()
+	vpcs, err := mgr.ListAWSVPCs(accountName)
 	if err != nil {
 		log.Fatalf("Failed to list VPCs: %v", err)
 	}
 
 	if len(vpcs) == 0 {
-		log.Println("❌ No VPCs configured")
+		log.Printf("❌ No VPCs configured for account '%s'", accountName)
 		log.Println()
 		log.Println("💡 Add a VPC with:")
 		log.Println("   hyve config aws vpc-add --name default-vpc --id vpc-0123456789abcdef0")
 		return
 	}
 
-	log.Printf("🌐 VPCs (%d):\n", len(vpcs))
+	log.Printf("🌐 VPCs for account '%s' (%d):\n", accountName, len(vpcs))
 	log.Println()
 	for _, v := range vpcs {
 		log.Printf("   %s", v.Name)
@@ -1489,12 +1767,13 @@ func listAWSVPCs() {
 }
 
 func getAWSVPC(name string) {
+	accountName := getCurrentAWSAccount()
 	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
-	vpcID, err := mgr.GetAWSVPCID(name)
+	vpcID, err := mgr.GetAWSVPCID(accountName, name)
 	if err != nil {
-		log.Fatalf("❌ VPC '%s' not found", name)
+		log.Fatalf("❌ VPC '%s' not found in account '%s'", name, accountName)
 	}
 
 	fmt.Printf("%s\n", vpcID)
@@ -1512,16 +1791,17 @@ func createAWSEKSRole(name, roleName, region string) {
 		region = "us-east-1"
 	}
 
+	accountName := getCurrentAWSAccount()
 	repoPath := getRepoPath()
 	configMgr := providerconfig.NewManager(repoPath)
 
 	// Check if alias already exists
-	exists, err := configMgr.HasAWSEKSRole(name)
+	exists, err := configMgr.HasAWSEKSRole(accountName, name)
 	if err != nil {
 		log.Fatalf("Failed to check AWS config: %v", err)
 	}
 	if exists {
-		log.Fatalf("❌ EKS role alias '%s' already exists. Use 'eks-role-remove' first or choose a different name.", name)
+		log.Fatalf("❌ EKS role alias '%s' already exists in account '%s'. Use 'eks-role-remove' first or choose a different name.", name, accountName)
 	}
 
 	log.Printf("🔐 Creating EKS IAM role '%s' in AWS region %s...", roleName, region)
@@ -1533,7 +1813,7 @@ func createAWSEKSRole(name, roleName, region string) {
 	}
 
 	// Create the IAM role
-	ctx := context.Background()
+	ctx := gocontext.Background()
 	roleInfo, err := resourceMgr.CreateEKSRole(ctx, roleName)
 	if err != nil {
 		log.Fatalf("Failed to create EKS IAM role in AWS: %v", err)
@@ -1543,13 +1823,13 @@ func createAWSEKSRole(name, roleName, region string) {
 	log.Printf("   Role ARN: %s", roleInfo.ARN)
 
 	// Store the alias in configuration
-	if err := configMgr.AddAWSEKSRole(name, roleInfo.ARN); err != nil {
+	if err := configMgr.AddAWSEKSRole(accountName, name, roleInfo.ARN); err != nil {
 		log.Printf("⚠️  Warning: Role created in AWS but failed to save alias: %v", err)
 		log.Printf("   You can manually add it with: hyve config aws eks-role-add --name %s --role-arn %s", name, roleInfo.ARN)
 		return
 	}
 
-	log.Printf("✅ Stored alias '%s' in configuration", name)
+	log.Printf("✅ Stored alias '%s' in account '%s'", name, accountName)
 	log.Println()
 	log.Println("💡 The configuration is stored in provider-configs/aws.yaml")
 	log.Printf("💡 Use this role when creating EKS clusters with: --eks-role %s", name)
@@ -1560,21 +1840,22 @@ func deleteAWSEKSRole(name, region string, configOnly bool) {
 		region = "us-east-1"
 	}
 
+	accountName := getCurrentAWSAccount()
 	repoPath := getRepoPath()
 	configMgr := providerconfig.NewManager(repoPath)
 
 	// Get the role ARN from config
-	roleARN, err := configMgr.GetAWSEKSRoleARN(name)
+	roleARN, err := configMgr.GetAWSEKSRoleARN(accountName, name)
 	if err != nil {
-		log.Fatalf("❌ EKS role alias '%s' not found in configuration", name)
+		log.Fatalf("❌ EKS role alias '%s' not found in account '%s'", name, accountName)
 	}
 
 	if configOnly {
 		// Only remove from configuration
-		if err := configMgr.RemoveAWSEKSRole(name); err != nil {
+		if err := configMgr.RemoveAWSEKSRole(accountName, name); err != nil {
 			log.Fatalf("Failed to remove EKS role from configuration: %v", err)
 		}
-		log.Printf("✅ Removed EKS role alias '%s' from configuration", name)
+		log.Printf("✅ Removed EKS role alias '%s' from account '%s'", name, accountName)
 		log.Printf("   Note: The IAM role still exists in AWS (ARN: %s)", roleARN)
 		return
 	}
@@ -1594,7 +1875,7 @@ func deleteAWSEKSRole(name, region string, configOnly bool) {
 	}
 
 	// Delete the IAM role
-	ctx := context.Background()
+	ctx := gocontext.Background()
 	if err := resourceMgr.DeleteEKSRole(ctx, roleName); err != nil {
 		log.Fatalf("Failed to delete EKS IAM role from AWS: %v\n\n"+
 			"Configuration was NOT updated to prevent inconsistent state.\n"+
@@ -1604,12 +1885,12 @@ func deleteAWSEKSRole(name, region string, configOnly bool) {
 	log.Printf("✅ Deleted IAM role '%s' from AWS", roleName)
 
 	// Remove from configuration
-	if err := configMgr.RemoveAWSEKSRole(name); err != nil {
+	if err := configMgr.RemoveAWSEKSRole(accountName, name); err != nil {
 		log.Printf("⚠️  Warning: Role deleted from AWS but failed to remove alias: %v", err)
 		return
 	}
 
-	log.Printf("✅ Removed alias '%s' from configuration", name)
+	log.Printf("✅ Removed alias '%s' from account '%s'", name, accountName)
 }
 
 // extractRoleNameFromARN extracts the role name from an IAM role ARN
@@ -1634,16 +1915,17 @@ func createAWSVPC(name, region, cidr, subnets string, enableDNS bool) {
 		cidr = "10.0.0.0/16"
 	}
 
+	accountName := getCurrentAWSAccount()
 	repoPath := getRepoPath()
 	configMgr := providerconfig.NewManager(repoPath)
 
 	// Check if alias already exists
-	exists, err := configMgr.HasAWSVPC(name)
+	exists, err := configMgr.HasAWSVPC(accountName, name)
 	if err != nil {
 		log.Fatalf("Failed to check AWS config: %v", err)
 	}
 	if exists {
-		log.Fatalf("❌ VPC alias '%s' already exists. Use 'vpc-remove' first or choose a different name.", name)
+		log.Fatalf("❌ VPC alias '%s' already exists in account '%s'. Use 'vpc-remove' first or choose a different name.", name, accountName)
 	}
 
 	log.Printf("🌐 Creating VPC '%s' in AWS region %s...", name, region)
@@ -1668,7 +1950,7 @@ func createAWSVPC(name, region, cidr, subnets string, enableDNS bool) {
 	}
 
 	// Create the VPC
-	ctx := context.Background()
+	ctx := gocontext.Background()
 	vpcInput := &aws.CreateVPCInput{
 		Name:              name,
 		CIDR:              cidr,
@@ -1696,13 +1978,13 @@ func createAWSVPC(name, region, cidr, subnets string, enableDNS bool) {
 	}
 
 	// Store the alias in configuration
-	if err := configMgr.AddAWSVPC(name, vpcInfo.ID); err != nil {
+	if err := configMgr.AddAWSVPC(accountName, name, vpcInfo.ID); err != nil {
 		log.Printf("⚠️  Warning: VPC created in AWS but failed to save alias: %v", err)
 		log.Printf("   You can manually add it with: hyve config aws vpc-add --name %s --id %s", name, vpcInfo.ID)
 		return
 	}
 
-	log.Printf("✅ Stored alias '%s' in configuration", name)
+	log.Printf("✅ Stored alias '%s' in account '%s'", name, accountName)
 	log.Println()
 	log.Println("💡 The configuration is stored in provider-configs/aws.yaml")
 	log.Printf("💡 Use this VPC when creating EKS clusters with: --vpc %s", name)
@@ -1713,21 +1995,22 @@ func deleteAWSVPC(name, region string, configOnly bool) {
 		region = "us-east-1"
 	}
 
+	accountName := getCurrentAWSAccount()
 	repoPath := getRepoPath()
 	configMgr := providerconfig.NewManager(repoPath)
 
 	// Get the VPC ID from config
-	vpcID, err := configMgr.GetAWSVPCID(name)
+	vpcID, err := configMgr.GetAWSVPCID(accountName, name)
 	if err != nil {
-		log.Fatalf("❌ VPC alias '%s' not found in configuration", name)
+		log.Fatalf("❌ VPC alias '%s' not found in account '%s'", name, accountName)
 	}
 
 	if configOnly {
 		// Only remove from configuration
-		if err := configMgr.RemoveAWSVPC(name); err != nil {
+		if err := configMgr.RemoveAWSVPC(accountName, name); err != nil {
 			log.Fatalf("Failed to remove VPC from configuration: %v", err)
 		}
-		log.Printf("✅ Removed VPC alias '%s' from configuration", name)
+		log.Printf("✅ Removed VPC alias '%s' from account '%s'", name, accountName)
 		log.Printf("   Note: The VPC still exists in AWS (ID: %s)", vpcID)
 		return
 	}
@@ -1741,7 +2024,7 @@ func deleteAWSVPC(name, region string, configOnly bool) {
 	}
 
 	// Delete the VPC
-	ctx := context.Background()
+	ctx := gocontext.Background()
 	if err := resourceMgr.DeleteVPC(ctx, vpcID); err != nil {
 		log.Fatalf("Failed to delete VPC from AWS: %v\n\n"+
 			"Configuration was NOT updated to prevent inconsistent state.\n"+
@@ -1751,127 +2034,62 @@ func deleteAWSVPC(name, region string, configOnly bool) {
 	log.Printf("✅ Deleted VPC '%s' from AWS", vpcID)
 
 	// Remove from configuration
-	if err := configMgr.RemoveAWSVPC(name); err != nil {
+	if err := configMgr.RemoveAWSVPC(accountName, name); err != nil {
 		log.Printf("⚠️  Warning: VPC deleted from AWS but failed to remove alias: %v", err)
 		return
 	}
 
-	log.Printf("✅ Removed alias '%s' from configuration", name)
+	log.Printf("✅ Removed alias '%s' from account '%s'", name, accountName)
 }
 
 // Azure helper functions
 func addAzureSubscriptionIDs(args []string) {
 	repoPath := getRepoPath()
-	subscriptionIDs := parseProjectIDs(args)
-
-	if len(subscriptionIDs) == 0 {
-		log.Fatal("No subscription IDs provided")
-	}
-
 	mgr := providerconfig.NewManager(repoPath)
 
-	existingConfig, err := mgr.LoadAzureConfig()
-	if err != nil {
-		log.Fatalf("Failed to load Azure config: %v", err)
-	}
-
-	existing := make(map[string]bool)
-	for _, id := range existingConfig.SubscriptionIDs {
-		existing[id] = true
-	}
-
-	added := []string{}
-	skipped := []string{}
-	for _, id := range subscriptionIDs {
-		if existing[id] {
-			skipped = append(skipped, id)
+	// Parse args as name=id pairs or just IDs
+	for _, arg := range args {
+		parts := strings.SplitN(arg, "=", 2)
+		var name, subscriptionID string
+		if len(parts) == 2 {
+			name = parts[0]
+			subscriptionID = parts[1]
 		} else {
-			added = append(added, id)
-			existingConfig.SubscriptionIDs = append(existingConfig.SubscriptionIDs, id)
-			existing[id] = true
+			// Use the subscription ID as the name
+			name = arg
+			subscriptionID = arg
+		}
+
+		exists, err := mgr.HasAzureSubscription(name)
+		if err != nil {
+			log.Fatalf("Failed to check Azure config: %v", err)
+		}
+
+		if err := mgr.AddAzureSubscription(name, subscriptionID); err != nil {
+			log.Fatalf("Failed to add Azure subscription: %v", err)
+		}
+
+		if exists {
+			log.Printf("✅ Updated Azure subscription '%s'", name)
+		} else {
+			log.Printf("✅ Added Azure subscription '%s' (ID: %s)", name, subscriptionID)
 		}
 	}
 
-	if len(added) > 0 {
-		if err := mgr.SaveAzureConfig(existingConfig); err != nil {
-			log.Fatalf("Failed to save Azure config: %v", err)
-		}
-
-		log.Printf("✅ Added %d Azure subscription ID(s):\n", len(added))
-		for _, id := range added {
-			log.Printf("   + %s", id)
-		}
-	}
-
-	if len(skipped) > 0 {
-		log.Printf("\nℹ️  Skipped %d subscription ID(s) (already configured):\n", len(skipped))
-		for _, id := range skipped {
-			log.Printf("   • %s", id)
-		}
-	}
-
-	if len(added) > 0 {
-		log.Println()
-		log.Println("💡 The configuration is stored in provider-configs/azure.yaml")
-	}
+	log.Println()
+	log.Println("💡 The configuration is stored in provider-configs/azure.yaml")
 }
 
 func removeAzureSubscriptionIDs(args []string) {
 	repoPath := getRepoPath()
-	subscriptionIDs := parseProjectIDs(args)
-
-	if len(subscriptionIDs) == 0 {
-		log.Fatal("No subscription IDs provided")
-	}
-
 	mgr := providerconfig.NewManager(repoPath)
 
-	existingConfig, err := mgr.LoadAzureConfig()
-	if err != nil {
-		log.Fatalf("Failed to load Azure config: %v", err)
-	}
-
-	existing := make(map[string]bool)
-	for _, id := range existingConfig.SubscriptionIDs {
-		existing[id] = true
-	}
-
-	removed := []string{}
-	notFound := []string{}
-	toRemove := make(map[string]bool)
-	for _, id := range subscriptionIDs {
-		toRemove[id] = true
-		if existing[id] {
-			removed = append(removed, id)
-		} else {
-			notFound = append(notFound, id)
+	for _, name := range args {
+		if err := mgr.RemoveAzureSubscription(name); err != nil {
+			log.Printf("❌ Failed to remove subscription '%s': %v", name, err)
+			continue
 		}
-	}
-
-	if len(removed) > 0 {
-		filtered := []string{}
-		for _, id := range existingConfig.SubscriptionIDs {
-			if !toRemove[id] {
-				filtered = append(filtered, id)
-			}
-		}
-		existingConfig.SubscriptionIDs = filtered
-
-		if err := mgr.SaveAzureConfig(existingConfig); err != nil {
-			log.Fatalf("Failed to save Azure config: %v", err)
-		}
-
-		log.Printf("✅ Removed %d Azure subscription ID(s):\n", len(removed))
-		for _, id := range removed {
-			log.Printf("   - %s", id)
-		}
-	}
-
-	if len(notFound) > 0 {
-		log.Printf("\nℹ️  Skipped %d subscription ID(s) (not configured):\n", len(notFound))
-		for _, id := range notFound {
-			log.Printf("   • %s", id)
-		}
+		log.Printf("✅ Removed Azure subscription '%s'", name)
 	}
 }
 
@@ -1879,25 +2097,125 @@ func listAzureSubscriptionIDs() {
 	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
-	config, err := mgr.LoadAzureConfig()
+	subscriptions, err := mgr.ListAzureSubscriptions()
 	if err != nil {
 		log.Fatalf("Failed to load Azure config: %v", err)
 	}
 
-	if len(config.SubscriptionIDs) == 0 {
-		log.Println("❌ No Azure subscription IDs configured")
+	if len(subscriptions) == 0 {
+		log.Println("❌ No Azure subscriptions configured")
 		log.Println()
-		log.Println("💡 Add subscription IDs with:")
-		log.Println("   hyve config azure add-subscription-ids <subscription-id>")
+		log.Println("💡 Add subscriptions with:")
+		log.Println("   hyve config azure add-subscription-ids name=<subscription-id>")
 		return
 	}
 
-	log.Printf("🔷 Azure Subscription IDs (%d):\n", len(config.SubscriptionIDs))
-	for _, id := range config.SubscriptionIDs {
-		log.Printf("   • %s", id)
-	}
+	log.Printf("🔷 Azure Subscriptions (%d):\n", len(subscriptions))
 	log.Println()
+	for _, s := range subscriptions {
+		log.Printf("   %s", s.Name)
+		log.Printf("      Subscription ID: %s", s.SubscriptionID)
+		log.Println()
+	}
 	log.Println("💡 Commands:")
-	log.Println("   hyve config azure add-subscription-ids <ids>      # Add subscription IDs")
-	log.Println("   hyve config azure remove-subscription-ids <ids>   # Remove subscription IDs")
+	log.Println("   hyve config azure add-subscription-ids name=<id>     # Add subscription")
+	log.Println("   hyve config azure remove-subscription-ids <name>     # Remove subscription")
+}
+
+// Civo helper functions
+func addCivoOrganization(name, orgID string) {
+	if name == "" {
+		log.Fatal("Organization name is required (--name)")
+	}
+	if orgID == "" {
+		log.Fatal("Organization ID is required (--id)")
+	}
+
+	repoPath := getRepoPath()
+	mgr := providerconfig.NewManager(repoPath)
+
+	exists, err := mgr.HasCivoOrganization(name)
+	if err != nil {
+		log.Fatalf("Failed to check Civo config: %v", err)
+	}
+
+	if err := mgr.AddCivoOrganization(name, orgID); err != nil {
+		log.Fatalf("Failed to add Civo organization: %v", err)
+	}
+
+	if exists {
+		log.Printf("✅ Updated Civo organization '%s':\n", name)
+	} else {
+		log.Printf("✅ Added Civo organization '%s':\n", name)
+	}
+	log.Printf("   Name:  %s", name)
+	log.Printf("   Org ID: %s", orgID)
+	log.Println()
+	log.Println("💡 The configuration is stored in provider-configs/civo.yaml")
+	log.Println("💡 Set this as the current organization with:")
+	log.Printf("   hyve config use civo %s", name)
+}
+
+func removeCivoOrganization(name string) {
+	repoPath := getRepoPath()
+	mgr := providerconfig.NewManager(repoPath)
+
+	orgID, err := mgr.GetCivoOrgID(name)
+	if err != nil {
+		log.Fatalf("❌ Civo organization '%s' not found", name)
+	}
+
+	if err := mgr.RemoveCivoOrganization(name); err != nil {
+		log.Fatalf("Failed to remove Civo organization: %v", err)
+	}
+
+	log.Printf("✅ Removed Civo organization '%s' (ID: %s)", name, orgID)
+}
+
+func listCivoOrganizations() {
+	repoPath := getRepoPath()
+	mgr := providerconfig.NewManager(repoPath)
+
+	orgs, err := mgr.ListCivoOrganizations()
+	if err != nil {
+		log.Fatalf("Failed to list Civo organizations: %v", err)
+	}
+
+	if len(orgs) == 0 {
+		log.Println("❌ No Civo organizations configured")
+		log.Println()
+		log.Println("💡 Add an organization with:")
+		log.Println("   hyve config civo org-add --name prod --id org-abc123")
+		return
+	}
+
+	log.Printf("🟢 Civo Organizations (%d):\n", len(orgs))
+	log.Println()
+	for _, o := range orgs {
+		log.Printf("   %s", o.Name)
+		log.Printf("      Org ID: %s", o.OrgID)
+		if len(o.Regions) > 0 {
+			log.Printf("      Regions: %v", o.Regions)
+		}
+		log.Println()
+	}
+	log.Println("💡 Commands:")
+	log.Println("   hyve config civo org-add --name <name> --id <org-id>  # Add/update organization")
+	log.Println("   hyve config civo org-remove <name>                     # Remove organization")
+	log.Println("   hyve config civo org-get <name>                        # Get organization ID")
+	log.Println()
+	log.Println("💡 Set the current organization with:")
+	log.Println("   hyve config use civo <name>")
+}
+
+func getCivoOrganization(name string) {
+	repoPath := getRepoPath()
+	mgr := providerconfig.NewManager(repoPath)
+
+	orgID, err := mgr.GetCivoOrgID(name)
+	if err != nil {
+		log.Fatalf("❌ Civo organization '%s' not found", name)
+	}
+
+	fmt.Printf("%s\n", orgID)
 }

@@ -40,17 +40,23 @@ go build -o hyve .
 # 3. Set up Git repository
 ./hyve git add production --repo-url https://github.com/company/hyve-prod.git
 
-# 4. Create a cluster (specify provider)
+# 4. Configure provider accounts (required before creating clusters)
+# Add an account and set it as the current context
+./hyve config aws account-add --name prod --id 123456789012
+./hyve config use aws prod
+
+# 5. Create a cluster (specify provider)
 ./hyve cluster add my-cluster --provider civo --region PHX1 --nodes g4s.kube.medium
 # or
 ./hyve cluster add my-cluster --provider aws --region us-east-1 --nodes t3.medium
-# or (GCP requires project alias configured first)
-./hyve config gcp add-project --name dev --id my-gcp-project-id
-./hyve cluster add my-cluster --provider gcp --gcp-project dev --region us-central1 --nodes e2-medium
+# or (GCP requires project configured first)
+./hyve config gcp project-add --name dev --id my-gcp-project-id
+./hyve config use gcp dev
+./hyve cluster add my-cluster --provider gcp --region us-central1 --nodes e2-medium
 # or
 ./hyve cluster add my-cluster --provider azure --region eastus --nodes Standard_D2s_v3
 
-# 5. Run a workflow
+# 6. Run a workflow
 ./hyve workflow run deploy-app --cluster my-cluster
 ```
 
@@ -106,9 +112,27 @@ az login
 # Add your first repository
 ./hyve git add production --repo-url https://github.com/company/hyve-state.git
 
-# Configure provider-specific settings (stored in repository)
-# GCP: Add project aliases
-./hyve config gcp add-project --name dev --id my-gcp-project-id
+# Configure provider accounts (REQUIRED before adding resources)
+# Each provider requires an account/project/subscription to be configured and selected
+
+# AWS: Add account and set as current context
+./hyve config aws account-add --name prod --id 123456789012
+./hyve config use aws prod
+
+# GCP: Add project and set as current context
+./hyve config gcp project-add --name dev --id my-gcp-project-id
+./hyve config use gcp dev
+
+# Azure: Add subscription and set as current context
+./hyve config azure subscription-add --name prod --id 12345678-1234-1234-1234-123456789012
+./hyve config use azure prod
+
+# Civo: Add organization and set as current context
+./hyve config civo org-add --name default --id org-123456
+./hyve config use civo default
+
+# View current context for all providers
+./hyve config context
 
 # AWS: Create EKS IAM role (optional - creates actual AWS resource)
 ./hyve config aws eks-role-create --name default-role --role-name hyve-eks-role --region us-east-1
@@ -172,6 +196,40 @@ For AWS, GCP, and Azure, Hyve uses the native cloud CLI authentication instead o
 Civo is the exception because it doesn't have a widely-used CLI, so Hyve stores Civo API tokens securely using AES-GCM encryption.
 
 ## Key Concepts
+
+### Provider Context
+
+Before working with any cloud provider, you must set a current context (account/project/subscription/organization). This tells Hyve which account's resources to use when creating clusters.
+
+```bash
+# Set current context
+hyve config use aws prod
+hyve config use gcp dev
+hyve config use azure prod
+hyve config use civo default
+
+# View all contexts
+hyve config context
+
+# Output:
+# Current context:
+#   AWS:   prod (Account ID: 123456789012)
+#   GCP:   dev (Project ID: my-dev-project-123)
+#   Azure: prod (Subscription ID: 12345678-1234-1234-1234-123456789012)
+#   Civo:  default (Org ID: org-123456)
+```
+
+If you try to work with a provider without setting the context, Hyve will display CLI commands to switch to the required account:
+
+```
+❌ No AWS account selected.
+
+Set the current account with:
+  hyve config use aws <account-name>
+
+Or switch AWS CLI credentials:
+  export AWS_PROFILE=<profile-name>
+```
 
 ### Repositories
 
@@ -286,10 +344,32 @@ hyve template execute prod-template prod-cluster-01
 | `hyve template` | Manage cluster templates |
 | `hyve kubeconfig` | Manage cluster kubeconfigs |
 | `hyve config` | Configure API tokens and provider settings |
+| `hyve config use` | Set current account/project/subscription for a provider |
+| `hyve config context` | Show current context for all providers |
+| `hyve config context-clear` | Clear context for a provider or all providers |
 | `hyve config gcp` | Manage GCP provider configuration (projects) |
-| `hyve config aws` | Manage AWS provider configuration (accounts, EKS roles, VPCs) |
+| `hyve config aws` | Manage AWS provider configuration (accounts, EKS roles, node roles, VPCs) |
 | `hyve config azure` | Manage Azure provider configuration (subscriptions) |
+| `hyve config civo` | Manage Civo provider configuration (organizations) |
 | `hyve reconcile` | Reconcile cluster state |
+
+### Context Commands
+
+Manage the current account/project/subscription context for each provider:
+
+| Command | Description |
+|---------|-------------|
+| `hyve config use <provider> <name>` | Set current context for a provider |
+| `hyve config context` | Show current context for all providers |
+| `hyve config context-clear [provider]` | Clear context (all or specific provider) |
+
+**Examples:**
+```bash
+hyve config use aws prod           # Set AWS account to "prod"
+hyve config use gcp my-project     # Set GCP project to "my-project"
+hyve config use azure dev          # Set Azure subscription to "dev"
+hyve config use civo default       # Set Civo organization to "default"
+```
 
 ### AWS Resource Commands
 
@@ -299,6 +379,8 @@ Hyve can create and manage actual AWS resources:
 |---------|-------------|
 | `hyve config aws eks-role-create` | Create an EKS IAM role in AWS |
 | `hyve config aws eks-role-delete` | Delete an EKS IAM role from AWS |
+| `hyve config aws node-role-create` | Create an EKS node IAM role in AWS |
+| `hyve config aws node-role-delete` | Delete an EKS node IAM role from AWS |
 | `hyve config aws vpc-create` | Create a VPC in AWS (with optional subnets) |
 | `hyve config aws vpc-delete` | Delete a VPC from AWS |
 
@@ -308,53 +390,96 @@ These commands use native AWS SDK authentication (via `aws configure` or environ
 
 Store provider-specific configurations in your repository for team sharing. All provider configs support aliases for easier reference.
 
+**Important:** You must set a current context (account/project/subscription/organization) before adding resources for any provider. Use `hyve config use <provider> <name>` to set the current context.
+
+#### Context Management
+
+```bash
+# Set current context for a provider
+hyve config use aws prod           # Set current AWS account
+hyve config use gcp dev            # Set current GCP project
+hyve config use azure prod         # Set current Azure subscription
+hyve config use civo default       # Set current Civo organization
+
+# View current context for all providers
+hyve config context
+
+# Clear context for a specific provider
+hyve config context-clear aws
+
+# Clear all context
+hyve config context-clear
+```
+
+When working with a provider, if the required account/project is not set, Hyve will display CLI commands to switch to the correct account.
+
 #### GCP Configuration
 
 ```bash
 # Add GCP projects with aliases
-hyve config gcp add-project --name dev --id my-dev-project-123
-hyve config gcp add-project --name prod --id my-prod-project-456
+hyve config gcp project-add --name dev --id my-dev-project-123
+hyve config gcp project-add --name prod --id my-prod-project-456
+
+# Set current GCP project
+hyve config use gcp dev
 
 # List configured projects
-hyve config gcp list-projects
+hyve config gcp project-list
 
 # Get project ID by alias
-hyve config gcp get-project dev
+hyve config gcp project-get dev
 
 # Remove a project
-hyve config gcp remove-project dev
+hyve config gcp project-remove dev
 
 # Use alias when creating clusters
-hyve cluster add my-cluster --provider gcp --gcp-project dev --region us-central1
+hyve cluster add my-cluster --provider gcp --region us-central1
 ```
 
 #### AWS Configuration
 
+AWS resources (VPCs, EKS roles, node roles) are organized under accounts. You must first add an account and set it as the current context before adding resources.
+
 ```bash
-# Account management (with aliases)
+# Account management (REQUIRED first step)
 hyve config aws account-add --name prod --id 123456789012
+hyve config aws account-add --name dev --id 987654321098
 hyve config aws account-list
 hyve config aws account-get prod
 hyve config aws account-remove prod
 
-# EKS IAM Role management (configuration only)
+# Set current AWS account (REQUIRED before adding resources)
+hyve config use aws prod
+
+# EKS IAM Role management (configuration only - added to current account)
 hyve config aws eks-role-add --name default-role --role-arn arn:aws:iam::123456789012:role/my-eks-role
 hyve config aws eks-role-list
 hyve config aws eks-role-get default-role
 hyve config aws eks-role-remove default-role
 
-# EKS IAM Role creation (creates actual AWS resources)
+# EKS IAM Role creation (creates actual AWS resources - added to current account)
 hyve config aws eks-role-create --name default-role --role-name my-eks-cluster-role --region us-east-1
 hyve config aws eks-role-delete default-role --region us-east-1
 hyve config aws eks-role-delete default-role --config-only  # Remove from config only
 
-# VPC management (configuration only)
+# Node Role management (configuration only - added to current account)
+hyve config aws node-role-add --name default-node-role --role-arn arn:aws:iam::123456789012:role/my-node-role
+hyve config aws node-role-list
+hyve config aws node-role-get default-node-role
+hyve config aws node-role-remove default-node-role
+
+# Node Role creation (creates actual AWS resources - added to current account)
+hyve config aws node-role-create --name default-node-role --role-name my-eks-node-role --region us-east-1
+hyve config aws node-role-delete default-node-role --region us-east-1
+hyve config aws node-role-delete default-node-role --config-only  # Remove from config only
+
+# VPC management (configuration only - added to current account)
 hyve config aws vpc-add --name default-vpc --id vpc-0123456789abcdef0
 hyve config aws vpc-list
 hyve config aws vpc-get default-vpc
 hyve config aws vpc-remove default-vpc
 
-# VPC creation (creates actual AWS resources)
+# VPC creation (creates actual AWS resources - added to current account)
 hyve config aws vpc-create --name dev-vpc --region us-east-1 --cidr 10.0.0.0/16
 hyve config aws vpc-create --name dev-vpc --region us-east-1 --subnets 10.0.1.0/24,10.0.2.0/24
 hyve config aws vpc-delete dev-vpc --region us-east-1
@@ -364,13 +489,32 @@ hyve config aws vpc-delete dev-vpc --config-only  # Remove from config only
 #### Azure Configuration
 
 ```bash
-# Add subscription IDs
-hyve config azure add-subscription-ids sub-id-1,sub-id-2
-hyve config azure list-subscription-ids
-hyve config azure remove-subscription-ids sub-id-1
+# Add subscriptions with aliases
+hyve config azure subscription-add --name prod --id 12345678-1234-1234-1234-123456789012
+hyve config azure subscription-add --name dev --id 87654321-4321-4321-4321-210987654321
+hyve config azure subscription-list
+hyve config azure subscription-get prod
+hyve config azure subscription-remove prod
+
+# Set current Azure subscription
+hyve config use azure prod
 ```
 
-Provider configurations are stored in `provider-configs/` in your repository and can be committed to Git.
+#### Civo Configuration
+
+```bash
+# Add organizations with aliases
+hyve config civo org-add --name default --id org-123456
+hyve config civo org-add --name production --id org-789012
+hyve config civo org-list
+hyve config civo org-get default
+hyve config civo org-remove default
+
+# Set current Civo organization
+hyve config use civo default
+```
+
+Provider configurations are stored in `provider-configs/` in your repository and can be committed to Git. Current context is stored locally in `~/.hyve/context.yaml` (not committed to Git).
 
 See [CLI Reference](https://docs.hyve.dev/cli/overview) for complete command documentation.
 
@@ -381,6 +525,7 @@ Hyve stores all data in `~/.hyve/`:
 ```
 ~/.hyve/
 ├── config.yaml          # Global configuration (git backend preference)
+├── context.yaml         # Current provider context (account/project selections - local only)
 ├── repositories.db      # Repository configurations (SQLite)
 ├── credentials.db       # Encrypted Civo tokens and Git credentials (AES-GCM)
 ├── kubeconfigs.db      # Encrypted cluster kubeconfigs (AES-GCM)
@@ -392,9 +537,26 @@ Hyve stores all data in `~/.hyve/`:
     │   ├── templates/        # Cluster templates
     │   └── provider-configs/ # Provider-specific configuration
     │       ├── gcp.yaml      # GCP projects (name/ID aliases)
-    │       ├── aws.yaml      # AWS accounts, EKS roles, VPCs (with aliases)
-    │       └── azure.yaml    # Azure subscription IDs
+    │       ├── aws.yaml      # AWS accounts with nested resources
+    │       ├── azure.yaml    # Azure subscriptions
+    │       └── civo.yaml     # Civo organizations
     └── development/
+```
+
+### Local Context File
+
+The `~/.hyve/context.yaml` file tracks the current account/project/subscription for each provider. This file is local-only and not committed to the repository, allowing each developer to work with different accounts.
+
+**~/.hyve/context.yaml:**
+```yaml
+aws:
+  account: prod
+gcp:
+  account: dev
+azure:
+  account: prod
+civo:
+  account: default
 ```
 
 ### Provider Config File Examples
@@ -410,17 +572,60 @@ projects:
 
 **provider-configs/aws.yaml:**
 ```yaml
+# AWS resources are nested under accounts
 accounts:
   - name: prod
     account_id: "123456789012"
+    regions:
+      - us-east-1
+      - us-west-2
+    vpcs:
+      - name: default-vpc
+        vpc_id: vpc-0123456789abcdef0
+      - name: dev-vpc
+        vpc_id: vpc-0987654321fedcba0
+    eks_roles:
+      - name: default-role
+        role_arn: arn:aws:iam::123456789012:role/my-eks-role
+    node_roles:
+      - name: default-node-role
+        role_arn: arn:aws:iam::123456789012:role/my-node-role
   - name: dev
     account_id: "987654321098"
-eks_roles:
-  - name: default-role
-    role_arn: arn:aws:iam::123456789012:role/my-eks-role
-vpcs:
-  - name: default-vpc
-    vpc_id: vpc-0123456789abcdef0
+    regions:
+      - us-east-1
+    vpcs:
+      - name: dev-vpc
+        vpc_id: vpc-abcdef0123456789
+    eks_roles:
+      - name: dev-role
+        role_arn: arn:aws:iam::987654321098:role/dev-eks-role
+    node_roles:
+      - name: dev-node-role
+        role_arn: arn:aws:iam::987654321098:role/dev-node-role
+```
+
+**provider-configs/azure.yaml:**
+```yaml
+subscriptions:
+  - name: prod
+    subscription_id: "12345678-1234-1234-1234-123456789012"
+  - name: dev
+    subscription_id: "87654321-4321-4321-4321-210987654321"
+```
+
+**provider-configs/civo.yaml:**
+```yaml
+organizations:
+  - name: default
+    org_id: "org-123456"
+    regions:
+      - PHX1
+      - NYC1
+  - name: production
+    org_id: "org-789012"
+    regions:
+      - LON1
 ```
 
 ## Testing

@@ -11,6 +11,8 @@ import (
 // ProviderConfigDir is the directory name for provider configurations
 const ProviderConfigDir = "provider-configs"
 
+// ========== GCP Types ==========
+
 // GCPProject represents a named GCP project
 type GCPProject struct {
 	Name      string `yaml:"name"`
@@ -22,11 +24,7 @@ type GCPConfig struct {
 	Projects []GCPProject `yaml:"projects"`
 }
 
-// AWSAccount represents a named AWS account
-type AWSAccount struct {
-	Name      string `yaml:"name"`
-	AccountID string `yaml:"account_id"`
-}
+// ========== AWS Types ==========
 
 // AWSEKSRole represents a named EKS IAM role
 type AWSEKSRole struct {
@@ -46,25 +44,63 @@ type AWSVPC struct {
 	VPCID string `yaml:"vpc_id"`
 }
 
-// AWSConfig represents AWS-specific configuration
-type AWSConfig struct {
-	Accounts  []AWSAccount  `yaml:"accounts,omitempty"`
+// AWSAccount represents a named AWS account with all its resources
+type AWSAccount struct {
+	Name      string        `yaml:"name"`
+	AccountID string        `yaml:"account_id"`
 	Regions   []string      `yaml:"regions,omitempty"`
+	VPCs      []AWSVPC      `yaml:"vpcs,omitempty"`
 	EKSRoles  []AWSEKSRole  `yaml:"eks_roles,omitempty"`
 	NodeRoles []AWSNodeRole `yaml:"node_roles,omitempty"`
-	VPCs      []AWSVPC      `yaml:"vpcs,omitempty"`
+}
+
+// AWSConfig represents AWS-specific configuration
+type AWSConfig struct {
+	Accounts []AWSAccount `yaml:"accounts,omitempty"`
+}
+
+// ========== Azure Types ==========
+
+// AzureResourceGroup represents a named resource group
+type AzureResourceGroup struct {
+	Name     string `yaml:"name"`
+	Location string `yaml:"location,omitempty"`
+}
+
+// AzureSubscription represents a named Azure subscription
+type AzureSubscription struct {
+	Name           string               `yaml:"name"`
+	SubscriptionID string               `yaml:"subscription_id"`
+	ResourceGroups []AzureResourceGroup `yaml:"resource_groups,omitempty"`
 }
 
 // AzureConfig represents Azure-specific configuration
 type AzureConfig struct {
-	SubscriptionIDs []string `yaml:"subscription_ids,omitempty"`
-	ResourceGroups  []string `yaml:"resource_groups,omitempty"`
+	Subscriptions []AzureSubscription `yaml:"subscriptions,omitempty"`
+}
+
+// ========== Civo Types ==========
+
+// CivoNetwork represents a named Civo network
+type CivoNetwork struct {
+	Name      string `yaml:"name"`
+	NetworkID string `yaml:"network_id"`
+}
+
+// CivoOrganization represents a named Civo organization/account
+type CivoOrganization struct {
+	Name     string        `yaml:"name"`
+	OrgID    string        `yaml:"org_id"`
+	Regions  []string      `yaml:"regions,omitempty"`
+	Networks []CivoNetwork `yaml:"networks,omitempty"`
 }
 
 // CivoConfig represents Civo-specific configuration
 type CivoConfig struct {
-	Regions []string `yaml:"regions,omitempty"`
+	Organizations []CivoOrganization `yaml:"organizations,omitempty"`
 }
+
+// ========== Manager ==========
 
 // Manager handles provider configuration operations
 type Manager struct {
@@ -97,6 +133,15 @@ func (m *Manager) ensureConfigDir() error {
 	return nil
 }
 
+// ConfigExists checks if a provider config file exists
+func (m *Manager) ConfigExists(provider string) bool {
+	configPath := m.getConfigPath(provider)
+	_, err := os.Stat(configPath)
+	return err == nil
+}
+
+// ========== GCP Functions ==========
+
 // LoadGCPConfig loads the GCP configuration from the repository
 func (m *Manager) LoadGCPConfig() (*GCPConfig, error) {
 	configPath := m.getConfigPath("gcp")
@@ -104,7 +149,6 @@ func (m *Manager) LoadGCPConfig() (*GCPConfig, error) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Return empty config if file doesn't exist
 			return &GCPConfig{Projects: []GCPProject{}}, nil
 		}
 		return nil, fmt.Errorf("failed to read GCP config: %w", err)
@@ -144,16 +188,13 @@ func (m *Manager) AddGCPProject(name, projectID string) error {
 		return err
 	}
 
-	// Check if name already exists
 	for i, p := range config.Projects {
 		if p.Name == name {
-			// Update existing project
 			config.Projects[i].ProjectID = projectID
 			return m.SaveGCPConfig(config)
 		}
 	}
 
-	// Add new project
 	config.Projects = append(config.Projects, GCPProject{
 		Name:      name,
 		ProjectID: projectID,
@@ -169,7 +210,6 @@ func (m *Manager) RemoveGCPProject(name string) error {
 		return err
 	}
 
-	// Filter out the project
 	filtered := []GCPProject{}
 	found := false
 	for _, p := range config.Projects {
@@ -230,6 +270,8 @@ func (m *Manager) HasGCPProject(name string) (bool, error) {
 	return false, nil
 }
 
+// ========== AWS Functions ==========
+
 // LoadAWSConfig loads the AWS configuration from the repository
 func (m *Manager) LoadAWSConfig() (*AWSConfig, error) {
 	configPath := m.getConfigPath("aws")
@@ -269,6 +311,16 @@ func (m *Manager) SaveAWSConfig(config *AWSConfig) error {
 	return nil
 }
 
+// findAWSAccount finds an account by name and returns its index
+func (m *Manager) findAWSAccount(config *AWSConfig, name string) int {
+	for i, a := range config.Accounts {
+		if a.Name == name {
+			return i
+		}
+	}
+	return -1
+}
+
 // AddAWSAccount adds a named account to the AWS configuration
 func (m *Manager) AddAWSAccount(name, accountID string) error {
 	config, err := m.LoadAWSConfig()
@@ -276,16 +328,12 @@ func (m *Manager) AddAWSAccount(name, accountID string) error {
 		return err
 	}
 
-	// Check if name already exists
-	for i, a := range config.Accounts {
-		if a.Name == name {
-			// Update existing account
-			config.Accounts[i].AccountID = accountID
-			return m.SaveAWSConfig(config)
-		}
+	idx := m.findAWSAccount(config, name)
+	if idx >= 0 {
+		config.Accounts[idx].AccountID = accountID
+		return m.SaveAWSConfig(config)
 	}
 
-	// Add new account
 	config.Accounts = append(config.Accounts, AWSAccount{
 		Name:      name,
 		AccountID: accountID,
@@ -335,6 +383,22 @@ func (m *Manager) GetAWSAccountID(name string) (string, error) {
 	return "", fmt.Errorf("AWS account '%s' not found in repository configuration", name)
 }
 
+// GetAWSAccount returns the full account config for a given name
+func (m *Manager) GetAWSAccount(name string) (*AWSAccount, error) {
+	config, err := m.LoadAWSConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, a := range config.Accounts {
+		if a.Name == name {
+			return &a, nil
+		}
+	}
+
+	return nil, fmt.Errorf("AWS account '%s' not found in repository configuration", name)
+}
+
 // ListAWSAccounts returns all configured AWS accounts
 func (m *Manager) ListAWSAccounts() ([]AWSAccount, error) {
 	config, err := m.LoadAWSConfig()
@@ -361,42 +425,50 @@ func (m *Manager) HasAWSAccount(name string) (bool, error) {
 	return false, nil
 }
 
-// AddAWSEKSRole adds a named EKS role to the AWS configuration
-func (m *Manager) AddAWSEKSRole(name, roleARN string) error {
+// AddAWSEKSRole adds a named EKS role to an account
+func (m *Manager) AddAWSEKSRole(accountName, roleName, roleARN string) error {
 	config, err := m.LoadAWSConfig()
 	if err != nil {
 		return err
 	}
 
-	// Check if name already exists
-	for i, r := range config.EKSRoles {
-		if r.Name == name {
-			// Update existing role
-			config.EKSRoles[i].RoleARN = roleARN
+	idx := m.findAWSAccount(config, accountName)
+	if idx < 0 {
+		return fmt.Errorf("AWS account '%s' not found", accountName)
+	}
+
+	// Check if role already exists
+	for i, r := range config.Accounts[idx].EKSRoles {
+		if r.Name == roleName {
+			config.Accounts[idx].EKSRoles[i].RoleARN = roleARN
 			return m.SaveAWSConfig(config)
 		}
 	}
 
-	// Add new role
-	config.EKSRoles = append(config.EKSRoles, AWSEKSRole{
-		Name:    name,
+	config.Accounts[idx].EKSRoles = append(config.Accounts[idx].EKSRoles, AWSEKSRole{
+		Name:    roleName,
 		RoleARN: roleARN,
 	})
 
 	return m.SaveAWSConfig(config)
 }
 
-// RemoveAWSEKSRole removes an EKS role by name from the AWS configuration
-func (m *Manager) RemoveAWSEKSRole(name string) error {
+// RemoveAWSEKSRole removes an EKS role by name from an account
+func (m *Manager) RemoveAWSEKSRole(accountName, roleName string) error {
 	config, err := m.LoadAWSConfig()
 	if err != nil {
 		return err
+	}
+
+	idx := m.findAWSAccount(config, accountName)
+	if idx < 0 {
+		return fmt.Errorf("AWS account '%s' not found", accountName)
 	}
 
 	filtered := []AWSEKSRole{}
 	found := false
-	for _, r := range config.EKSRoles {
-		if r.Name != name {
+	for _, r := range config.Accounts[idx].EKSRoles {
+		if r.Name != roleName {
 			filtered = append(filtered, r)
 		} else {
 			found = true
@@ -404,48 +476,63 @@ func (m *Manager) RemoveAWSEKSRole(name string) error {
 	}
 
 	if !found {
-		return fmt.Errorf("EKS role '%s' not found", name)
+		return fmt.Errorf("EKS role '%s' not found in account '%s'", roleName, accountName)
 	}
 
-	config.EKSRoles = filtered
+	config.Accounts[idx].EKSRoles = filtered
 	return m.SaveAWSConfig(config)
 }
 
-// GetAWSEKSRoleARN returns the role ARN for a given name
-func (m *Manager) GetAWSEKSRoleARN(name string) (string, error) {
+// GetAWSEKSRoleARN returns the role ARN for a given role name in an account
+func (m *Manager) GetAWSEKSRoleARN(accountName, roleName string) (string, error) {
 	config, err := m.LoadAWSConfig()
 	if err != nil {
 		return "", err
 	}
 
-	for _, r := range config.EKSRoles {
-		if r.Name == name {
+	idx := m.findAWSAccount(config, accountName)
+	if idx < 0 {
+		return "", fmt.Errorf("AWS account '%s' not found", accountName)
+	}
+
+	for _, r := range config.Accounts[idx].EKSRoles {
+		if r.Name == roleName {
 			return r.RoleARN, nil
 		}
 	}
 
-	return "", fmt.Errorf("EKS role '%s' not found in repository configuration", name)
+	return "", fmt.Errorf("EKS role '%s' not found in account '%s'", roleName, accountName)
 }
 
-// ListAWSEKSRoles returns all configured EKS roles
-func (m *Manager) ListAWSEKSRoles() ([]AWSEKSRole, error) {
+// ListAWSEKSRoles returns all configured EKS roles for an account
+func (m *Manager) ListAWSEKSRoles(accountName string) ([]AWSEKSRole, error) {
 	config, err := m.LoadAWSConfig()
 	if err != nil {
 		return nil, err
 	}
 
-	return config.EKSRoles, nil
+	idx := m.findAWSAccount(config, accountName)
+	if idx < 0 {
+		return nil, fmt.Errorf("AWS account '%s' not found", accountName)
+	}
+
+	return config.Accounts[idx].EKSRoles, nil
 }
 
-// HasAWSEKSRole checks if an EKS role with the given name exists
-func (m *Manager) HasAWSEKSRole(name string) (bool, error) {
+// HasAWSEKSRole checks if an EKS role with the given name exists in an account
+func (m *Manager) HasAWSEKSRole(accountName, roleName string) (bool, error) {
 	config, err := m.LoadAWSConfig()
 	if err != nil {
 		return false, err
 	}
 
-	for _, r := range config.EKSRoles {
-		if r.Name == name {
+	idx := m.findAWSAccount(config, accountName)
+	if idx < 0 {
+		return false, fmt.Errorf("AWS account '%s' not found", accountName)
+	}
+
+	for _, r := range config.Accounts[idx].EKSRoles {
+		if r.Name == roleName {
 			return true, nil
 		}
 	}
@@ -453,42 +540,49 @@ func (m *Manager) HasAWSEKSRole(name string) (bool, error) {
 	return false, nil
 }
 
-// AddAWSNodeRole adds a named node role to the AWS configuration
-func (m *Manager) AddAWSNodeRole(name, roleARN string) error {
+// AddAWSNodeRole adds a named node role to an account
+func (m *Manager) AddAWSNodeRole(accountName, roleName, roleARN string) error {
 	config, err := m.LoadAWSConfig()
 	if err != nil {
 		return err
 	}
 
-	// Check if name already exists
-	for i, r := range config.NodeRoles {
-		if r.Name == name {
-			// Update existing role
-			config.NodeRoles[i].RoleARN = roleARN
+	idx := m.findAWSAccount(config, accountName)
+	if idx < 0 {
+		return fmt.Errorf("AWS account '%s' not found", accountName)
+	}
+
+	for i, r := range config.Accounts[idx].NodeRoles {
+		if r.Name == roleName {
+			config.Accounts[idx].NodeRoles[i].RoleARN = roleARN
 			return m.SaveAWSConfig(config)
 		}
 	}
 
-	// Add new role
-	config.NodeRoles = append(config.NodeRoles, AWSNodeRole{
-		Name:    name,
+	config.Accounts[idx].NodeRoles = append(config.Accounts[idx].NodeRoles, AWSNodeRole{
+		Name:    roleName,
 		RoleARN: roleARN,
 	})
 
 	return m.SaveAWSConfig(config)
 }
 
-// RemoveAWSNodeRole removes a node role by name from the AWS configuration
-func (m *Manager) RemoveAWSNodeRole(name string) error {
+// RemoveAWSNodeRole removes a node role by name from an account
+func (m *Manager) RemoveAWSNodeRole(accountName, roleName string) error {
 	config, err := m.LoadAWSConfig()
 	if err != nil {
 		return err
 	}
 
+	idx := m.findAWSAccount(config, accountName)
+	if idx < 0 {
+		return fmt.Errorf("AWS account '%s' not found", accountName)
+	}
+
 	filtered := []AWSNodeRole{}
 	found := false
-	for _, r := range config.NodeRoles {
-		if r.Name != name {
+	for _, r := range config.Accounts[idx].NodeRoles {
+		if r.Name != roleName {
 			filtered = append(filtered, r)
 		} else {
 			found = true
@@ -496,48 +590,63 @@ func (m *Manager) RemoveAWSNodeRole(name string) error {
 	}
 
 	if !found {
-		return fmt.Errorf("node role '%s' not found", name)
+		return fmt.Errorf("node role '%s' not found in account '%s'", roleName, accountName)
 	}
 
-	config.NodeRoles = filtered
+	config.Accounts[idx].NodeRoles = filtered
 	return m.SaveAWSConfig(config)
 }
 
-// GetAWSNodeRoleARN returns the role ARN for a given node role name
-func (m *Manager) GetAWSNodeRoleARN(name string) (string, error) {
+// GetAWSNodeRoleARN returns the role ARN for a given node role name in an account
+func (m *Manager) GetAWSNodeRoleARN(accountName, roleName string) (string, error) {
 	config, err := m.LoadAWSConfig()
 	if err != nil {
 		return "", err
 	}
 
-	for _, r := range config.NodeRoles {
-		if r.Name == name {
+	idx := m.findAWSAccount(config, accountName)
+	if idx < 0 {
+		return "", fmt.Errorf("AWS account '%s' not found", accountName)
+	}
+
+	for _, r := range config.Accounts[idx].NodeRoles {
+		if r.Name == roleName {
 			return r.RoleARN, nil
 		}
 	}
 
-	return "", fmt.Errorf("node role '%s' not found in repository configuration", name)
+	return "", fmt.Errorf("node role '%s' not found in account '%s'", roleName, accountName)
 }
 
-// ListAWSNodeRoles returns all configured node roles
-func (m *Manager) ListAWSNodeRoles() ([]AWSNodeRole, error) {
+// ListAWSNodeRoles returns all configured node roles for an account
+func (m *Manager) ListAWSNodeRoles(accountName string) ([]AWSNodeRole, error) {
 	config, err := m.LoadAWSConfig()
 	if err != nil {
 		return nil, err
 	}
 
-	return config.NodeRoles, nil
+	idx := m.findAWSAccount(config, accountName)
+	if idx < 0 {
+		return nil, fmt.Errorf("AWS account '%s' not found", accountName)
+	}
+
+	return config.Accounts[idx].NodeRoles, nil
 }
 
-// HasAWSNodeRole checks if a node role with the given name exists
-func (m *Manager) HasAWSNodeRole(name string) (bool, error) {
+// HasAWSNodeRole checks if a node role with the given name exists in an account
+func (m *Manager) HasAWSNodeRole(accountName, roleName string) (bool, error) {
 	config, err := m.LoadAWSConfig()
 	if err != nil {
 		return false, err
 	}
 
-	for _, r := range config.NodeRoles {
-		if r.Name == name {
+	idx := m.findAWSAccount(config, accountName)
+	if idx < 0 {
+		return false, fmt.Errorf("AWS account '%s' not found", accountName)
+	}
+
+	for _, r := range config.Accounts[idx].NodeRoles {
+		if r.Name == roleName {
 			return true, nil
 		}
 	}
@@ -545,42 +654,49 @@ func (m *Manager) HasAWSNodeRole(name string) (bool, error) {
 	return false, nil
 }
 
-// AddAWSVPC adds a named VPC to the AWS configuration
-func (m *Manager) AddAWSVPC(name, vpcID string) error {
+// AddAWSVPC adds a named VPC to an account
+func (m *Manager) AddAWSVPC(accountName, vpcName, vpcID string) error {
 	config, err := m.LoadAWSConfig()
 	if err != nil {
 		return err
 	}
 
-	// Check if name already exists
-	for i, v := range config.VPCs {
-		if v.Name == name {
-			// Update existing VPC
-			config.VPCs[i].VPCID = vpcID
+	idx := m.findAWSAccount(config, accountName)
+	if idx < 0 {
+		return fmt.Errorf("AWS account '%s' not found", accountName)
+	}
+
+	for i, v := range config.Accounts[idx].VPCs {
+		if v.Name == vpcName {
+			config.Accounts[idx].VPCs[i].VPCID = vpcID
 			return m.SaveAWSConfig(config)
 		}
 	}
 
-	// Add new VPC
-	config.VPCs = append(config.VPCs, AWSVPC{
-		Name:  name,
+	config.Accounts[idx].VPCs = append(config.Accounts[idx].VPCs, AWSVPC{
+		Name:  vpcName,
 		VPCID: vpcID,
 	})
 
 	return m.SaveAWSConfig(config)
 }
 
-// RemoveAWSVPC removes a VPC by name from the AWS configuration
-func (m *Manager) RemoveAWSVPC(name string) error {
+// RemoveAWSVPC removes a VPC by name from an account
+func (m *Manager) RemoveAWSVPC(accountName, vpcName string) error {
 	config, err := m.LoadAWSConfig()
 	if err != nil {
 		return err
 	}
 
+	idx := m.findAWSAccount(config, accountName)
+	if idx < 0 {
+		return fmt.Errorf("AWS account '%s' not found", accountName)
+	}
+
 	filtered := []AWSVPC{}
 	found := false
-	for _, v := range config.VPCs {
-		if v.Name != name {
+	for _, v := range config.Accounts[idx].VPCs {
+		if v.Name != vpcName {
 			filtered = append(filtered, v)
 		} else {
 			found = true
@@ -588,54 +704,71 @@ func (m *Manager) RemoveAWSVPC(name string) error {
 	}
 
 	if !found {
-		return fmt.Errorf("VPC '%s' not found", name)
+		return fmt.Errorf("VPC '%s' not found in account '%s'", vpcName, accountName)
 	}
 
-	config.VPCs = filtered
+	config.Accounts[idx].VPCs = filtered
 	return m.SaveAWSConfig(config)
 }
 
-// GetAWSVPCID returns the VPC ID for a given name
-func (m *Manager) GetAWSVPCID(name string) (string, error) {
+// GetAWSVPCID returns the VPC ID for a given VPC name in an account
+func (m *Manager) GetAWSVPCID(accountName, vpcName string) (string, error) {
 	config, err := m.LoadAWSConfig()
 	if err != nil {
 		return "", err
 	}
 
-	for _, v := range config.VPCs {
-		if v.Name == name {
+	idx := m.findAWSAccount(config, accountName)
+	if idx < 0 {
+		return "", fmt.Errorf("AWS account '%s' not found", accountName)
+	}
+
+	for _, v := range config.Accounts[idx].VPCs {
+		if v.Name == vpcName {
 			return v.VPCID, nil
 		}
 	}
 
-	return "", fmt.Errorf("VPC '%s' not found in repository configuration", name)
+	return "", fmt.Errorf("VPC '%s' not found in account '%s'", vpcName, accountName)
 }
 
-// ListAWSVPCs returns all configured VPCs
-func (m *Manager) ListAWSVPCs() ([]AWSVPC, error) {
+// ListAWSVPCs returns all configured VPCs for an account
+func (m *Manager) ListAWSVPCs(accountName string) ([]AWSVPC, error) {
 	config, err := m.LoadAWSConfig()
 	if err != nil {
 		return nil, err
 	}
 
-	return config.VPCs, nil
+	idx := m.findAWSAccount(config, accountName)
+	if idx < 0 {
+		return nil, fmt.Errorf("AWS account '%s' not found", accountName)
+	}
+
+	return config.Accounts[idx].VPCs, nil
 }
 
-// HasAWSVPC checks if a VPC with the given name exists
-func (m *Manager) HasAWSVPC(name string) (bool, error) {
+// HasAWSVPC checks if a VPC with the given name exists in an account
+func (m *Manager) HasAWSVPC(accountName, vpcName string) (bool, error) {
 	config, err := m.LoadAWSConfig()
 	if err != nil {
 		return false, err
 	}
 
-	for _, v := range config.VPCs {
-		if v.Name == name {
+	idx := m.findAWSAccount(config, accountName)
+	if idx < 0 {
+		return false, fmt.Errorf("AWS account '%s' not found", accountName)
+	}
+
+	for _, v := range config.Accounts[idx].VPCs {
+		if v.Name == vpcName {
 			return true, nil
 		}
 	}
 
 	return false, nil
 }
+
+// ========== Azure Functions ==========
 
 // LoadAzureConfig loads the Azure configuration from the repository
 func (m *Manager) LoadAzureConfig() (*AzureConfig, error) {
@@ -676,6 +809,97 @@ func (m *Manager) SaveAzureConfig(config *AzureConfig) error {
 	return nil
 }
 
+// AddAzureSubscription adds a named subscription to the Azure configuration
+func (m *Manager) AddAzureSubscription(name, subscriptionID string) error {
+	config, err := m.LoadAzureConfig()
+	if err != nil {
+		return err
+	}
+
+	for i, s := range config.Subscriptions {
+		if s.Name == name {
+			config.Subscriptions[i].SubscriptionID = subscriptionID
+			return m.SaveAzureConfig(config)
+		}
+	}
+
+	config.Subscriptions = append(config.Subscriptions, AzureSubscription{
+		Name:           name,
+		SubscriptionID: subscriptionID,
+	})
+
+	return m.SaveAzureConfig(config)
+}
+
+// RemoveAzureSubscription removes a subscription by name
+func (m *Manager) RemoveAzureSubscription(name string) error {
+	config, err := m.LoadAzureConfig()
+	if err != nil {
+		return err
+	}
+
+	filtered := []AzureSubscription{}
+	found := false
+	for _, s := range config.Subscriptions {
+		if s.Name != name {
+			filtered = append(filtered, s)
+		} else {
+			found = true
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("subscription '%s' not found", name)
+	}
+
+	config.Subscriptions = filtered
+	return m.SaveAzureConfig(config)
+}
+
+// GetAzureSubscriptionID returns the subscription ID for a given name
+func (m *Manager) GetAzureSubscriptionID(name string) (string, error) {
+	config, err := m.LoadAzureConfig()
+	if err != nil {
+		return "", err
+	}
+
+	for _, s := range config.Subscriptions {
+		if s.Name == name {
+			return s.SubscriptionID, nil
+		}
+	}
+
+	return "", fmt.Errorf("Azure subscription '%s' not found", name)
+}
+
+// ListAzureSubscriptions returns all configured subscriptions
+func (m *Manager) ListAzureSubscriptions() ([]AzureSubscription, error) {
+	config, err := m.LoadAzureConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	return config.Subscriptions, nil
+}
+
+// HasAzureSubscription checks if a subscription with the given name exists
+func (m *Manager) HasAzureSubscription(name string) (bool, error) {
+	config, err := m.LoadAzureConfig()
+	if err != nil {
+		return false, err
+	}
+
+	for _, s := range config.Subscriptions {
+		if s.Name == name {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// ========== Civo Functions ==========
+
 // LoadCivoConfig loads the Civo configuration from the repository
 func (m *Manager) LoadCivoConfig() (*CivoConfig, error) {
 	configPath := m.getConfigPath("civo")
@@ -715,9 +939,199 @@ func (m *Manager) SaveCivoConfig(config *CivoConfig) error {
 	return nil
 }
 
-// ConfigExists checks if a provider config file exists
-func (m *Manager) ConfigExists(provider string) bool {
-	configPath := m.getConfigPath(provider)
-	_, err := os.Stat(configPath)
-	return err == nil
+// AddCivoOrganization adds a named organization to the Civo configuration
+func (m *Manager) AddCivoOrganization(name, orgID string) error {
+	config, err := m.LoadCivoConfig()
+	if err != nil {
+		return err
+	}
+
+	for i, o := range config.Organizations {
+		if o.Name == name {
+			config.Organizations[i].OrgID = orgID
+			return m.SaveCivoConfig(config)
+		}
+	}
+
+	config.Organizations = append(config.Organizations, CivoOrganization{
+		Name:  name,
+		OrgID: orgID,
+	})
+
+	return m.SaveCivoConfig(config)
+}
+
+// RemoveCivoOrganization removes an organization by name
+func (m *Manager) RemoveCivoOrganization(name string) error {
+	config, err := m.LoadCivoConfig()
+	if err != nil {
+		return err
+	}
+
+	filtered := []CivoOrganization{}
+	found := false
+	for _, o := range config.Organizations {
+		if o.Name != name {
+			filtered = append(filtered, o)
+		} else {
+			found = true
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("organization '%s' not found", name)
+	}
+
+	config.Organizations = filtered
+	return m.SaveCivoConfig(config)
+}
+
+// GetCivoOrgID returns the org ID for a given name
+func (m *Manager) GetCivoOrgID(name string) (string, error) {
+	config, err := m.LoadCivoConfig()
+	if err != nil {
+		return "", err
+	}
+
+	for _, o := range config.Organizations {
+		if o.Name == name {
+			return o.OrgID, nil
+		}
+	}
+
+	return "", fmt.Errorf("Civo organization '%s' not found", name)
+}
+
+// GetCivoOrganization returns the full organization config for a given name
+func (m *Manager) GetCivoOrganization(name string) (*CivoOrganization, error) {
+	config, err := m.LoadCivoConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, o := range config.Organizations {
+		if o.Name == name {
+			return &o, nil
+		}
+	}
+
+	return nil, fmt.Errorf("Civo organization '%s' not found", name)
+}
+
+// ListCivoOrganizations returns all configured organizations
+func (m *Manager) ListCivoOrganizations() ([]CivoOrganization, error) {
+	config, err := m.LoadCivoConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	return config.Organizations, nil
+}
+
+// HasCivoOrganization checks if an organization with the given name exists
+func (m *Manager) HasCivoOrganization(name string) (bool, error) {
+	config, err := m.LoadCivoConfig()
+	if err != nil {
+		return false, err
+	}
+
+	for _, o := range config.Organizations {
+		if o.Name == name {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// AddCivoNetwork adds a named network to an organization
+func (m *Manager) AddCivoNetwork(orgName, networkName, networkID string) error {
+	config, err := m.LoadCivoConfig()
+	if err != nil {
+		return err
+	}
+
+	for i, o := range config.Organizations {
+		if o.Name == orgName {
+			for j, n := range o.Networks {
+				if n.Name == networkName {
+					config.Organizations[i].Networks[j].NetworkID = networkID
+					return m.SaveCivoConfig(config)
+				}
+			}
+			config.Organizations[i].Networks = append(config.Organizations[i].Networks, CivoNetwork{
+				Name:      networkName,
+				NetworkID: networkID,
+			})
+			return m.SaveCivoConfig(config)
+		}
+	}
+
+	return fmt.Errorf("Civo organization '%s' not found", orgName)
+}
+
+// RemoveCivoNetwork removes a network by name from an organization
+func (m *Manager) RemoveCivoNetwork(orgName, networkName string) error {
+	config, err := m.LoadCivoConfig()
+	if err != nil {
+		return err
+	}
+
+	for i, o := range config.Organizations {
+		if o.Name == orgName {
+			filtered := []CivoNetwork{}
+			found := false
+			for _, n := range o.Networks {
+				if n.Name != networkName {
+					filtered = append(filtered, n)
+				} else {
+					found = true
+				}
+			}
+			if !found {
+				return fmt.Errorf("network '%s' not found in organization '%s'", networkName, orgName)
+			}
+			config.Organizations[i].Networks = filtered
+			return m.SaveCivoConfig(config)
+		}
+	}
+
+	return fmt.Errorf("Civo organization '%s' not found", orgName)
+}
+
+// GetCivoNetworkID returns the network ID for a given network name in an organization
+func (m *Manager) GetCivoNetworkID(orgName, networkName string) (string, error) {
+	config, err := m.LoadCivoConfig()
+	if err != nil {
+		return "", err
+	}
+
+	for _, o := range config.Organizations {
+		if o.Name == orgName {
+			for _, n := range o.Networks {
+				if n.Name == networkName {
+					return n.NetworkID, nil
+				}
+			}
+			return "", fmt.Errorf("network '%s' not found in organization '%s'", networkName, orgName)
+		}
+	}
+
+	return "", fmt.Errorf("Civo organization '%s' not found", orgName)
+}
+
+// ListCivoNetworks returns all configured networks for an organization
+func (m *Manager) ListCivoNetworks(orgName string) ([]CivoNetwork, error) {
+	config, err := m.LoadCivoConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, o := range config.Organizations {
+		if o.Name == orgName {
+			return o.Networks, nil
+		}
+	}
+
+	return nil, fmt.Errorf("Civo organization '%s' not found", orgName)
 }
