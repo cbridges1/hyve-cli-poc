@@ -87,7 +87,7 @@ jobs:
       run: go mod download
       
     - name: Build application
-      run: go build -o civo-cluster-deploy .
+      run: go build -o hyve .
       
     - name: Generate cluster YAML from inputs
       if: github.event_name == 'workflow_dispatch' && github.event.inputs.action != '' && github.event.inputs.cluster-name != ''
@@ -102,7 +102,7 @@ jobs:
         echo ""
         
         # Build CLI command with the provided inputs
-        CLI_COMMAND="./civo-cluster-deploy"
+        CLI_COMMAND="./hyve"
         CLI_COMMAND="$CLI_COMMAND -action=${{ github.event.inputs.action }}"
         CLI_COMMAND="$CLI_COMMAND -cluster-name=${{ github.event.inputs.cluster-name }}"
         CLI_COMMAND="$CLI_COMMAND -region=${{ github.event.inputs.region }}"
@@ -172,7 +172,7 @@ jobs:
         CIVO_TOKEN: ${{ secrets.CIVO_TOKEN }}
       run: |
         echo "=== DRY RUN MODE (Pull Request) ==="
-        echo "This would execute: ./civo-cluster-deploy"
+        echo "This would execute: ./hyve"
         echo "But we're skipping actual deployment for PR safety"
         echo "Cluster configurations would be processed:"
         if [ -d "state/clusters" ]; then
@@ -199,7 +199,7 @@ jobs:
         fi
         
         # Run the cluster deployment
-        ./civo-cluster-deploy
+        ./hyve
         
     - name: Deploy clusters (manual trigger)
       if: github.event_name == 'workflow_dispatch'
@@ -225,7 +225,7 @@ jobs:
         fi
         
         # Run the cluster deployment
-        ./civo-cluster-deploy
+        ./hyve
         
     - name: Display exported cluster information
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'

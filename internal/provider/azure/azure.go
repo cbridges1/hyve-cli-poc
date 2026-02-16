@@ -9,7 +9,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/containerservice/armcontainerservice/v4"
 
-	"civo-cluster-deploy/internal/types"
+	"hyve/internal/types"
 )
 
 // Cluster represents a generic cluster

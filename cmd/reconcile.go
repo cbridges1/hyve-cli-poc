@@ -8,11 +8,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"civo-cluster-deploy/internal/config"
-	"civo-cluster-deploy/internal/credentials"
-	"civo-cluster-deploy/internal/reconcile"
-	"civo-cluster-deploy/internal/repository"
-	"civo-cluster-deploy/internal/state"
+	"hyve/internal/config"
+	"hyve/internal/credentials"
+	"hyve/internal/reconcile"
+	"hyve/internal/repository"
+	"hyve/internal/state"
 )
 
 var reconcileCmd = &cobra.Command{

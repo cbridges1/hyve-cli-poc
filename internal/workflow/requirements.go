@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"civo-cluster-deploy/internal/credentials"
+	"hyve/internal/credentials"
 )
 
 // RequirementValidator validates workflow requirements

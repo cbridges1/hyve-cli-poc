@@ -10,7 +10,7 @@ import (
 	container "google.golang.org/api/container/v1"
 	"google.golang.org/api/option"
 
-	"civo-cluster-deploy/internal/types"
+	"hyve/internal/types"
 )
 
 // Cluster represents a generic cluster

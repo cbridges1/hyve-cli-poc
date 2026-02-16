@@ -11,8 +11,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"civo-cluster-deploy/internal/kubeconfig"
-	"civo-cluster-deploy/internal/repository"
+	"hyve/internal/kubeconfig"
+	"hyve/internal/repository"
 )
 
 var runCmd = &cobra.Command{

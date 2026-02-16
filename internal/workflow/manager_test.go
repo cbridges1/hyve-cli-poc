@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"civo-cluster-deploy/internal/repository"
+	"hyve/internal/repository"
 )
 
 // setupTestEnvironment creates a test repository and workflow manager

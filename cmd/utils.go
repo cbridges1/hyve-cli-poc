@@ -6,11 +6,11 @@ import (
 	"log"
 	"os"
 
-	"civo-cluster-deploy/internal/cluster"
-	"civo-cluster-deploy/internal/provider"
-	"civo-cluster-deploy/internal/providerconfig"
-	"civo-cluster-deploy/internal/repository"
-	"civo-cluster-deploy/internal/types"
+	"hyve/internal/cluster"
+	"hyve/internal/provider"
+	"hyve/internal/providerconfig"
+	"hyve/internal/repository"
+	"hyve/internal/types"
 )
 
 func exportClusterInfo(ctx context.Context, apiKey string, clusterDef types.ClusterDefinition) error {

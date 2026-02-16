@@ -10,9 +10,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"civo-cluster-deploy/internal/credentials"
-	"civo-cluster-deploy/internal/git"
-	"civo-cluster-deploy/internal/repository"
+	"hyve/internal/credentials"
+	"hyve/internal/git"
+	"hyve/internal/repository"
 )
 
 var gitCmd = &cobra.Command{

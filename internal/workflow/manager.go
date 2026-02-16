@@ -10,7 +10,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"civo-cluster-deploy/internal/repository"
+	"hyve/internal/repository"
 )
 
 const (

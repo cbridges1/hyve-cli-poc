@@ -10,12 +10,12 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"civo-cluster-deploy/internal/config"
-	"civo-cluster-deploy/internal/context"
-	"civo-cluster-deploy/internal/credentials"
-	"civo-cluster-deploy/internal/provider/aws"
-	"civo-cluster-deploy/internal/providerconfig"
-	"civo-cluster-deploy/internal/repository"
+	"hyve/internal/config"
+	"hyve/internal/context"
+	"hyve/internal/credentials"
+	"hyve/internal/provider/aws"
+	"hyve/internal/providerconfig"
+	"hyve/internal/repository"
 )
 
 var configCmd = &cobra.Command{

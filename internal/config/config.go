@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 
-	"civo-cluster-deploy/internal/credentials"
+	"hyve/internal/credentials"
 )
 
 // GitConfig represents Git repository configuration

@@ -4,11 +4,11 @@ import (
 	"context"
 	"log"
 
-	"civo-cluster-deploy/internal/provider/aws"
-	"civo-cluster-deploy/internal/provider/azure"
-	"civo-cluster-deploy/internal/provider/civo"
-	"civo-cluster-deploy/internal/provider/gcp"
-	"civo-cluster-deploy/internal/types"
+	"hyve/internal/provider/aws"
+	"hyve/internal/provider/azure"
+	"hyve/internal/provider/civo"
+	"hyve/internal/provider/gcp"
+	"hyve/internal/types"
 )
 
 // ProviderAdapter adapts provider implementations to the generic provider interface

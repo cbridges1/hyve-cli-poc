@@ -9,7 +9,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"civo-cluster-deploy/internal/types"
+	"hyve/internal/types"
 )
 
 // Manager handles cluster template operations

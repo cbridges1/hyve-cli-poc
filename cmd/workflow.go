@@ -12,7 +12,7 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
-	"civo-cluster-deploy/internal/workflow"
+	"hyve/internal/workflow"
 )
 
 var workflowCmd = &cobra.Command{

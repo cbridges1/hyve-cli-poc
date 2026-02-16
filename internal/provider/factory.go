@@ -5,11 +5,11 @@ import (
 	"os"
 	"strings"
 
-	"civo-cluster-deploy/internal/credentials"
-	"civo-cluster-deploy/internal/provider/aws"
-	"civo-cluster-deploy/internal/provider/azure"
-	"civo-cluster-deploy/internal/provider/civo"
-	"civo-cluster-deploy/internal/provider/gcp"
+	"hyve/internal/credentials"
+	"hyve/internal/provider/aws"
+	"hyve/internal/provider/azure"
+	"hyve/internal/provider/civo"
+	"hyve/internal/provider/gcp"
 )
 
 // Factory creates provider instances

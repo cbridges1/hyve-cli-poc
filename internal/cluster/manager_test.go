@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"civo-cluster-deploy/internal/provider"
-	"civo-cluster-deploy/internal/types"
+	"hyve/internal/provider"
+	"hyve/internal/types"
 )
 
 // mockProvider implements the provider.Provider interface for testing

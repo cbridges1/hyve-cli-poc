@@ -11,16 +11,16 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
-	"civo-cluster-deploy/internal/cluster"
-	"civo-cluster-deploy/internal/config"
-	"civo-cluster-deploy/internal/context"
-	"civo-cluster-deploy/internal/credentials"
-	"civo-cluster-deploy/internal/ingress"
-	"civo-cluster-deploy/internal/provider"
-	"civo-cluster-deploy/internal/providerconfig"
-	"civo-cluster-deploy/internal/repository"
-	"civo-cluster-deploy/internal/state"
-	"civo-cluster-deploy/internal/types"
+	"hyve/internal/cluster"
+	"hyve/internal/config"
+	"hyve/internal/context"
+	"hyve/internal/credentials"
+	"hyve/internal/ingress"
+	"hyve/internal/provider"
+	"hyve/internal/providerconfig"
+	"hyve/internal/repository"
+	"hyve/internal/state"
+	"hyve/internal/types"
 )
 
 // ValidProviders is the list of supported cloud providers

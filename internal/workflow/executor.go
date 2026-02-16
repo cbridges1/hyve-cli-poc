@@ -15,11 +15,11 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"civo-cluster-deploy/internal/cluster"
-	"civo-cluster-deploy/internal/config"
-	"civo-cluster-deploy/internal/kubeconfig"
-	"civo-cluster-deploy/internal/provider"
-	"civo-cluster-deploy/internal/types"
+	"hyve/internal/cluster"
+	"hyve/internal/config"
+	"hyve/internal/kubeconfig"
+	"hyve/internal/provider"
+	"hyve/internal/types"
 )
 
 // Executor handles workflow execution

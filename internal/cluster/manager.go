@@ -6,8 +6,8 @@ import (
 	"log"
 	"strings"
 
-	"civo-cluster-deploy/internal/provider"
-	"civo-cluster-deploy/internal/types"
+	"hyve/internal/provider"
+	"hyve/internal/types"
 )
 
 // Manager handles cluster operations using a generic provider

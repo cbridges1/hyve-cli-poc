@@ -10,8 +10,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"civo-cluster-deploy/internal/git"
-	"civo-cluster-deploy/internal/types"
+	"hyve/internal/git"
+	"hyve/internal/types"
 )
 
 // Manager handles state file operations using Git repositories

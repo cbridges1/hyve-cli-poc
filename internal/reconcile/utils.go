@@ -6,7 +6,7 @@ import (
 	"log"
 	"os"
 
-	"civo-cluster-deploy/internal/cluster"
+	"hyve/internal/cluster"
 )
 
 // exportClusterInfoToEnv exports cluster information to environment variables

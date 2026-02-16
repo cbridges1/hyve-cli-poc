@@ -5,15 +5,15 @@ import (
 	"fmt"
 	"log"
 
-	"civo-cluster-deploy/internal/cluster"
-	"civo-cluster-deploy/internal/ingress"
-	"civo-cluster-deploy/internal/kubeconfig"
-	"civo-cluster-deploy/internal/provider"
-	"civo-cluster-deploy/internal/providerconfig"
-	"civo-cluster-deploy/internal/repository"
-	"civo-cluster-deploy/internal/state"
-	"civo-cluster-deploy/internal/types"
-	"civo-cluster-deploy/internal/workflow"
+	"hyve/internal/cluster"
+	"hyve/internal/ingress"
+	"hyve/internal/kubeconfig"
+	"hyve/internal/provider"
+	"hyve/internal/providerconfig"
+	"hyve/internal/repository"
+	"hyve/internal/state"
+	"hyve/internal/types"
+	"hyve/internal/workflow"
 )
 
 // Reconciler handles the reconciliation of clusters using provider abstraction

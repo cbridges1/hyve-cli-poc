@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"civo-cluster-deploy/internal/types"
+	"hyve/internal/types"
 )
 
 // Cluster represents a generic cluster

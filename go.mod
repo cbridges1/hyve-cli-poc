@@ -1,4 +1,4 @@
-module civo-cluster-deploy
+module hyve
 
 go 1.24.5
 

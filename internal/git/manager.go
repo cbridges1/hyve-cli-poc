@@ -5,7 +5,7 @@ import (
 	"os"
 	"os/exec"
 
-	"civo-cluster-deploy/internal/config"
+	"hyve/internal/config"
 )
 
 // NewBackend creates a new Git backend based on configuration

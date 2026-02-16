@@ -11,16 +11,16 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
-	"civo-cluster-deploy/internal/cluster"
-	"civo-cluster-deploy/internal/config"
-	"civo-cluster-deploy/internal/credentials"
-	"civo-cluster-deploy/internal/kubeconfig"
-	"civo-cluster-deploy/internal/provider"
-	"civo-cluster-deploy/internal/repository"
-	"civo-cluster-deploy/internal/state"
-	"civo-cluster-deploy/internal/template"
-	"civo-cluster-deploy/internal/types"
-	"civo-cluster-deploy/internal/workflow"
+	"hyve/internal/cluster"
+	"hyve/internal/config"
+	"hyve/internal/credentials"
+	"hyve/internal/kubeconfig"
+	"hyve/internal/provider"
+	"hyve/internal/repository"
+	"hyve/internal/state"
+	"hyve/internal/template"
+	"hyve/internal/types"
+	"hyve/internal/workflow"
 )
 
 var templateCmd = &cobra.Command{

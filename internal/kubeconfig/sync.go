@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log"
 
-	"civo-cluster-deploy/internal/provider"
-	"civo-cluster-deploy/internal/types"
+	"hyve/internal/provider"
+	"hyve/internal/types"
 )
 
 // Syncer handles synchronization of kubeconfigs from clusters
