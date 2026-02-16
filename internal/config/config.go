@@ -117,40 +117,32 @@ func (m *Manager) IsGitConfigured() bool {
 }
 
 // GetCivoToken loads the Civo API token from configuration
-// Priority: 1) Database (default account) 2) Environment variable 3) .env file
+// Priority: 1) Database 2) Environment variable 3) .env file
 func (m *Manager) GetCivoToken() string {
-	return m.GetCivoTokenForAccount("default")
-}
-
-// GetCivoTokenForAccount loads the Civo API token for a specific account
-// Priority: 1) Database 2) Environment variable (for default account only) 3) .env file
-func (m *Manager) GetCivoTokenForAccount(accountID string) string {
 	// First, try to get from database
 	credsMgr, err := credentials.NewManager()
 	if err == nil {
 		defer credsMgr.Close()
-		token, err := credsMgr.GetCivoToken(accountID)
+		token, err := credsMgr.GetCivoToken()
 		if err == nil && token != "" {
 			return token
 		}
 	}
 
-	// For default account, also check environment variable
-	if accountID == "default" {
-		if token := os.Getenv("CIVO_TOKEN"); token != "" {
+	// Check environment variable
+	if token := os.Getenv("CIVO_TOKEN"); token != "" {
+		return token
+	}
+
+	// Also check .env file
+	viper.SetConfigName(".env")
+	viper.SetConfigType("env")
+	viper.AddConfigPath(".")
+	viper.AutomaticEnv()
+
+	if err := viper.ReadInConfig(); err == nil {
+		if token := viper.GetString("CIVO_TOKEN"); token != "" {
 			return token
-		}
-
-		// Also check .env file
-		viper.SetConfigName(".env")
-		viper.SetConfigType("env")
-		viper.AddConfigPath(".")
-		viper.AutomaticEnv()
-
-		if err := viper.ReadInConfig(); err == nil {
-			if token := viper.GetString("CIVO_TOKEN"); token != "" {
-				return token
-			}
 		}
 	}
 

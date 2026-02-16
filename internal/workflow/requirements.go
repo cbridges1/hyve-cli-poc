@@ -102,7 +102,7 @@ func (v *RequirementValidator) validateSecret(secret SecretRequirement) error {
 	switch secret.Provider {
 	case "civo":
 		// Civo tokens are stored in our credentials database
-		hasToken, err := v.credsMgr.HasCivoToken("default")
+		hasToken, err := v.credsMgr.HasCivoToken()
 		if err != nil {
 			if secret.Required {
 				return fmt.Errorf("error checking secret '%s' for provider '%s': %w", secret.Name, secret.Provider, err)
@@ -228,7 +228,7 @@ func (v *RequirementValidator) LoadSecretsIntoEnvironment(requirements *Workflow
 		// Only Civo stores credentials in our database
 		// AWS, GCP, Azure use native CLI authentication
 		if secret.Provider == "civo" {
-			token, err := v.credsMgr.GetCivoToken("default")
+			token, err := v.credsMgr.GetCivoToken()
 			if err != nil {
 				if secret.Required {
 					return fmt.Errorf("failed to load secret '%s' from Civo credentials: %w", secret.Name, err)

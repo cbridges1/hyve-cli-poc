@@ -40,7 +40,7 @@ func (f *Factory) CreateProvider(providerName, apiKey, region string) (Provider,
 			credsMgr, err := credentials.NewManager()
 			if err == nil {
 				defer credsMgr.Close()
-				token, _ = credsMgr.GetDefaultCivoToken()
+				token, _ = credsMgr.GetCivoToken()
 			}
 		}
 		if token == "" {
@@ -103,18 +103,18 @@ func (f *Factory) CreateProvider(providerName, apiKey, region string) (Provider,
 }
 
 // CreateProviderWithOptions creates a provider with additional options
-// For Civo, credentials are required in opts.APIKey or opts.CivoAccountID
+// For Civo, credentials are required in opts.APIKey or stored in credentials
 // For AWS/GCP/Azure, native CLI authentication is used (options are for environment overrides only)
 func (f *Factory) CreateProviderWithOptions(providerName string, opts ProviderOptions) (Provider, error) {
 	switch strings.ToLower(providerName) {
 	case "civo":
 		token := opts.APIKey
-		if token == "" && opts.CivoAccountID != "" {
-			// Load token from credentials store using account ID
+		if token == "" {
+			// Load token from credentials store
 			credsMgr, err := credentials.NewManager()
 			if err == nil {
 				defer credsMgr.Close()
-				token, _ = credsMgr.GetCivoToken(opts.CivoAccountID)
+				token, _ = credsMgr.GetCivoToken()
 			}
 		}
 		if token == "" {
@@ -178,9 +178,8 @@ type ProviderOptions struct {
 	// Common
 	Region string // For all providers
 
-	// Civo - requires API token stored in Hyve
-	APIKey        string // Direct API key (optional, can use CivoAccountID instead)
-	CivoAccountID string // Account ID to load token from credentials store
+	// Civo - requires API token stored in Hyve or environment
+	APIKey string // Direct API key (optional, can load from credentials store)
 
 	// GCP - uses gcloud CLI authentication (Application Default Credentials)
 	ProjectID string // GCP project ID (can also be set via GCP_PROJECT_ID env var)

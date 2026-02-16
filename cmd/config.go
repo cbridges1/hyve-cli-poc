@@ -35,14 +35,9 @@ Other providers use their native CLI authentication:
   - GCP:   Run 'gcloud auth application-default login'
   - Azure: Run 'az login'
 
-The --account flag specifies the Civo account ID. This allows you to store
-multiple Civo accounts and switch between them. If not specified, 'default'
-is used.
-
 Examples:
   hyve config set-token civo
-  hyve config set-token civo --account my-account
-  hyve config set-token civo --account production --token YOUR_TOKEN_HERE`,
+  hyve config set-token civo --token YOUR_TOKEN_HERE`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		provider := args[0]
@@ -53,59 +48,48 @@ Examples:
 				"  Azure: Run 'az login'")
 		}
 		tokenFlag, _ := cmd.Flags().GetString("token")
-		accountFlag, _ := cmd.Flags().GetString("account")
-		setCivoToken(accountFlag, tokenFlag)
+		setCivoToken(tokenFlag)
 	},
 }
 
 var configGetTokenCmd = &cobra.Command{
 	Use:   "get-token civo",
 	Short: "Retrieve the stored Civo API token",
-	Long: `Display the decrypted Civo API token stored for an account.
-
-Use --account to specify which account's token to retrieve.
-If not specified, 'default' is used.
+	Long: `Display the decrypted Civo API token stored in the database.
 
 Examples:
-  hyve config get-token civo
-  hyve config get-token civo --account production`,
+  hyve config get-token civo`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		provider := args[0]
 		if provider != "civo" {
 			log.Fatalf("Only 'civo' tokens are stored. Other providers use native CLI authentication.")
 		}
-		accountFlag, _ := cmd.Flags().GetString("account")
-		getCivoToken(accountFlag)
+		getCivoToken()
 	},
 }
 
 var configClearTokenCmd = &cobra.Command{
 	Use:   "clear-token civo",
 	Short: "Remove the stored Civo API token",
-	Long: `Delete the Civo API token stored for an account.
-
-Use --account to specify which account's token to remove.
-If not specified, 'default' is used.
+	Long: `Delete the Civo API token stored in the database.
 
 Examples:
-  hyve config clear-token civo
-  hyve config clear-token civo --account production`,
+  hyve config clear-token civo`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		provider := args[0]
 		if provider != "civo" {
 			log.Fatalf("Only 'civo' tokens are stored. Other providers use native CLI authentication.")
 		}
-		accountFlag, _ := cmd.Flags().GetString("account")
-		clearCivoToken(accountFlag)
+		clearCivoToken()
 	},
 }
 
 var configListTokensCmd = &cobra.Command{
 	Use:   "list-tokens",
-	Short: "List all stored Civo accounts",
-	Long: `Show which Civo accounts have API tokens stored in the database.
+	Short: "Show stored token status",
+	Long: `Show whether a Civo API token is stored in the database.
 
 Note: AWS, GCP, and Azure use native CLI authentication and don't store
 tokens in Hyve. Use their respective CLI tools to manage credentials:
@@ -113,7 +97,7 @@ tokens in Hyve. Use their respective CLI tools to manage credentials:
   - GCP:   gcloud auth list
   - Azure: az account list`,
 	Run: func(cmd *cobra.Command, args []string) {
-		listCivoAccounts()
+		showCivoTokenStatus()
 	},
 }
 
@@ -735,10 +719,6 @@ var configCivoOrgGetCmd = &cobra.Command{
 
 func init() {
 	configSetTokenCmd.Flags().StringP("token", "t", "", "API token (if not provided, will prompt securely)")
-	configSetTokenCmd.Flags().StringP("account", "a", "default", "Civo account ID (allows multiple accounts)")
-
-	configGetTokenCmd.Flags().StringP("account", "a", "default", "Civo account ID")
-	configClearTokenCmd.Flags().StringP("account", "a", "default", "Civo account ID")
 
 	// GCP subcommands
 	configGCPAddProjectCmd.Flags().String("name", "", "Friendly name/alias for the project (required)")
@@ -999,7 +979,7 @@ func getCurrentAWSAccount() string {
 	return account
 }
 
-func setCivoToken(accountID, token string) {
+func setCivoToken(token string) {
 	credsMgr, err := credentials.NewManager()
 	if err != nil {
 		log.Fatalf("Failed to create credentials manager: %v", err)
@@ -1008,7 +988,7 @@ func setCivoToken(accountID, token string) {
 
 	// If token not provided via flag, prompt for it
 	if token == "" {
-		fmt.Printf("Enter Civo API token for account '%s' (input will be hidden): ", accountID)
+		fmt.Print("Enter Civo API token (input will be hidden): ")
 		tokenBytes, err := term.ReadPassword(int(syscall.Stdin))
 		fmt.Println() // New line after password input
 		if err != nil {
@@ -1022,43 +1002,40 @@ func setCivoToken(accountID, token string) {
 	}
 
 	// Store the token
-	if err := credsMgr.StoreCivoToken(accountID, token); err != nil {
+	if err := credsMgr.StoreCivoToken(token); err != nil {
 		log.Fatalf("Failed to store token: %v", err)
 	}
 
-	log.Printf("✅ Civo API token for account '%s' stored successfully", accountID)
+	log.Println("✅ Civo API token stored successfully")
 	log.Println()
 	log.Println("💡 The token is encrypted and stored in ~/.hyve/credentials.db")
-	log.Printf("💡 Hyve will now use this token automatically for Civo operations")
-	if accountID != "default" {
-		log.Printf("💡 To use this account, specify --civo-account %s when creating clusters", accountID)
-	}
+	log.Println("💡 Hyve will now use this token automatically for Civo operations")
 }
 
-func getCivoToken(accountID string) {
+func getCivoToken() {
 	credsMgr, err := credentials.NewManager()
 	if err != nil {
 		log.Fatalf("Failed to create credentials manager: %v", err)
 	}
 	defer credsMgr.Close()
 
-	token, err := credsMgr.GetCivoToken(accountID)
+	token, err := credsMgr.GetCivoToken()
 	if err != nil {
 		log.Fatalf("Failed to get token: %v", err)
 	}
 
 	if token == "" {
-		log.Printf("❌ No token stored for Civo account '%s'", accountID)
+		log.Println("❌ No Civo token stored")
 		log.Println()
-		log.Printf("💡 Store a token with: hyve config set-token civo --account %s", accountID)
+		log.Println("💡 Store a token with: hyve config set-token civo")
 		return
 	}
 
-	fmt.Printf("🔑 Civo API token for account '%s':\n", accountID)
+	fmt.Println("🔑 Civo API token:")
 	fmt.Println(token)
 }
 
-func clearCivoToken(accountID string) {
+func clearCivoToken() {
 	credsMgr, err := credentials.NewManager()
 	if err != nil {
 		log.Fatalf("Failed to create credentials manager: %v", err)
@@ -1066,58 +1043,53 @@ func clearCivoToken(accountID string) {
 	defer credsMgr.Close()
 
 	// Check if token exists
-	hasToken, err := credsMgr.HasCivoToken(accountID)
+	hasToken, err := credsMgr.HasCivoToken()
 	if err != nil {
 		log.Fatalf("Failed to check for token: %v", err)
 	}
 
 	if !hasToken {
-		log.Printf("ℹ️  No token stored for Civo account '%s'", accountID)
+		log.Println("ℹ️  No Civo token stored")
 		return
 	}
 
 	// Clear the token
-	if err := credsMgr.ClearCivoToken(accountID); err != nil {
+	if err := credsMgr.ClearCivoToken(); err != nil {
 		log.Fatalf("Failed to clear token: %v", err)
 	}
 
-	log.Printf("✅ Civo API token for account '%s' removed successfully", accountID)
+	log.Println("✅ Civo API token removed successfully")
 }
 
-func listCivoAccounts() {
+func showCivoTokenStatus() {
 	credsMgr, err := credentials.NewManager()
 	if err != nil {
 		log.Fatalf("Failed to create credentials manager: %v", err)
 	}
 	defer credsMgr.Close()
 
-	accounts, err := credsMgr.ListCivoAccounts()
+	hasToken, err := credsMgr.HasCivoToken()
 	if err != nil {
-		log.Fatalf("Failed to list accounts: %v", err)
+		log.Fatalf("Failed to check for token: %v", err)
 	}
 
-	if len(accounts) == 0 {
-		log.Println("❌ No Civo accounts configured")
-		log.Println()
-		log.Println("💡 Store a token with: hyve config set-token civo --account <account-id>")
-		log.Println()
-		log.Println("📝 Note: AWS, GCP, and Azure use native CLI authentication:")
-		log.Println("   AWS:   aws configure")
-		log.Println("   GCP:   gcloud auth application-default login")
-		log.Println("   Azure: az login")
-		return
+	log.Println("🔐 Stored Credentials:")
+	log.Println()
+	if hasToken {
+		log.Println("  ✓ Civo: Token configured")
+	} else {
+		log.Println("  ✗ Civo: No token stored")
 	}
-
-	log.Printf("🔑 Stored Civo accounts (%d):\n", len(accounts))
-	for _, account := range accounts {
-		log.Printf("  ✓ %s", account)
-	}
+	log.Println()
+	log.Println("📝 Note: AWS, GCP, and Azure use native CLI authentication:")
+	log.Println("   AWS:   aws configure")
+	log.Println("   GCP:   gcloud auth application-default login")
+	log.Println("   Azure: az login")
 	log.Println()
 	log.Println("💡 Commands:")
-	log.Println("  hyve config get-token civo --account <id>    # View token")
-	log.Println("  hyve config clear-token civo --account <id>  # Remove token")
-	log.Println()
-	log.Println("📝 Note: AWS, GCP, and Azure use native CLI authentication")
+	log.Println("  hyve config set-token civo     # Store Civo token")
+	log.Println("  hyve config get-token civo     # View Civo token")
+	log.Println("  hyve config clear-token civo   # Remove Civo token")
 }
 
 func setGitBackend(backend string) {
