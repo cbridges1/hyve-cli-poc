@@ -45,15 +45,22 @@ go build -o hyve .
 ./hyve config aws account-add --name prod --id 123456789012
 ./hyve config use aws prod
 
-# 5. Create a cluster (specify provider)
+# 5. Create a cluster (uses current context by default)
 ./hyve cluster add my-cluster --provider civo --region PHX1 --nodes g4s.kube.medium
-# or
-./hyve cluster add my-cluster --provider aws --region us-east-1 --nodes t3.medium
-# or (GCP requires project configured first)
-./hyve config gcp project-add --name dev --id my-gcp-project-id
-./hyve config use gcp dev
+
+# AWS requires VPC, EKS role, and node role to be specified
+./hyve cluster add my-cluster --provider aws --region us-east-1 --nodes t3.medium \
+  --vpc-name k8svpc --eks-role-name k8srole --node-role-name k8snoderole
+
+# Override the current context with --account-name flag
+./hyve cluster add my-cluster --provider aws --account-name main-account --region us-east-1 \
+  --vpc-name k8svpc --eks-role-name k8srole --nodes t3.micro --node-role-name k8snoderole
+
+# GCP (uses current project context, or specify with --project-name)
 ./hyve cluster add my-cluster --provider gcp --region us-central1 --nodes e2-medium
-# or
+./hyve cluster add my-cluster --provider gcp --project-name dev --region us-central1 --nodes e2-medium
+
+# Azure (uses current subscription context, or specify with --subscription-name)
 ./hyve cluster add my-cluster --provider azure --region eastus --nodes Standard_D2s_v3
 
 # 6. Run a workflow
@@ -352,6 +359,39 @@ hyve template execute prod-template prod-cluster-01
 | `hyve config azure` | Manage Azure provider configuration (subscriptions) |
 | `hyve config civo` | Manage Civo provider configuration (organizations) |
 | `hyve reconcile` | Reconcile cluster state |
+
+### Cluster Commands
+
+Create and manage Kubernetes clusters:
+
+```bash
+# Create a cluster (uses current context by default)
+hyve cluster add <name> --provider <provider> --region <region> --nodes <node-types>
+
+# AWS cluster with required flags
+hyve cluster add my-cluster --provider aws --region us-east-1 --nodes t3.medium \
+  --vpc-name k8svpc --eks-role-name k8srole --node-role-name k8snoderole
+
+# Override current context with account/project flags
+hyve cluster add my-cluster --provider aws --account-name prod --region us-east-1 ...
+hyve cluster add my-cluster --provider gcp --project-name dev --region us-central1 ...
+hyve cluster add my-cluster --provider azure --subscription-name prod --region eastus ...
+hyve cluster add my-cluster --provider civo --org-name default --region PHX1 ...
+```
+
+| Flag | Description |
+|------|-------------|
+| `--provider, -p` | Cloud provider (civo, aws, gcp, azure) - required |
+| `--region, -r` | Region for the cluster |
+| `--nodes, -n` | Node sizes (e.g., t3.medium, g4s.kube.small) |
+| `--cluster-type, -t` | Cluster type (default: k3s) |
+| `--account-name` | AWS account name (overrides current context) |
+| `--project-name` | GCP project name (overrides current context) |
+| `--subscription-name` | Azure subscription name (overrides current context) |
+| `--org-name` | Civo organization name (overrides current context) |
+| `--vpc-name` | AWS VPC name (required for AWS) |
+| `--eks-role-name` | AWS EKS IAM role name (required for AWS) |
+| `--node-role-name` | AWS EKS node IAM role name (required for AWS) |
 
 ### Context Commands
 

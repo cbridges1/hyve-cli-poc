@@ -34,6 +34,14 @@ type ClusterSpec struct {
 	AWSEKSRoleARN  string `yaml:"awsEksRoleArn,omitempty"`  // AWS EKS role ARN (resolved from alias)
 	AWSNodeRole    string `yaml:"awsNodeRole,omitempty"`    // AWS EKS node role name alias
 	AWSNodeRoleARN string `yaml:"awsNodeRoleArn,omitempty"` // AWS EKS node role ARN (resolved from alias)
+
+	// Azure-specific configuration
+	AzureSubscription   string `yaml:"azureSubscription,omitempty"`   // Azure subscription name alias
+	AzureSubscriptionID string `yaml:"azureSubscriptionId,omitempty"` // Azure subscription ID (resolved from alias)
+
+	// Civo-specific configuration
+	CivoOrganization string `yaml:"civoOrganization,omitempty"` // Civo organization name alias
+	CivoOrgID        string `yaml:"civoOrgId,omitempty"`        // Civo organization ID (resolved from alias)
 }
 
 // ClusterMetadata represents cluster metadata

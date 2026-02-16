@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"context"
+	gocontext "context"
 	"fmt"
 	"log"
 	"os"
@@ -13,6 +13,7 @@ import (
 
 	"civo-cluster-deploy/internal/cluster"
 	"civo-cluster-deploy/internal/config"
+	"civo-cluster-deploy/internal/context"
 	"civo-cluster-deploy/internal/credentials"
 	"civo-cluster-deploy/internal/ingress"
 	"civo-cluster-deploy/internal/provider"
@@ -56,7 +57,10 @@ Supported cloud providers:
   - civo    Civo Cloud (K3s/Talos clusters)
   - aws     Amazon Web Services (EKS)
   - gcp     Google Cloud Platform (GKE)
-  - azure   Microsoft Azure (AKS)`,
+  - azure   Microsoft Azure (AKS)
+
+The command uses the current context (account/project/subscription) by default.
+Use --account-name, --project-name, --subscription-name, or --org-name to override.`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		clusterName := args[0]
@@ -65,10 +69,14 @@ Supported cloud providers:
 		providerName, _ := cmd.Flags().GetString("provider")
 		nodes, _ := cmd.Flags().GetStringSlice("nodes")
 		clusterType, _ := cmd.Flags().GetString("cluster-type")
+
+		// Provider-specific account/project override flags
+		accountName, _ := cmd.Flags().GetString("account-name")
 		projectName, _ := cmd.Flags().GetString("project-name")
+		subscriptionName, _ := cmd.Flags().GetString("subscription-name")
+		orgName, _ := cmd.Flags().GetString("org-name")
 
 		// AWS-specific flags
-		awsAccount, _ := cmd.Flags().GetString("aws-account")
 		vpcName, _ := cmd.Flags().GetString("vpc-name")
 		eksRoleName, _ := cmd.Flags().GetString("eks-role-name")
 		nodeRoleName, _ := cmd.Flags().GetString("node-role-name")
@@ -81,13 +89,30 @@ Supported cloud providers:
 		// Normalize provider to lowercase
 		providerName = strings.ToLower(providerName)
 
-		// Validate name is provided for GCP provider (used as project alias)
-		if providerName == "gcp" && projectName == "" {
-			log.Fatalf("GCP provider requires --project-name flag (GCP project alias). Use 'hyve config gcp list-projects' to see available projects.")
+		// Get context manager for current account lookups
+		ctxMgr, err := context.NewManager()
+		if err != nil {
+			log.Fatalf("Failed to create context manager: %v", err)
 		}
 
-		// Validate AWS-specific flags
-		if providerName == "aws" {
+		// Resolve account/project from context if not provided via flag
+		switch providerName {
+		case "aws":
+			if accountName == "" {
+				accountName = ctxMgr.GetAWSAccount()
+				if accountName == "" {
+					cmds := context.GetSwitchCommands("aws", "")
+					log.Fatalf("❌ No AWS account selected.\n\n"+
+						"Set the current account with:\n"+
+						"  hyve config use aws <account-name>\n\n"+
+						"Or specify an account with the --account-name flag:\n"+
+						"  hyve cluster add %s --provider aws --account-name <name> ...\n\n"+
+						"Check current AWS CLI credentials:\n"+
+						"  %s", clusterName, cmds.CheckCommand)
+				}
+				log.Printf("Using current AWS account context: %s", accountName)
+			}
+			// Validate AWS-specific flags
 			if vpcName == "" {
 				log.Fatalf("AWS provider requires --vpc-name flag. Use 'hyve config aws vpc-list' to see available VPCs.")
 			}
@@ -97,9 +122,57 @@ Supported cloud providers:
 			if nodeRoleName == "" {
 				log.Fatalf("AWS provider requires --node-role-name flag. Use 'hyve config aws node-role-list' to see available roles.")
 			}
+
+		case "gcp":
+			if projectName == "" {
+				projectName = ctxMgr.GetGCPProject()
+				if projectName == "" {
+					cmds := context.GetSwitchCommands("gcp", "")
+					log.Fatalf("❌ No GCP project selected.\n\n"+
+						"Set the current project with:\n"+
+						"  hyve config use gcp <project-name>\n\n"+
+						"Or specify a project with the --project-name flag:\n"+
+						"  hyve cluster add %s --provider gcp --project-name <name> ...\n\n"+
+						"Check current GCP project:\n"+
+						"  %s", clusterName, cmds.CheckCommand)
+				}
+				log.Printf("Using current GCP project context: %s", projectName)
+			}
+
+		case "azure":
+			if subscriptionName == "" {
+				subscriptionName = ctxMgr.GetAzureSubscription()
+				if subscriptionName == "" {
+					cmds := context.GetSwitchCommands("azure", "")
+					log.Fatalf("❌ No Azure subscription selected.\n\n"+
+						"Set the current subscription with:\n"+
+						"  hyve config use azure <subscription-name>\n\n"+
+						"Or specify a subscription with the --subscription-name flag:\n"+
+						"  hyve cluster add %s --provider azure --subscription-name <name> ...\n\n"+
+						"Check current Azure subscription:\n"+
+						"  %s", clusterName, cmds.CheckCommand)
+				}
+				log.Printf("Using current Azure subscription context: %s", subscriptionName)
+			}
+
+		case "civo":
+			if orgName == "" {
+				orgName = ctxMgr.GetCivoOrganization()
+				if orgName == "" {
+					cmds := context.GetSwitchCommands("civo", "")
+					log.Fatalf("❌ No Civo organization selected.\n\n"+
+						"Set the current organization with:\n"+
+						"  hyve config use civo <org-name>\n\n"+
+						"Or specify an organization with the --org-name flag:\n"+
+						"  hyve cluster add %s --provider civo --org-name <name> ...\n\n"+
+						"Check current Civo API key:\n"+
+						"  %s", clusterName, cmds.CheckCommand)
+				}
+				log.Printf("Using current Civo organization context: %s", orgName)
+			}
 		}
 
-		addClusterFromCLI(clusterName, region, providerName, nodes, clusterType, projectName, awsAccount, vpcName, eksRoleName, nodeRoleName)
+		addClusterFromCLI(clusterName, region, providerName, nodes, clusterType, accountName, projectName, subscriptionName, orgName, vpcName, eksRoleName, nodeRoleName)
 	},
 }
 
@@ -198,13 +271,17 @@ func init() {
 	addCmd.MarkFlagRequired("provider")
 	addCmd.Flags().StringSliceP("nodes", "n", []string{"g4s.kube.small"}, "Node sizes")
 	addCmd.Flags().StringP("cluster-type", "t", "k3s", "Type of Kubernetes cluster")
-	addCmd.Flags().String("project-name", "", "GCP project name alias (required for GCP provider)")
+
+	// Provider account/project override flags (uses current context if not specified)
+	addCmd.Flags().String("account-name", "", "AWS account name (overrides current context)")
+	addCmd.Flags().String("project-name", "", "GCP project name (overrides current context)")
+	addCmd.Flags().String("subscription-name", "", "Azure subscription name (overrides current context)")
+	addCmd.Flags().String("org-name", "", "Civo organization name (overrides current context)")
 
 	// AWS-specific flags
-	addCmd.Flags().String("aws-account", "", "AWS account name alias (optional, use 'hyve config aws account-list' to see available)")
-	addCmd.Flags().String("vpc-name", "", "AWS VPC name alias (required for AWS provider, use 'hyve config aws vpc-list' to see available)")
-	addCmd.Flags().String("eks-role-name", "", "AWS EKS IAM role name alias (required for AWS provider, use 'hyve config aws eks-role-list' to see available)")
-	addCmd.Flags().String("node-role-name", "", "AWS EKS node IAM role name alias (required for AWS provider, use 'hyve config aws node-role-list' to see available)")
+	addCmd.Flags().String("vpc-name", "", "AWS VPC name alias (required for AWS provider)")
+	addCmd.Flags().String("eks-role-name", "", "AWS EKS IAM role name alias (required for AWS provider)")
+	addCmd.Flags().String("node-role-name", "", "AWS EKS node IAM role name alias (required for AWS provider)")
 
 	modifyCmd.Flags().StringP("region", "r", "", "Region for the cluster")
 	modifyCmd.Flags().StringP("provider", "p", "", "Cloud provider")
@@ -226,7 +303,7 @@ func init() {
 }
 
 // createStateManager creates state manager from current repository
-func createStateManager(ctx context.Context) (*state.Manager, string) {
+func createStateManager(ctx gocontext.Context) (*state.Manager, string) {
 	repoMgr, err := repository.NewManager()
 	if err != nil {
 		log.Fatalf("Failed to create repository manager: %v", err)
@@ -288,7 +365,7 @@ func createStateManager(ctx context.Context) (*state.Manager, string) {
 }
 
 // commitStateChanges commits changes to Git repository and pushes to remote
-func commitStateChanges(ctx context.Context, stateMgr *state.Manager, message string) {
+func commitStateChanges(ctx gocontext.Context, stateMgr *state.Manager, message string) {
 	log.Println("📝 Committing and pushing changes to Git repository...")
 
 	if err := stateMgr.CommitAndPush(ctx, message); err != nil {
@@ -308,8 +385,8 @@ func commitStateChanges(ctx context.Context, stateMgr *state.Manager, message st
 	log.Println("✅ Changes committed and pushed to remote repository successfully")
 }
 
-func addClusterFromCLI(clusterName, region, providerName string, nodes []string, clusterType, projectName, awsAccount, vpcName, eksRoleName, nodeRoleName string) {
-	ctx := context.Background()
+func addClusterFromCLI(clusterName, region, providerName string, nodes []string, clusterType, accountName, projectName, subscriptionName, orgName, vpcName, eksRoleName, nodeRoleName string) {
+	ctx := gocontext.Background()
 	stateMgr, stateDir := createStateManager(ctx)
 
 	if err := os.MkdirAll(stateDir, 0755); err != nil {
@@ -350,48 +427,46 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 	// Resolve AWS aliases
 	var awsAccountID, awsVPCID, awsEKSRoleARN, awsNodeRoleARN string
 	if providerName == "aws" {
-		// Resolve AWS account alias (optional)
-		if awsAccount != "" {
-			awsAccountID, err = pcMgr.GetAWSAccountID(awsAccount)
-			if err != nil {
-				log.Fatalf("AWS account alias '%s' not found in repository configuration.\n"+
-					"Use 'hyve config aws account-add --name %s --id <account-id>' to add it.", awsAccount, awsAccount)
-			}
-			log.Printf("Using AWS account '%s' (ID: %s)", awsAccount, awsAccountID)
+		// Resolve AWS account alias
+		awsAccountID, err = pcMgr.GetAWSAccountID(accountName)
+		if err != nil {
+			log.Fatalf("AWS account alias '%s' not found in repository configuration.\n"+
+				"Use 'hyve config aws account-add --name %s --id <account-id>' to add it.", accountName, accountName)
 		}
+		log.Printf("Using AWS account '%s' (ID: %s)", accountName, awsAccountID)
 
 		// Resolve VPC alias (required for AWS)
 		if vpcName != "" {
-			awsVPCID, err = pcMgr.GetAWSVPCID(awsAccount, vpcName)
+			awsVPCID, err = pcMgr.GetAWSVPCID(accountName, vpcName)
 			if err != nil {
 				log.Fatalf("AWS VPC alias '%s' not found in account '%s'.\n"+
 					"Use 'hyve config use aws %s' to set the account, then:\n"+
 					"  hyve config aws vpc-add --name %s --id <vpc-id>\n"+
-					"Or use 'hyve config aws vpc-create --name %s --region %s' to create one.", vpcName, awsAccount, awsAccount, vpcName, vpcName, region)
+					"Or use 'hyve config aws vpc-create --name %s --region %s' to create one.", vpcName, accountName, accountName, vpcName, vpcName, region)
 			}
 			log.Printf("Using AWS VPC '%s' (ID: %s)", vpcName, awsVPCID)
 		}
 
 		// Resolve EKS role alias (required for AWS)
 		if eksRoleName != "" {
-			awsEKSRoleARN, err = pcMgr.GetAWSEKSRoleARN(awsAccount, eksRoleName)
+			awsEKSRoleARN, err = pcMgr.GetAWSEKSRoleARN(accountName, eksRoleName)
 			if err != nil {
 				log.Fatalf("AWS EKS role alias '%s' not found in account '%s'.\n"+
 					"Use 'hyve config use aws %s' to set the account, then:\n"+
 					"  hyve config aws eks-role-add --name %s --role-arn <arn>\n"+
-					"Or use 'hyve config aws eks-role-create --name %s --role-name <name> --region %s' to create one.", eksRoleName, awsAccount, awsAccount, eksRoleName, eksRoleName, region)
+					"Or use 'hyve config aws eks-role-create --name %s --role-name <name> --region %s' to create one.", eksRoleName, accountName, accountName, eksRoleName, eksRoleName, region)
 			}
 			log.Printf("Using AWS EKS role '%s' (ARN: %s)", eksRoleName, awsEKSRoleARN)
 		}
 
 		// Resolve node role alias (required for AWS)
 		if nodeRoleName != "" {
-			awsNodeRoleARN, err = pcMgr.GetAWSNodeRoleARN(awsAccount, nodeRoleName)
+			awsNodeRoleARN, err = pcMgr.GetAWSNodeRoleARN(accountName, nodeRoleName)
 			if err != nil {
 				log.Fatalf("AWS node role alias '%s' not found in account '%s'.\n"+
 					"Use 'hyve config use aws %s' to set the account, then:\n"+
 					"  hyve config aws node-role-add --name %s --role-arn <arn>\n"+
-					"Or use 'hyve config aws node-role-create --name %s --role-name <name> --region %s' to create one.", nodeRoleName, awsAccount, awsAccount, nodeRoleName, nodeRoleName, region)
+					"Or use 'hyve config aws node-role-create --name %s --role-name <name> --region %s' to create one.", nodeRoleName, accountName, accountName, nodeRoleName, nodeRoleName, region)
 			}
 			log.Printf("Using AWS node role '%s' (ARN: %s)", nodeRoleName, awsNodeRoleARN)
 		}
@@ -412,7 +487,7 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 			GCPProject:   projectName,
 			GCPProjectID: gcpProjectID,
 			// AWS-specific
-			AWSAccount:     awsAccount,
+			AWSAccount:     accountName,
 			AWSAccountID:   awsAccountID,
 			AWSVPCName:     vpcName,
 			AWSVPCID:       awsVPCID,
@@ -420,6 +495,10 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 			AWSEKSRoleARN:  awsEKSRoleARN,
 			AWSNodeRole:    nodeRoleName,
 			AWSNodeRoleARN: awsNodeRoleARN,
+			// Azure-specific
+			AzureSubscription: subscriptionName,
+			// Civo-specific
+			CivoOrganization: orgName,
 			Ingress: types.IngressSpec{
 				Enabled:      true,
 				LoadBalancer: true,
@@ -471,7 +550,7 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 }
 
 func modifyClusterFromCLI(cmd *cobra.Command, clusterName string) {
-	ctx := context.Background()
+	ctx := gocontext.Background()
 	stateMgr, stateDir := createStateManager(ctx)
 	filePath := filepath.Join(stateDir, clusterName+".yaml")
 
@@ -536,7 +615,7 @@ func modifyClusterFromCLI(cmd *cobra.Command, clusterName string) {
 }
 
 func deleteClusterFromCLI(clusterName string, configOnly bool, forceCloud bool) {
-	ctx := context.Background()
+	ctx := gocontext.Background()
 	stateMgr, stateDir := createStateManager(ctx)
 	filePath := filepath.Join(stateDir, clusterName+".yaml")
 
@@ -597,7 +676,7 @@ func deleteClusterFromCLI(clusterName string, configOnly bool, forceCloud bool) 
 
 // deleteClusterExplicitly deletes a cluster by name directly from the provider
 // This ensures deletion even if the cluster doesn't appear in provider API listings
-func deleteClusterExplicitly(ctx context.Context, clusterDef types.ClusterDefinition) error {
+func deleteClusterExplicitly(ctx gocontext.Context, clusterDef types.ClusterDefinition) error {
 	clusterName := clusterDef.Metadata.Name
 	region := clusterDef.Metadata.Region
 	providerName := clusterDef.Spec.Provider
@@ -705,7 +784,7 @@ func createProviderForClusterDef(clusterDef types.ClusterDefinition) (provider.P
 
 // forceDeleteClusterFromCloud deletes a cluster by name from the cloud provider across multiple regions
 func forceDeleteClusterFromCloud(clusterName, region, providerName, projectName string) {
-	ctx := context.Background()
+	ctx := gocontext.Background()
 
 	regions := []string{region}
 	if region == "" {
