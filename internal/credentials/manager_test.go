@@ -140,14 +140,14 @@ func TestStoreAndGetCivoToken(t *testing.T) {
 
 	token := "test-civo-token-123"
 
-	// Store token
-	err := mgr.StoreCivoToken(token)
+	// Store token for org "myorg" -> stored as "myorg-token"
+	err := mgr.StoreCivoToken("myorg", token)
 	if err != nil {
 		t.Fatalf("Failed to store token: %v", err)
 	}
 
 	// Retrieve and verify token
-	retrievedToken, err := mgr.GetCivoToken()
+	retrievedToken, err := mgr.GetCivoToken("myorg")
 	if err != nil {
 		t.Fatalf("Failed to get token: %v", err)
 	}
@@ -165,19 +165,19 @@ func TestUpdateCivoToken(t *testing.T) {
 	mgr := NewManagerWithDB(db)
 
 	// Store initial token
-	err := mgr.StoreCivoToken("old-token")
+	err := mgr.StoreCivoToken("myorg", "old-token")
 	if err != nil {
 		t.Fatalf("Failed to store initial token: %v", err)
 	}
 
 	// Update token
-	err = mgr.StoreCivoToken("new-token")
+	err = mgr.StoreCivoToken("myorg", "new-token")
 	if err != nil {
 		t.Fatalf("Failed to update token: %v", err)
 	}
 
 	// Verify updated token
-	retrievedToken, err := mgr.GetCivoToken()
+	retrievedToken, err := mgr.GetCivoToken("myorg")
 	if err != nil {
 		t.Fatalf("Failed to get token: %v", err)
 	}
@@ -195,13 +195,13 @@ func TestClearCivoToken(t *testing.T) {
 	mgr := NewManagerWithDB(db)
 
 	// Store token
-	err := mgr.StoreCivoToken("test-token")
+	err := mgr.StoreCivoToken("myorg", "test-token")
 	if err != nil {
 		t.Fatalf("Failed to store token: %v", err)
 	}
 
 	// Verify token exists
-	hasToken, err := mgr.HasCivoToken()
+	hasToken, err := mgr.HasCivoToken("myorg")
 	if err != nil {
 		t.Fatalf("Failed to check token: %v", err)
 	}
@@ -210,13 +210,13 @@ func TestClearCivoToken(t *testing.T) {
 	}
 
 	// Clear token
-	err = mgr.ClearCivoToken()
+	err = mgr.ClearCivoToken("myorg")
 	if err != nil {
 		t.Fatalf("Failed to clear token: %v", err)
 	}
 
 	// Verify token is gone
-	hasTokenAfter, err := mgr.HasCivoToken()
+	hasTokenAfter, err := mgr.HasCivoToken("myorg")
 	if err != nil {
 		t.Fatalf("Failed to check token after clear: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestEmptyValues(t *testing.T) {
 	}
 
 	// Test empty Civo token
-	err = mgr.StoreCivoToken("")
+	err = mgr.StoreCivoToken("myorg", "")
 	if err == nil {
 		t.Error("Expected error for empty token")
 	}
@@ -291,7 +291,7 @@ func TestGetNonExistentCivoToken(t *testing.T) {
 	mgr := NewManagerWithDB(db)
 
 	// Try to get non-existent token
-	token, err := mgr.GetCivoToken()
+	token, err := mgr.GetCivoToken("myorg")
 	if err != nil {
 		t.Fatalf("Should not error on non-existent token: %v", err)
 	}
@@ -301,7 +301,7 @@ func TestGetNonExistentCivoToken(t *testing.T) {
 	}
 
 	// Verify HasCivoToken returns false
-	hasToken, err := mgr.HasCivoToken()
+	hasToken, err := mgr.HasCivoToken("myorg")
 	if err != nil {
 		t.Fatalf("Failed to check for token: %v", err)
 	}
@@ -311,86 +311,86 @@ func TestGetNonExistentCivoToken(t *testing.T) {
 	}
 }
 
-// TestMultiProviderTokens tests storing tokens for multiple providers
-func TestMultiProviderTokens(t *testing.T) {
+// TestMultipleSecrets tests storing multiple named secrets
+func TestMultipleSecrets(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
 	mgr := NewManagerWithDB(db)
 
-	// Store tokens for different providers
-	providers := map[string]string{
-		"civo":   "civo-token-123",
-		"docker": "docker-token-456",
-		"github": "github-token-789",
+	// Store secrets with different names
+	secrets := map[string]string{
+		"myorg-token":  "civo-token-123",
+		"docker-token": "docker-token-456",
+		"github-token": "github-token-789",
 	}
 
-	for provider, token := range providers {
-		err := mgr.StoreToken(provider, token)
+	for name, value := range secrets {
+		err := mgr.StoreSecret(name, value)
 		if err != nil {
-			t.Fatalf("Failed to store %s token: %v", provider, err)
-		}
-	}
-
-	// Verify each token can be retrieved
-	for provider, expectedToken := range providers {
-		token, err := mgr.GetToken(provider)
-		if err != nil {
-			t.Fatalf("Failed to get %s token: %v", provider, err)
-		}
-		if token != expectedToken {
-			t.Errorf("Expected %s token '%s', got '%s'", provider, expectedToken, token)
-		}
-
-		hasToken, err := mgr.HasToken(provider)
-		if err != nil {
-			t.Fatalf("Failed to check %s token: %v", provider, err)
-		}
-		if !hasToken {
-			t.Errorf("Expected HasToken to return true for %s", provider)
+			t.Fatalf("Failed to store secret %s: %v", name, err)
 		}
 	}
 
-	// Clear one provider's token
-	err := mgr.ClearToken("docker")
+	// Verify each secret can be retrieved
+	for name, expectedValue := range secrets {
+		value, err := mgr.GetSecret(name)
+		if err != nil {
+			t.Fatalf("Failed to get secret %s: %v", name, err)
+		}
+		if value != expectedValue {
+			t.Errorf("Expected secret %s value '%s', got '%s'", name, expectedValue, value)
+		}
+
+		hasSecret, err := mgr.HasSecret(name)
+		if err != nil {
+			t.Fatalf("Failed to check secret %s: %v", name, err)
+		}
+		if !hasSecret {
+			t.Errorf("Expected HasSecret to return true for %s", name)
+		}
+	}
+
+	// Clear one secret
+	err := mgr.ClearSecret("docker-token")
 	if err != nil {
-		t.Fatalf("Failed to clear docker token: %v", err)
+		t.Fatalf("Failed to clear docker-token: %v", err)
 	}
 
-	// Verify docker token is gone but others remain
-	hasDocker, _ := mgr.HasToken("docker")
+	// Verify docker-token is gone but others remain
+	hasDocker, _ := mgr.HasSecret("docker-token")
 	if hasDocker {
-		t.Error("Expected docker token to be cleared")
+		t.Error("Expected docker-token to be cleared")
 	}
 
-	hasCivo, _ := mgr.HasToken("civo")
+	hasCivo, _ := mgr.HasSecret("myorg-token")
 	if !hasCivo {
-		t.Error("Expected civo token to still exist")
+		t.Error("Expected myorg-token to still exist")
 	}
 
-	hasGithub, _ := mgr.HasToken("github")
+	hasGithub, _ := mgr.HasSecret("github-token")
 	if !hasGithub {
-		t.Error("Expected github token to still exist")
+		t.Error("Expected github-token to still exist")
 	}
 }
 
-// TestStoreTokenValidation tests validation of token storage
-func TestStoreTokenValidation(t *testing.T) {
+// TestStoreSecretValidation tests validation of secret storage
+func TestStoreSecretValidation(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
 	mgr := NewManagerWithDB(db)
 
-	// Test empty provider
-	err := mgr.StoreToken("", "token")
+	// Test empty name
+	err := mgr.StoreSecret("", "value")
 	if err == nil {
-		t.Error("Expected error for empty provider")
+		t.Error("Expected error for empty secret name")
 	}
 
-	// Test empty token
-	err = mgr.StoreToken("civo", "")
+	// Test empty value
+	err = mgr.StoreSecret("myorg-token", "")
 	if err == nil {
-		t.Error("Expected error for empty token")
+		t.Error("Expected error for empty secret value")
 	}
 }
 
@@ -406,7 +406,7 @@ func TestDatabasePersistence(t *testing.T) {
 	}
 
 	mgr1 := NewManagerWithDB(db1)
-	err = mgr1.StoreCivoToken("persistent-token")
+	err = mgr1.StoreCivoToken("myorg", "persistent-token")
 	if err != nil {
 		t.Fatalf("Failed to store token: %v", err)
 	}
@@ -420,7 +420,7 @@ func TestDatabasePersistence(t *testing.T) {
 	defer db2.Close()
 
 	mgr2 := NewManagerWithDB(db2)
-	token, err := mgr2.GetCivoToken()
+	token, err := mgr2.GetCivoToken("myorg")
 	if err != nil {
 		t.Fatalf("Failed to get token from second manager: %v", err)
 	}

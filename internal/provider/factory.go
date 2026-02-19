@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"hyve/internal/context"
 	"hyve/internal/credentials"
 	"hyve/internal/provider/aws"
 	"hyve/internal/provider/azure"
@@ -36,15 +37,18 @@ func (f *Factory) CreateProvider(providerName, apiKey, region string) (Provider,
 			token = os.Getenv("CIVO_TOKEN")
 		}
 		if token == "" {
-			// Try credentials store with default account
+			// Load token from secrets store using the current civo organization name
 			credsMgr, err := credentials.NewManager()
 			if err == nil {
 				defer credsMgr.Close()
-				token, _ = credsMgr.GetCivoToken()
+				orgName := getCivoOrgFromContext()
+				if orgName != "" {
+					token, _ = credsMgr.GetCivoToken(orgName)
+				}
 			}
 		}
 		if token == "" {
-			return nil, fmt.Errorf("Civo API token not found. Please run 'hyve config set-token civo --account <account-id>' or set CIVO_TOKEN environment variable")
+			return nil, fmt.Errorf("Civo API token not found. Please run 'hyve config use civo <org-name>' then 'hyve config civo set-token', or set CIVO_TOKEN environment variable")
 		}
 		civoProvider, err := civo.NewProvider(token, region)
 		if err != nil {
@@ -110,11 +114,14 @@ func (f *Factory) CreateProviderWithOptions(providerName string, opts ProviderOp
 	case "civo":
 		token := opts.APIKey
 		if token == "" {
-			// Load token from credentials store
+			// Load token from secrets store using the current civo organization name
 			credsMgr, err := credentials.NewManager()
 			if err == nil {
 				defer credsMgr.Close()
-				token, _ = credsMgr.GetCivoToken()
+				orgName := getCivoOrgFromContext()
+				if orgName != "" {
+					token, _ = credsMgr.GetCivoToken(orgName)
+				}
 			}
 		}
 		if token == "" {
@@ -194,4 +201,13 @@ type ProviderOptions struct {
 // GetSupportedProviders returns list of supported providers
 func (f *Factory) GetSupportedProviders() []string {
 	return []string{"civo", "gcp", "aws", "azure"}
+}
+
+// getCivoOrgFromContext reads the current Civo organization name from context
+func getCivoOrgFromContext() string {
+	ctxMgr, err := context.NewManager()
+	if err != nil {
+		return ""
+	}
+	return ctxMgr.GetCivoOrganization()
 }
