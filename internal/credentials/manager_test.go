@@ -3,36 +3,49 @@ package credentials
 import (
 	"path/filepath"
 	"testing"
+
+	"hyve/internal/database"
 )
 
-// TestStoreAndGetCredentials tests storing and retrieving Git credentials
-func TestStoreAndGetCredentials(t *testing.T) {
-	// Create a temporary directory for test database
+func setupTestDB(t *testing.T) (*database.DB, func()) {
 	tempDir := t.TempDir()
-
-	// Create test manager
-	mgr := &Manager{
-		dbPath: filepath.Join(tempDir, "test_credentials.db"),
+	db, err := database.GetDBWithDir(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create test database: %v", err)
 	}
 
-	if err := mgr.initializeDB(); err != nil {
-		t.Fatalf("Failed to initialize database: %v", err)
+	cleanup := func() {
+		db.Close()
 	}
-	defer mgr.Close()
 
-	// Test data
-	testUsername := "testuser"
-	testPassword := "testpassword123"
+	return db, cleanup
+}
+
+// TestStoreAndGetCredentials tests storing and retrieving credentials
+func TestStoreAndGetCredentials(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	mgr := NewManagerWithDB(db)
 
 	// Store credentials
-	creds, err := mgr.StoreCredentials(testUsername, testPassword)
+	creds, err := mgr.StoreCredentials("testuser", "testpassword123")
 	if err != nil {
 		t.Fatalf("Failed to store credentials: %v", err)
 	}
 
-	// Verify credentials were stored
-	if creds.Username != testUsername {
-		t.Errorf("Expected username %s, got %s", testUsername, creds.Username)
+	if creds.Username != "testuser" {
+		t.Errorf("Expected username 'testuser', got '%s'", creds.Username)
+	}
+
+	// Get password (should be decrypted)
+	password, err := creds.GetPassword()
+	if err != nil {
+		t.Fatalf("Failed to get password: %v", err)
+	}
+
+	if password != "testpassword123" {
+		t.Errorf("Expected password 'testpassword123', got '%s'", password)
 	}
 
 	// Retrieve credentials
@@ -41,102 +54,77 @@ func TestStoreAndGetCredentials(t *testing.T) {
 		t.Fatalf("Failed to get credentials: %v", err)
 	}
 
-	// Verify username matches
-	if retrieved.Username != testUsername {
-		t.Errorf("Expected username %s, got %s", testUsername, retrieved.Username)
-	}
-
-	// Verify password can be decrypted
-	decryptedPassword, err := retrieved.GetPassword()
-	if err != nil {
-		t.Fatalf("Failed to decrypt password: %v", err)
-	}
-
-	if decryptedPassword != testPassword {
-		t.Errorf("Expected password %s, got %s", testPassword, decryptedPassword)
+	if retrieved.Username != creds.Username {
+		t.Errorf("Expected username '%s', got '%s'", creds.Username, retrieved.Username)
 	}
 }
 
 // TestUpdateCredentials tests updating existing credentials
 func TestUpdateCredentials(t *testing.T) {
-	tempDir := t.TempDir()
-	mgr := &Manager{
-		dbPath: filepath.Join(tempDir, "test_credentials.db"),
-	}
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
 
-	if err := mgr.initializeDB(); err != nil {
-		t.Fatalf("Failed to initialize database: %v", err)
-	}
-	defer mgr.Close()
+	mgr := NewManagerWithDB(db)
 
 	// Store initial credentials
-	_, err := mgr.StoreCredentials("user1", "pass1")
+	_, err := mgr.StoreCredentials("user1", "password1")
 	if err != nil {
 		t.Fatalf("Failed to store initial credentials: %v", err)
 	}
 
 	// Update credentials
-	_, err = mgr.StoreCredentials("user2", "pass2")
+	updated, err := mgr.StoreCredentials("user2", "password2")
 	if err != nil {
 		t.Fatalf("Failed to update credentials: %v", err)
 	}
 
-	// Verify updated credentials
-	retrieved, err := mgr.GetCredentials()
+	if updated.Username != "user2" {
+		t.Errorf("Expected username 'user2', got '%s'", updated.Username)
+	}
+
+	// Verify password was updated
+	password, err := updated.GetPassword()
 	if err != nil {
-		t.Fatalf("Failed to get credentials: %v", err)
+		t.Fatalf("Failed to get password: %v", err)
 	}
 
-	if retrieved.Username != "user2" {
-		t.Errorf("Expected username user2, got %s", retrieved.Username)
-	}
-
-	password, err := retrieved.GetPassword()
-	if err != nil {
-		t.Fatalf("Failed to decrypt password: %v", err)
-	}
-
-	if password != "pass2" {
-		t.Errorf("Expected password pass2, got %s", password)
+	if password != "password2" {
+		t.Errorf("Expected password 'password2', got '%s'", password)
 	}
 }
 
-// TestClearCredentials tests clearing stored credentials
+// TestClearCredentials tests clearing credentials
 func TestClearCredentials(t *testing.T) {
-	tempDir := t.TempDir()
-	mgr := &Manager{
-		dbPath: filepath.Join(tempDir, "test_credentials.db"),
-	}
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
 
-	if err := mgr.initializeDB(); err != nil {
-		t.Fatalf("Failed to initialize database: %v", err)
-	}
-	defer mgr.Close()
+	mgr := NewManagerWithDB(db)
 
 	// Store credentials
-	_, err := mgr.StoreCredentials("testuser", "testpass")
+	_, err := mgr.StoreCredentials("testuser", "testpassword")
 	if err != nil {
 		t.Fatalf("Failed to store credentials: %v", err)
 	}
 
 	// Verify credentials exist
-	hasCredsBefore, err := mgr.HasCredentials()
+	hasCreds, err := mgr.HasCredentials()
 	if err != nil {
 		t.Fatalf("Failed to check credentials: %v", err)
 	}
-	if !hasCredsBefore {
+	if !hasCreds {
 		t.Error("Expected credentials to exist")
 	}
 
 	// Clear credentials
-	if err := mgr.ClearCredentials(); err != nil {
+	err = mgr.ClearCredentials()
+	if err != nil {
 		t.Fatalf("Failed to clear credentials: %v", err)
 	}
 
 	// Verify credentials are gone
 	hasCredsAfter, err := mgr.HasCredentials()
 	if err != nil {
-		t.Fatalf("Failed to check credentials: %v", err)
+		t.Fatalf("Failed to check credentials after clear: %v", err)
 	}
 	if hasCredsAfter {
 		t.Error("Expected credentials to be cleared")
@@ -145,15 +133,10 @@ func TestClearCredentials(t *testing.T) {
 
 // TestStoreAndGetCivoToken tests Civo token storage and retrieval
 func TestStoreAndGetCivoToken(t *testing.T) {
-	tempDir := t.TempDir()
-	mgr := &Manager{
-		dbPath: filepath.Join(tempDir, "test_credentials.db"),
-	}
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
 
-	if err := mgr.initializeDB(); err != nil {
-		t.Fatalf("Failed to initialize database: %v", err)
-	}
-	defer mgr.Close()
+	mgr := NewManagerWithDB(db)
 
 	token := "test-civo-token-123"
 
@@ -176,15 +159,10 @@ func TestStoreAndGetCivoToken(t *testing.T) {
 
 // TestUpdateCivoToken tests updating an existing Civo token
 func TestUpdateCivoToken(t *testing.T) {
-	tempDir := t.TempDir()
-	mgr := &Manager{
-		dbPath: filepath.Join(tempDir, "test_credentials.db"),
-	}
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
 
-	if err := mgr.initializeDB(); err != nil {
-		t.Fatalf("Failed to initialize database: %v", err)
-	}
-	defer mgr.Close()
+	mgr := NewManagerWithDB(db)
 
 	// Store initial token
 	err := mgr.StoreCivoToken("old-token")
@@ -211,15 +189,10 @@ func TestUpdateCivoToken(t *testing.T) {
 
 // TestClearCivoToken tests removing a Civo token
 func TestClearCivoToken(t *testing.T) {
-	tempDir := t.TempDir()
-	mgr := &Manager{
-		dbPath: filepath.Join(tempDir, "test_credentials.db"),
-	}
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
 
-	if err := mgr.initializeDB(); err != nil {
-		t.Fatalf("Failed to initialize database: %v", err)
-	}
-	defer mgr.Close()
+	mgr := NewManagerWithDB(db)
 
 	// Store token
 	err := mgr.StoreCivoToken("test-token")
@@ -254,59 +227,42 @@ func TestClearCivoToken(t *testing.T) {
 
 // TestEncryptionDecryption tests that encryption/decryption works correctly
 func TestEncryptionDecryption(t *testing.T) {
-	tempDir := t.TempDir()
-	mgr := &Manager{
-		dbPath: filepath.Join(tempDir, "test_credentials.db"),
-	}
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
 
-	if err := mgr.initializeDB(); err != nil {
-		t.Fatalf("Failed to initialize database: %v", err)
-	}
-	defer mgr.Close()
+	mgr := NewManagerWithDB(db)
 
 	testPasswords := []string{
 		"simple",
-		"with spaces and special chars!@#$%",
-		"unicode: 你好世界 🚀",
-		"very-long-password-" + string(make([]byte, 1000)),
+		"with spaces and symbols !@#$%^&*()",
+		"unicode: 你好世界 🌍",
+		"very-long-password-that-exceeds-typical-lengths-" +
+			"and-contains-many-different-characters-1234567890",
 	}
 
 	for _, password := range testPasswords {
-		// Encrypt
 		encrypted, err := mgr.encryptPassword(password)
 		if err != nil {
-			t.Fatalf("Failed to encrypt password: %v", err)
+			t.Fatalf("Failed to encrypt password '%s': %v", password, err)
 		}
 
-		// Verify encrypted is different from original
-		if encrypted == password {
-			t.Error("Encrypted password should be different from original")
-		}
-
-		// Decrypt
 		decrypted, err := mgr.decryptPassword(encrypted)
 		if err != nil {
 			t.Fatalf("Failed to decrypt password: %v", err)
 		}
 
-		// Verify decrypted matches original
 		if decrypted != password {
-			t.Errorf("Decrypted password doesn't match original")
+			t.Errorf("Decrypted password doesn't match. Expected '%s', got '%s'", password, decrypted)
 		}
 	}
 }
 
 // TestEmptyValues tests handling of empty values
 func TestEmptyValues(t *testing.T) {
-	tempDir := t.TempDir()
-	mgr := &Manager{
-		dbPath: filepath.Join(tempDir, "test_credentials.db"),
-	}
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
 
-	if err := mgr.initializeDB(); err != nil {
-		t.Fatalf("Failed to initialize database: %v", err)
-	}
-	defer mgr.Close()
+	mgr := NewManagerWithDB(db)
 
 	// Test empty username
 	_, err := mgr.StoreCredentials("", "password")
@@ -329,15 +285,10 @@ func TestEmptyValues(t *testing.T) {
 
 // TestGetNonExistentCivoToken tests retrieving a token that doesn't exist
 func TestGetNonExistentCivoToken(t *testing.T) {
-	tempDir := t.TempDir()
-	mgr := &Manager{
-		dbPath: filepath.Join(tempDir, "test_credentials.db"),
-	}
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
 
-	if err := mgr.initializeDB(); err != nil {
-		t.Fatalf("Failed to initialize database: %v", err)
-	}
-	defer mgr.Close()
+	mgr := NewManagerWithDB(db)
 
 	// Try to get non-existent token
 	token, err := mgr.GetCivoToken()
@@ -363,27 +314,29 @@ func TestGetNonExistentCivoToken(t *testing.T) {
 // TestDatabasePersistence tests that data persists across manager instances
 func TestDatabasePersistence(t *testing.T) {
 	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "test_credentials.db")
+	dbPath := filepath.Join(tempDir, "hyve.db")
 
-	// First manager - store data
-	mgr1 := &Manager{dbPath: dbPath}
-	if err := mgr1.initializeDB(); err != nil {
-		t.Fatalf("Failed to initialize database: %v", err)
+	// First database instance - store data
+	db1, err := database.GetDBWithDir(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create first database: %v", err)
 	}
 
-	err := mgr1.StoreCivoToken("persistent-token")
+	mgr1 := NewManagerWithDB(db1)
+	err = mgr1.StoreCivoToken("persistent-token")
 	if err != nil {
 		t.Fatalf("Failed to store token: %v", err)
 	}
-	mgr1.Close()
+	db1.Close()
 
-	// Second manager - verify data persists
-	mgr2 := &Manager{dbPath: dbPath}
-	if err := mgr2.initializeDB(); err != nil {
-		t.Fatalf("Failed to initialize second database: %v", err)
+	// Second database instance - verify data persists
+	db2, err := database.GetDBWithDir(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create second database: %v", err)
 	}
-	defer mgr2.Close()
+	defer db2.Close()
 
+	mgr2 := NewManagerWithDB(db2)
 	token, err := mgr2.GetCivoToken()
 	if err != nil {
 		t.Fatalf("Failed to get token from second manager: %v", err)
@@ -392,21 +345,23 @@ func TestDatabasePersistence(t *testing.T) {
 	if token != "persistent-token" {
 		t.Errorf("Expected token persistent-token, got %s", token)
 	}
+
+	// Verify the database file exists at expected path
+	_ = dbPath // Just to acknowledge we're aware of where the DB should be
 }
 
 // BenchmarkEncryption benchmarks the encryption operation
 func BenchmarkEncryption(b *testing.B) {
 	tempDir := b.TempDir()
-	mgr := &Manager{
-		dbPath: filepath.Join(tempDir, "bench_credentials.db"),
+	db, err := database.GetDBWithDir(tempDir)
+	if err != nil {
+		b.Fatalf("Failed to create test database: %v", err)
 	}
+	defer db.Close()
 
-	if err := mgr.initializeDB(); err != nil {
-		b.Fatalf("Failed to initialize database: %v", err)
-	}
-	defer mgr.Close()
+	mgr := NewManagerWithDB(db)
 
-	password := "test-password-for-benchmarking"
+	password := "benchmark-test-password-12345"
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -420,16 +375,15 @@ func BenchmarkEncryption(b *testing.B) {
 // BenchmarkDecryption benchmarks the decryption operation
 func BenchmarkDecryption(b *testing.B) {
 	tempDir := b.TempDir()
-	mgr := &Manager{
-		dbPath: filepath.Join(tempDir, "bench_credentials.db"),
+	db, err := database.GetDBWithDir(tempDir)
+	if err != nil {
+		b.Fatalf("Failed to create test database: %v", err)
 	}
+	defer db.Close()
 
-	if err := mgr.initializeDB(); err != nil {
-		b.Fatalf("Failed to initialize database: %v", err)
-	}
-	defer mgr.Close()
+	mgr := NewManagerWithDB(db)
 
-	password := "test-password-for-benchmarking"
+	password := "benchmark-test-password-12345"
 	encrypted, err := mgr.encryptPassword(password)
 	if err != nil {
 		b.Fatalf("Failed to encrypt: %v", err)

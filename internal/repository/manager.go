@@ -1,19 +1,11 @@
 package repository
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/base64"
 	"fmt"
-	"io"
-	"os"
-	"path/filepath"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	"hyve/internal/database"
 )
 
 // Repository represents a Git repository configuration
@@ -29,77 +21,36 @@ type Repository struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// Manager handles repository configurations using SQLite
+// Manager handles repository configurations using the unified database
 type Manager struct {
+	db     *database.DB
 	dbPath string
-	db     *sql.DB
 }
 
 // NewManager creates a new repository manager
 func NewManager() (*Manager, error) {
-	homeDir, err := os.UserHomeDir()
+	db, err := database.GetDB()
 	if err != nil {
-		homeDir = "."
+		return nil, fmt.Errorf("failed to get database: %w", err)
 	}
 
-	configDir := filepath.Join(homeDir, ".hyve")
-	dbPath := filepath.Join(configDir, "repositories.db")
-
-	// Ensure config directory exists
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create config directory: %w", err)
-	}
-
-	mgr := &Manager{
-		dbPath: dbPath,
-	}
-
-	if err := mgr.initializeDB(); err != nil {
-		return nil, err
-	}
-
-	return mgr, nil
+	return &Manager{
+		db:     db,
+		dbPath: db.Path(),
+	}, nil
 }
 
-// initializeDB creates and initializes the SQLite database
-func (m *Manager) initializeDB() error {
-	db, err := sql.Open("sqlite3", m.dbPath)
-	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
+// NewManagerWithDB creates a new repository manager with a specific database (for testing)
+func NewManagerWithDB(db *database.DB) *Manager {
+	return &Manager{
+		db:     db,
+		dbPath: db.Path(),
 	}
-
-	m.db = db
-
-	// Create repositories table
-	createTableSQL := `
-	CREATE TABLE IF NOT EXISTS repositories (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		name TEXT UNIQUE NOT NULL,
-		repo_url TEXT NOT NULL,
-		local_path TEXT NOT NULL,
-		username TEXT,
-		is_current BOOLEAN DEFAULT FALSE,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	);
-
-	-- Create index for faster lookups
-	CREATE INDEX IF NOT EXISTS idx_repositories_name ON repositories(name);
-	CREATE INDEX IF NOT EXISTS idx_repositories_current ON repositories(is_current);
-	`
-
-	if _, err := db.Exec(createTableSQL); err != nil {
-		return fmt.Errorf("failed to create tables: %w", err)
-	}
-
-	return nil
 }
 
-// Close closes the database connection
+// Close is a no-op for repository manager since the database is managed centrally
 func (m *Manager) Close() error {
-	if m.db != nil {
-		return m.db.Close()
-	}
+	// Database is managed by the database package, don't close it here
 	return nil
 }
 
@@ -130,7 +81,7 @@ func (m *Manager) AddRepository(name, repoURL, localPath, username string) (*Rep
 	VALUES (?, ?, ?, ?, ?)
 	`
 
-	result, err := m.db.Exec(insertSQL, name, repoURL, localPath, username, isFirst)
+	result, err := m.db.Conn().Exec(insertSQL, name, repoURL, localPath, username, isFirst)
 	if err != nil {
 		return nil, fmt.Errorf("failed to insert repository: %w", err)
 	}
@@ -146,12 +97,12 @@ func (m *Manager) AddRepository(name, repoURL, localPath, username string) (*Rep
 // UpdateRepository updates an existing repository configuration
 func (m *Manager) UpdateRepository(name, repoURL, localPath, username string) (*Repository, error) {
 	updateSQL := `
-	UPDATE repositories 
+	UPDATE repositories
 	SET repo_url = ?, local_path = ?, username = ?, updated_at = CURRENT_TIMESTAMP
 	WHERE name = ?
 	`
 
-	result, err := m.db.Exec(updateSQL, repoURL, localPath, username, name)
+	result, err := m.db.Conn().Exec(updateSQL, repoURL, localPath, username, name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update repository: %w", err)
 	}
@@ -190,7 +141,7 @@ func (m *Manager) DeleteRepository(name string) error {
 	}
 
 	deleteSQL := `DELETE FROM repositories WHERE name = ?`
-	result, err := m.db.Exec(deleteSQL, name)
+	result, err := m.db.Conn().Exec(deleteSQL, name)
 	if err != nil {
 		return fmt.Errorf("failed to delete repository: %w", err)
 	}
@@ -215,7 +166,7 @@ func (m *Manager) ListRepositories() ([]*Repository, error) {
 	ORDER BY is_current DESC, name ASC
 	`
 
-	rows, err := m.db.Query(selectSQL)
+	rows, err := m.db.Conn().Query(selectSQL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query repositories: %w", err)
 	}
@@ -257,7 +208,7 @@ func (m *Manager) GetRepositoryByName(name string) (*Repository, error) {
 	repo := &Repository{}
 	var createdAt, updatedAt string
 
-	err := m.db.QueryRow(selectSQL, name).Scan(&repo.ID, &repo.Name, &repo.RepoURL,
+	err := m.db.Conn().QueryRow(selectSQL, name).Scan(&repo.ID, &repo.Name, &repo.RepoURL,
 		&repo.LocalPath, &repo.Username, &repo.IsCurrent, &createdAt, &updatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -288,7 +239,7 @@ func (m *Manager) GetRepositoryByID(id int) (*Repository, error) {
 	repo := &Repository{}
 	var createdAt, updatedAt string
 
-	err := m.db.QueryRow(selectSQL, id).Scan(&repo.ID, &repo.Name, &repo.RepoURL,
+	err := m.db.Conn().QueryRow(selectSQL, id).Scan(&repo.ID, &repo.Name, &repo.RepoURL,
 		&repo.LocalPath, &repo.Username, &repo.IsCurrent, &createdAt, &updatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -320,7 +271,7 @@ func (m *Manager) GetCurrentRepository() (*Repository, error) {
 	repo := &Repository{}
 	var createdAt, updatedAt string
 
-	err := m.db.QueryRow(selectSQL).Scan(&repo.ID, &repo.Name, &repo.RepoURL,
+	err := m.db.Conn().QueryRow(selectSQL).Scan(&repo.ID, &repo.Name, &repo.RepoURL,
 		&repo.LocalPath, &repo.Username, &repo.IsCurrent, &createdAt, &updatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -349,12 +300,12 @@ func (m *Manager) SetCurrentRepository(name string) error {
 
 	// Set the specified repository as current
 	updateSQL := `
-	UPDATE repositories 
+	UPDATE repositories
 	SET is_current = TRUE, updated_at = CURRENT_TIMESTAMP
 	WHERE name = ?
 	`
 
-	result, err := m.db.Exec(updateSQL, name)
+	result, err := m.db.Conn().Exec(updateSQL, name)
 	if err != nil {
 		return fmt.Errorf("failed to set current repository: %w", err)
 	}
@@ -375,7 +326,7 @@ func (m *Manager) SetCurrentRepository(name string) error {
 func (m *Manager) HasRepositories() (bool, error) {
 	countSQL := `SELECT COUNT(*) FROM repositories`
 	var count int
-	err := m.db.QueryRow(countSQL).Scan(&count)
+	err := m.db.Conn().QueryRow(countSQL).Scan(&count)
 	if err != nil {
 		return false, fmt.Errorf("failed to count repositories: %w", err)
 	}
@@ -386,7 +337,7 @@ func (m *Manager) HasRepositories() (bool, error) {
 func (m *Manager) repositoryExists(name string) (bool, error) {
 	countSQL := `SELECT COUNT(*) FROM repositories WHERE name = ?`
 	var count int
-	err := m.db.QueryRow(countSQL, name).Scan(&count)
+	err := m.db.Conn().QueryRow(countSQL, name).Scan(&count)
 	if err != nil {
 		return false, fmt.Errorf("failed to check repository existence: %w", err)
 	}
@@ -405,83 +356,9 @@ func (m *Manager) isFirstRepository() (bool, error) {
 // unsetCurrentRepository unsets the current repository flag for all repositories
 func (m *Manager) unsetCurrentRepository() error {
 	updateSQL := `UPDATE repositories SET is_current = FALSE`
-	_, err := m.db.Exec(updateSQL)
+	_, err := m.db.Conn().Exec(updateSQL)
 	if err != nil {
 		return fmt.Errorf("failed to unset current repository: %w", err)
 	}
 	return nil
-}
-
-// getEncryptionKey generates a deterministic encryption key based on system info
-// This is not the most secure approach but provides reasonable protection for local storage
-func (m *Manager) getEncryptionKey() []byte {
-	// Use a combination of database path and hostname for key derivation
-	hostname, _ := os.Hostname()
-	keyMaterial := fmt.Sprintf("%s:%s", m.dbPath, hostname)
-	hash := sha256.Sum256([]byte(keyMaterial))
-	return hash[:]
-}
-
-// encryptPassword encrypts a password using AES-GCM
-func (m *Manager) encryptPassword(password string) (string, error) {
-	if password == "" {
-		return "", nil
-	}
-
-	key := m.getEncryptionKey()
-
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "", fmt.Errorf("failed to create cipher: %w", err)
-	}
-
-	aesGCM, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", fmt.Errorf("failed to create GCM: %w", err)
-	}
-
-	nonce := make([]byte, aesGCM.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return "", fmt.Errorf("failed to generate nonce: %w", err)
-	}
-
-	ciphertext := aesGCM.Seal(nonce, nonce, []byte(password), nil)
-	return base64.StdEncoding.EncodeToString(ciphertext), nil
-}
-
-// decryptPassword decrypts a password using AES-GCM
-func (m *Manager) decryptPassword(encryptedPassword string) (string, error) {
-	if encryptedPassword == "" {
-		return "", nil
-	}
-
-	key := m.getEncryptionKey()
-
-	ciphertext, err := base64.StdEncoding.DecodeString(encryptedPassword)
-	if err != nil {
-		return "", fmt.Errorf("failed to decode encrypted password: %w", err)
-	}
-
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "", fmt.Errorf("failed to create cipher: %w", err)
-	}
-
-	aesGCM, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", fmt.Errorf("failed to create GCM: %w", err)
-	}
-
-	nonceSize := aesGCM.NonceSize()
-	if len(ciphertext) < nonceSize {
-		return "", fmt.Errorf("ciphertext too short")
-	}
-
-	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
-	plaintext, err := aesGCM.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to decrypt password: %w", err)
-	}
-
-	return string(plaintext), nil
 }

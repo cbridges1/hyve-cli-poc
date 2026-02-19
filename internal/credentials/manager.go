@@ -9,11 +9,9 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	"hyve/internal/database"
 )
 
 // Credentials represents stored Git credentials
@@ -34,132 +32,36 @@ func (c *Credentials) GetPassword() (string, error) {
 	return c.manager.decryptPassword(c.EncryptedPassword)
 }
 
-// Manager handles global Git credentials using SQLite
+// Manager handles global Git credentials using the unified database
 type Manager struct {
+	db     *database.DB
 	dbPath string
-	db     *sql.DB
 }
 
 // NewManager creates a new credentials manager
 func NewManager() (*Manager, error) {
-	homeDir, err := os.UserHomeDir()
+	db, err := database.GetDB()
 	if err != nil {
-		homeDir = "."
+		return nil, fmt.Errorf("failed to get database: %w", err)
 	}
 
-	configDir := filepath.Join(homeDir, ".hyve")
-	dbPath := filepath.Join(configDir, "credentials.db")
-
-	// Ensure config directory exists
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create config directory: %w", err)
-	}
-
-	mgr := &Manager{
-		dbPath: dbPath,
-	}
-
-	if err := mgr.initializeDB(); err != nil {
-		return nil, err
-	}
-
-	return mgr, nil
+	return &Manager{
+		db:     db,
+		dbPath: db.Path(),
+	}, nil
 }
 
-// initializeDB creates and initializes the SQLite database
-func (m *Manager) initializeDB() error {
-	db, err := sql.Open("sqlite3", m.dbPath)
-	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
+// NewManagerWithDB creates a new credentials manager with a specific database (for testing)
+func NewManagerWithDB(db *database.DB) *Manager {
+	return &Manager{
+		db:     db,
+		dbPath: db.Path(),
 	}
-
-	m.db = db
-
-	// Create credentials table (for Git credentials)
-	createTableSQL := `
-	CREATE TABLE IF NOT EXISTS credentials (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		username TEXT NOT NULL,
-		encrypted_password TEXT NOT NULL,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	);
-	`
-
-	if _, err := db.Exec(createTableSQL); err != nil {
-		return fmt.Errorf("failed to create credentials table: %w", err)
-	}
-
-	// Create Civo token table (single token storage)
-	createCivoTokenSQL := `
-	CREATE TABLE IF NOT EXISTS civo_token (
-		id INTEGER PRIMARY KEY CHECK (id = 1),
-		encrypted_token TEXT NOT NULL,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	);
-	`
-
-	if _, err := db.Exec(createCivoTokenSQL); err != nil {
-		return fmt.Errorf("failed to create civo_token table: %w", err)
-	}
-
-	// Migrate from old civo_accounts table if it exists
-	if err := m.migrateFromCivoAccounts(); err != nil {
-		// Log but don't fail - migration is best-effort
-		fmt.Printf("Note: Could not migrate from civo_accounts: %v\n", err)
-	}
-
-	return nil
 }
 
-// migrateFromCivoAccounts migrates the default token from old civo_accounts table
-func (m *Manager) migrateFromCivoAccounts() error {
-	// Check if old table exists
-	var tableName string
-	err := m.db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='civo_accounts'").Scan(&tableName)
-	if err != nil {
-		// Table doesn't exist, nothing to migrate
-		return nil
-	}
-
-	// Check if we already have a token in the new table
-	var existingToken string
-	err = m.db.QueryRow("SELECT encrypted_token FROM civo_token WHERE id = 1").Scan(&existingToken)
-	if err == nil && existingToken != "" {
-		// Already have a token, don't overwrite
-		return nil
-	}
-
-	// Get the default token from old table
-	var encryptedToken string
-	err = m.db.QueryRow("SELECT encrypted_token FROM civo_accounts WHERE account_id = 'default'").Scan(&encryptedToken)
-	if err != nil {
-		// No default token found, try any token
-		err = m.db.QueryRow("SELECT encrypted_token FROM civo_accounts LIMIT 1").Scan(&encryptedToken)
-		if err != nil {
-			return nil // No tokens to migrate
-		}
-	}
-
-	// Insert into new table
-	insertSQL := `
-	INSERT OR REPLACE INTO civo_token (id, encrypted_token)
-	VALUES (1, ?)
-	`
-	_, err = m.db.Exec(insertSQL, encryptedToken)
-	if err != nil {
-		return fmt.Errorf("failed to migrate Civo token: %w", err)
-	}
-
-	return nil
-}
-
-// Close closes the database connection
+// Close is a no-op for credentials manager since the database is managed centrally
 func (m *Manager) Close() error {
-	if m.db != nil {
-		return m.db.Close()
-	}
+	// Database is managed by the database package, don't close it here
 	return nil
 }
 
@@ -184,7 +86,7 @@ func (m *Manager) StoreCredentials(username, password string) (*Credentials, err
 		SET username = ?, encrypted_password = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
 		`
-		_, err := m.db.Exec(updateSQL, username, encryptedPassword, existing.ID)
+		_, err := m.db.Conn().Exec(updateSQL, username, encryptedPassword, existing.ID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to update credentials: %w", err)
 		}
@@ -194,7 +96,7 @@ func (m *Manager) StoreCredentials(username, password string) (*Credentials, err
 		INSERT INTO credentials (username, encrypted_password)
 		VALUES (?, ?)
 		`
-		_, err := m.db.Exec(insertSQL, username, encryptedPassword)
+		_, err := m.db.Conn().Exec(insertSQL, username, encryptedPassword)
 		if err != nil {
 			return nil, fmt.Errorf("failed to insert credentials: %w", err)
 		}
@@ -215,7 +117,7 @@ func (m *Manager) GetCredentials() (*Credentials, error) {
 	creds := &Credentials{}
 	var createdAt, updatedAt string
 
-	err := m.db.QueryRow(selectSQL).Scan(&creds.ID, &creds.Username,
+	err := m.db.Conn().QueryRow(selectSQL).Scan(&creds.ID, &creds.Username,
 		&creds.EncryptedPassword, &createdAt, &updatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -249,18 +151,18 @@ func (m *Manager) HasCredentials() (bool, error) {
 // ClearCredentials removes all stored credentials
 func (m *Manager) ClearCredentials() error {
 	deleteSQL := `DELETE FROM credentials`
-	_, err := m.db.Exec(deleteSQL)
+	_, err := m.db.Conn().Exec(deleteSQL)
 	if err != nil {
 		return fmt.Errorf("failed to clear credentials: %w", err)
 	}
 	return nil
 }
 
-// getEncryptionKey generates a deterministic encryption key based on database path
+// getEncryptionKey generates a deterministic encryption key
 func (m *Manager) getEncryptionKey() []byte {
-	// Use database path for key derivation
-	// Note: Hostname is intentionally excluded to make the database portable across machines
-	keyMaterial := m.dbPath
+	// Use a fixed key material for consistent encryption across database migrations
+	// Note: This is portable across machines and database locations
+	keyMaterial := "hyve-credentials-v1"
 	hash := sha256.Sum256([]byte(keyMaterial))
 	return hash[:]
 }
@@ -400,7 +302,7 @@ func (m *Manager) MigrateEncryption(oldHostname string) error {
 	SET encrypted_password = ?, updated_at = CURRENT_TIMESTAMP
 	WHERE id = ?
 	`
-	_, err = m.db.Exec(updateSQL, newEncrypted, creds.ID)
+	_, err = m.db.Conn().Exec(updateSQL, newEncrypted, creds.ID)
 	if err != nil {
 		return fmt.Errorf("failed to update credentials: %w", err)
 	}
@@ -425,7 +327,7 @@ func (m *Manager) StoreCivoToken(token string) error {
 	INSERT OR REPLACE INTO civo_token (id, encrypted_token, created_at, updated_at)
 	VALUES (1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 	`
-	_, err = m.db.Exec(upsertSQL, encryptedToken)
+	_, err = m.db.Conn().Exec(upsertSQL, encryptedToken)
 	if err != nil {
 		return fmt.Errorf("failed to store Civo token: %w", err)
 	}
@@ -442,7 +344,7 @@ func (m *Manager) GetCivoToken() (string, error) {
 	`
 
 	var encryptedToken string
-	err := m.db.QueryRow(selectSQL).Scan(&encryptedToken)
+	err := m.db.Conn().QueryRow(selectSQL).Scan(&encryptedToken)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return "", nil // No token stored
@@ -471,7 +373,7 @@ func (m *Manager) HasCivoToken() (bool, error) {
 // ClearCivoToken removes the stored Civo API token
 func (m *Manager) ClearCivoToken() error {
 	deleteSQL := `DELETE FROM civo_token WHERE id = 1`
-	_, err := m.db.Exec(deleteSQL)
+	_, err := m.db.Conn().Exec(deleteSQL)
 	if err != nil {
 		return fmt.Errorf("failed to clear Civo token: %w", err)
 	}
