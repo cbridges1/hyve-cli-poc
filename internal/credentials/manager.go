@@ -310,8 +310,9 @@ func (m *Manager) MigrateEncryption(oldHostname string) error {
 	return nil
 }
 
-// StoreSecret stores or updates a named secret value
-func (m *Manager) StoreSecret(name, value string) error {
+// StoreSecret stores or updates a named secret value with a given type.
+// Use an empty string for secretType when no classification is needed.
+func (m *Manager) StoreSecret(name, secretType, value string) error {
 	if name == "" {
 		return fmt.Errorf("secret name is required")
 	}
@@ -325,10 +326,10 @@ func (m *Manager) StoreSecret(name, value string) error {
 	}
 
 	upsertSQL := `
-	INSERT OR REPLACE INTO secrets (name, encrypted_value, created_at, updated_at)
-	VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+	INSERT OR REPLACE INTO secrets (name, type, encrypted_value, created_at, updated_at)
+	VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 	`
-	_, err = m.db.Conn().Exec(upsertSQL, name, encryptedValue)
+	_, err = m.db.Conn().Exec(upsertSQL, name, secretType, encryptedValue)
 	if err != nil {
 		return fmt.Errorf("failed to store secret %q: %w", name, err)
 	}
@@ -336,16 +337,24 @@ func (m *Manager) StoreSecret(name, value string) error {
 	return nil
 }
 
-// GetSecret retrieves and decrypts a named secret value
-func (m *Manager) GetSecret(name string) (string, error) {
-	selectSQL := `
-	SELECT encrypted_value
-	FROM secrets
-	WHERE name = ?
-	`
+// GetSecret retrieves and decrypts a named secret, optionally filtered by type.
+// Pass an empty string for secretType to match any type.
+func (m *Manager) GetSecret(name, secretType string) (string, error) {
+	var (
+		encryptedValue string
+		err            error
+	)
 
-	var encryptedValue string
-	err := m.db.Conn().QueryRow(selectSQL, name).Scan(&encryptedValue)
+	if secretType == "" {
+		err = m.db.Conn().QueryRow(
+			`SELECT encrypted_value FROM secrets WHERE name = ?`, name,
+		).Scan(&encryptedValue)
+	} else {
+		err = m.db.Conn().QueryRow(
+			`SELECT encrypted_value FROM secrets WHERE name = ? AND type = ?`, name, secretType,
+		).Scan(&encryptedValue)
+	}
+
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return "", nil
@@ -361,46 +370,55 @@ func (m *Manager) GetSecret(name string) (string, error) {
 	return value, nil
 }
 
-// HasSecret checks if a named secret is stored
-func (m *Manager) HasSecret(name string) (bool, error) {
-	value, err := m.GetSecret(name)
+// HasSecret checks if a named secret is stored, optionally filtered by type.
+// Pass an empty string for secretType to match any type.
+func (m *Manager) HasSecret(name, secretType string) (bool, error) {
+	value, err := m.GetSecret(name, secretType)
 	if err != nil {
 		return false, err
 	}
 	return value != "", nil
 }
 
-// ClearSecret removes a named secret
-func (m *Manager) ClearSecret(name string) error {
-	deleteSQL := `DELETE FROM secrets WHERE name = ?`
-	_, err := m.db.Conn().Exec(deleteSQL, name)
+// ClearSecret removes a named secret, optionally filtered by type.
+// Pass an empty string for secretType to delete regardless of type.
+func (m *Manager) ClearSecret(name, secretType string) error {
+	var err error
+	if secretType == "" {
+		_, err = m.db.Conn().Exec(`DELETE FROM secrets WHERE name = ?`, name)
+	} else {
+		_, err = m.db.Conn().Exec(`DELETE FROM secrets WHERE name = ? AND type = ?`, name, secretType)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to clear secret %q: %w", name, err)
 	}
 	return nil
 }
 
-// CivoTokenName returns the secrets table name for a Civo organization's token
+// SecretTypeCivo is the type identifier for Civo API tokens in the secrets table.
+const SecretTypeCivo = "civo"
+
+// CivoTokenName returns the secrets table name for a Civo organization's token.
 func CivoTokenName(orgName string) string {
 	return orgName + "-token"
 }
 
-// StoreCivoToken stores the Civo API token for the given organization
+// StoreCivoToken stores the Civo API token for the given organization.
 func (m *Manager) StoreCivoToken(orgName, token string) error {
-	return m.StoreSecret(CivoTokenName(orgName), token)
+	return m.StoreSecret(CivoTokenName(orgName), SecretTypeCivo, token)
 }
 
-// GetCivoToken retrieves the Civo API token for the given organization
+// GetCivoToken retrieves the Civo API token for the given organization.
 func (m *Manager) GetCivoToken(orgName string) (string, error) {
-	return m.GetSecret(CivoTokenName(orgName))
+	return m.GetSecret(CivoTokenName(orgName), SecretTypeCivo)
 }
 
-// HasCivoToken checks if a Civo token is stored for the given organization
+// HasCivoToken checks if a Civo token is stored for the given organization.
 func (m *Manager) HasCivoToken(orgName string) (bool, error) {
-	return m.HasSecret(CivoTokenName(orgName))
+	return m.HasSecret(CivoTokenName(orgName), SecretTypeCivo)
 }
 
-// ClearCivoToken removes the Civo API token for the given organization
+// ClearCivoToken removes the Civo API token for the given organization.
 func (m *Manager) ClearCivoToken(orgName string) error {
-	return m.ClearSecret(CivoTokenName(orgName))
+	return m.ClearSecret(CivoTokenName(orgName), SecretTypeCivo)
 }

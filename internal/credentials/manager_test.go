@@ -318,57 +318,67 @@ func TestMultipleSecrets(t *testing.T) {
 
 	mgr := NewManagerWithDB(db)
 
-	// Store secrets with different names
-	secrets := map[string]string{
-		"myorg-token":  "civo-token-123",
-		"docker-token": "docker-token-456",
-		"github-token": "github-token-789",
+	type secretEntry struct {
+		secretType string
+		value      string
+	}
+	// Store secrets with different names and types
+	secrets := map[string]secretEntry{
+		"myorg-token":  {SecretTypeCivo, "civo-token-123"},
+		"docker-token": {"docker", "docker-token-456"},
+		"github-token": {"github", "github-token-789"},
 	}
 
-	for name, value := range secrets {
-		err := mgr.StoreSecret(name, value)
+	for name, entry := range secrets {
+		err := mgr.StoreSecret(name, entry.secretType, entry.value)
 		if err != nil {
 			t.Fatalf("Failed to store secret %s: %v", name, err)
 		}
 	}
 
-	// Verify each secret can be retrieved
-	for name, expectedValue := range secrets {
-		value, err := mgr.GetSecret(name)
+	// Verify each secret can be retrieved by name+type
+	for name, entry := range secrets {
+		value, err := mgr.GetSecret(name, entry.secretType)
 		if err != nil {
 			t.Fatalf("Failed to get secret %s: %v", name, err)
 		}
-		if value != expectedValue {
-			t.Errorf("Expected secret %s value '%s', got '%s'", name, expectedValue, value)
+		if value != entry.value {
+			t.Errorf("Expected secret %s value '%s', got '%s'", name, entry.value, value)
 		}
 
-		hasSecret, err := mgr.HasSecret(name)
+		hasSecret, err := mgr.HasSecret(name, entry.secretType)
 		if err != nil {
 			t.Fatalf("Failed to check secret %s: %v", name, err)
 		}
 		if !hasSecret {
 			t.Errorf("Expected HasSecret to return true for %s", name)
 		}
+
+		// Verify wrong type returns nothing
+		wrongValue, _ := mgr.GetSecret(name, "wrong-type")
+		if wrongValue != "" {
+			t.Errorf("Expected empty value for wrong type on %s, got '%s'", name, wrongValue)
+		}
 	}
 
-	// Clear one secret
-	err := mgr.ClearSecret("docker-token")
+	// Clear one secret by name+type
+	err := mgr.ClearSecret("docker-token", "docker")
 	if err != nil {
 		t.Fatalf("Failed to clear docker-token: %v", err)
 	}
 
 	// Verify docker-token is gone but others remain
-	hasDocker, _ := mgr.HasSecret("docker-token")
+	hasDocker, _ := mgr.HasSecret("docker-token", "docker")
 	if hasDocker {
 		t.Error("Expected docker-token to be cleared")
 	}
 
-	hasCivo, _ := mgr.HasSecret("myorg-token")
+	hasCivo, _ := mgr.HasSecret("myorg-token", SecretTypeCivo)
 	if !hasCivo {
 		t.Error("Expected myorg-token to still exist")
 	}
 
-	hasGithub, _ := mgr.HasSecret("github-token")
+	hasGithub, _ := mgr.HasSecret("github-token", "github")
 	if !hasGithub {
 		t.Error("Expected github-token to still exist")
 	}
@@ -382,13 +392,13 @@ func TestStoreSecretValidation(t *testing.T) {
 	mgr := NewManagerWithDB(db)
 
 	// Test empty name
-	err := mgr.StoreSecret("", "value")
+	err := mgr.StoreSecret("", SecretTypeCivo, "value")
 	if err == nil {
 		t.Error("Expected error for empty secret name")
 	}
 
 	// Test empty value
-	err = mgr.StoreSecret("myorg-token", "")
+	err = mgr.StoreSecret("myorg-token", SecretTypeCivo, "")
 	if err == nil {
 		t.Error("Expected error for empty secret value")
 	}
