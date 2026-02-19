@@ -311,6 +311,89 @@ func TestGetNonExistentCivoToken(t *testing.T) {
 	}
 }
 
+// TestMultiProviderTokens tests storing tokens for multiple providers
+func TestMultiProviderTokens(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	mgr := NewManagerWithDB(db)
+
+	// Store tokens for different providers
+	providers := map[string]string{
+		"civo":   "civo-token-123",
+		"docker": "docker-token-456",
+		"github": "github-token-789",
+	}
+
+	for provider, token := range providers {
+		err := mgr.StoreToken(provider, token)
+		if err != nil {
+			t.Fatalf("Failed to store %s token: %v", provider, err)
+		}
+	}
+
+	// Verify each token can be retrieved
+	for provider, expectedToken := range providers {
+		token, err := mgr.GetToken(provider)
+		if err != nil {
+			t.Fatalf("Failed to get %s token: %v", provider, err)
+		}
+		if token != expectedToken {
+			t.Errorf("Expected %s token '%s', got '%s'", provider, expectedToken, token)
+		}
+
+		hasToken, err := mgr.HasToken(provider)
+		if err != nil {
+			t.Fatalf("Failed to check %s token: %v", provider, err)
+		}
+		if !hasToken {
+			t.Errorf("Expected HasToken to return true for %s", provider)
+		}
+	}
+
+	// Clear one provider's token
+	err := mgr.ClearToken("docker")
+	if err != nil {
+		t.Fatalf("Failed to clear docker token: %v", err)
+	}
+
+	// Verify docker token is gone but others remain
+	hasDocker, _ := mgr.HasToken("docker")
+	if hasDocker {
+		t.Error("Expected docker token to be cleared")
+	}
+
+	hasCivo, _ := mgr.HasToken("civo")
+	if !hasCivo {
+		t.Error("Expected civo token to still exist")
+	}
+
+	hasGithub, _ := mgr.HasToken("github")
+	if !hasGithub {
+		t.Error("Expected github token to still exist")
+	}
+}
+
+// TestStoreTokenValidation tests validation of token storage
+func TestStoreTokenValidation(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	mgr := NewManagerWithDB(db)
+
+	// Test empty provider
+	err := mgr.StoreToken("", "token")
+	if err == nil {
+		t.Error("Expected error for empty provider")
+	}
+
+	// Test empty token
+	err = mgr.StoreToken("civo", "")
+	if err == nil {
+		t.Error("Expected error for empty token")
+	}
+}
+
 // TestDatabasePersistence tests that data persists across manager instances
 func TestDatabasePersistence(t *testing.T) {
 	tempDir := t.TempDir()

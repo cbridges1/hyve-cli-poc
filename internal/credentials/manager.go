@@ -310,8 +310,11 @@ func (m *Manager) MigrateEncryption(oldHostname string) error {
 	return nil
 }
 
-// StoreCivoToken stores or updates the Civo API token
-func (m *Manager) StoreCivoToken(token string) error {
+// StoreToken stores or updates an API token for a given provider
+func (m *Manager) StoreToken(provider, token string) error {
+	if provider == "" {
+		return fmt.Errorf("provider is required")
+	}
 	if token == "" {
 		return fmt.Errorf("token is required")
 	}
@@ -324,32 +327,37 @@ func (m *Manager) StoreCivoToken(token string) error {
 
 	// Use INSERT OR REPLACE to handle both insert and update
 	upsertSQL := `
-	INSERT OR REPLACE INTO civo_token (id, encrypted_token, created_at, updated_at)
-	VALUES (1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+	INSERT OR REPLACE INTO api_tokens (provider, encrypted_token, created_at, updated_at)
+	VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 	`
-	_, err = m.db.Conn().Exec(upsertSQL, encryptedToken)
+	_, err = m.db.Conn().Exec(upsertSQL, provider, encryptedToken)
 	if err != nil {
-		return fmt.Errorf("failed to store Civo token: %w", err)
+		return fmt.Errorf("failed to store %s token: %w", provider, err)
 	}
 
 	return nil
 }
 
-// GetCivoToken retrieves and decrypts the Civo API token
-func (m *Manager) GetCivoToken() (string, error) {
+// StoreCivoToken stores or updates the Civo API token
+func (m *Manager) StoreCivoToken(token string) error {
+	return m.StoreToken("civo", token)
+}
+
+// GetToken retrieves and decrypts an API token for a given provider
+func (m *Manager) GetToken(provider string) (string, error) {
 	selectSQL := `
 	SELECT encrypted_token
-	FROM civo_token
-	WHERE id = 1
+	FROM api_tokens
+	WHERE provider = ?
 	`
 
 	var encryptedToken string
-	err := m.db.Conn().QueryRow(selectSQL).Scan(&encryptedToken)
+	err := m.db.Conn().QueryRow(selectSQL, provider).Scan(&encryptedToken)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return "", nil // No token stored
 		}
-		return "", fmt.Errorf("failed to get Civo token: %w", err)
+		return "", fmt.Errorf("failed to get %s token: %w", provider, err)
 	}
 
 	// Decrypt the token
@@ -361,21 +369,36 @@ func (m *Manager) GetCivoToken() (string, error) {
 	return token, nil
 }
 
-// HasCivoToken checks if a Civo token is stored
-func (m *Manager) HasCivoToken() (bool, error) {
-	token, err := m.GetCivoToken()
+// GetCivoToken retrieves and decrypts the Civo API token
+func (m *Manager) GetCivoToken() (string, error) {
+	return m.GetToken("civo")
+}
+
+// HasToken checks if a token is stored for a given provider
+func (m *Manager) HasToken(provider string) (bool, error) {
+	token, err := m.GetToken(provider)
 	if err != nil {
 		return false, err
 	}
 	return token != "", nil
 }
 
-// ClearCivoToken removes the stored Civo API token
-func (m *Manager) ClearCivoToken() error {
-	deleteSQL := `DELETE FROM civo_token WHERE id = 1`
-	_, err := m.db.Conn().Exec(deleteSQL)
+// HasCivoToken checks if a Civo token is stored
+func (m *Manager) HasCivoToken() (bool, error) {
+	return m.HasToken("civo")
+}
+
+// ClearToken removes the stored API token for a given provider
+func (m *Manager) ClearToken(provider string) error {
+	deleteSQL := `DELETE FROM api_tokens WHERE provider = ?`
+	_, err := m.db.Conn().Exec(deleteSQL, provider)
 	if err != nil {
-		return fmt.Errorf("failed to clear Civo token: %w", err)
+		return fmt.Errorf("failed to clear %s token: %w", provider, err)
 	}
 	return nil
+}
+
+// ClearCivoToken removes the stored Civo API token
+func (m *Manager) ClearCivoToken() error {
+	return m.ClearToken("civo")
 }

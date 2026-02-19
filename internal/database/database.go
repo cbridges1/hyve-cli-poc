@@ -105,18 +105,26 @@ func (d *DB) initialize() error {
 		return fmt.Errorf("failed to create credentials table: %w", err)
 	}
 
-	// Civo token table (single token storage)
+	// API tokens table (multi-provider token storage)
 	_, err = tx.Exec(`
-		CREATE TABLE IF NOT EXISTS civo_token (
-			id INTEGER PRIMARY KEY CHECK (id = 1),
+		CREATE TABLE IF NOT EXISTS api_tokens (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			provider TEXT NOT NULL UNIQUE,
 			encrypted_token TEXT NOT NULL,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)
 	`)
 	if err != nil {
-		return fmt.Errorf("failed to create civo_token table: %w", err)
+		return fmt.Errorf("failed to create api_tokens table: %w", err)
 	}
+
+	// Migrate from old civo_token table if it exists
+	_, err = tx.Exec(`
+		INSERT OR IGNORE INTO api_tokens (provider, encrypted_token, created_at, updated_at)
+		SELECT 'civo', encrypted_token, created_at, updated_at FROM civo_token WHERE id = 1
+	`)
+	// Ignore error - old table might not exist
 
 	// Repositories table
 	_, err = tx.Exec(`
