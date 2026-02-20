@@ -113,9 +113,6 @@ gcloud auth application-default login
 # Option 4: Azure (uses Azure CLI authentication)
 az login
 
-# Configure Git credentials (for private repos)
-./hyve git credentials --username your-username --password your-token
-
 # Add your first repository
 ./hyve git add production --repo-url https://github.com/company/hyve-state.git
 
@@ -147,25 +144,6 @@ az login
 # AWS: Create VPC (optional - creates actual AWS resource)
 ./hyve config aws vpc-create --name dev-vpc --region us-east-1 --cidr 10.0.0.0/16
 ```
-
-<details>
-<summary>Optional: Use built-in git library</summary>
-
-By default, Hyve uses your system's git command for easier onboarding. If you prefer the built-in go-git library:
-
-```bash
-# Set to built-in git (persisted in config)
-./hyve config set-git-backend builtin
-
-# Or switch back to system git
-./hyve config set-git-backend system
-
-# Check current backend
-./hyve config get-git-backend
-```
-
-The preference is stored in `~/.hyve/config.yaml` and persists across sessions.
-</details>
 
 ## Documentation
 
@@ -564,10 +542,10 @@ Hyve stores all data in `~/.hyve/`:
 
 ```
 ~/.hyve/
-├── config.yaml          # Global configuration (git backend preference)
+├── config.yaml          # Global configuration
 ├── context.yaml         # Current provider context (account/project selections - local only)
 ├── repositories.db      # Repository configurations (SQLite)
-├── credentials.db       # Encrypted Civo tokens and Git credentials (AES-GCM)
+├── credentials.db       # Encrypted Civo tokens (AES-GCM)
 ├── kubeconfigs.db      # Encrypted cluster kubeconfigs (AES-GCM)
 ├── temp/               # Temporary kubeconfig files
 └── repositories/       # Cloned repository storage

@@ -90,44 +90,6 @@ var gitResetCmd = &cobra.Command{
 	},
 }
 
-var gitCredentialsCmd = &cobra.Command{
-	Use:   "credentials",
-	Short: "Manage global Git credentials",
-	Long:  "Store, update, or view global Git credentials used for authentication",
-	Args:  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		username, _ := cmd.Flags().GetString("username")
-		password, _ := cmd.Flags().GetString("password")
-		shouldClear, _ := cmd.Flags().GetBool("clear")
-
-		if shouldClear {
-			clearGitCredentials()
-		} else if username != "" || password != "" {
-			updateGitCredentials(username, password)
-		} else {
-			showGitCredentials()
-		}
-	},
-}
-
-var gitCredentialsMigrateCmd = &cobra.Command{
-	Use:   "credentials-migrate [old-hostname]",
-	Short: "Migrate credentials encryption to new portable format",
-	Long: `Migrate credentials encryption from hostname-based keys to portable keys.
-
-This command re-encrypts your stored credentials using a key that doesn't include the hostname,
-making the database portable across machines. You need to provide the hostname that was
-used when the credentials were originally encrypted.
-
-Example:
-  hyve git credentials-migrate "old-macbook.local"`,
-	Args: cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		oldHostname := args[0]
-		return migrateGitCredentialsEncryption(oldHostname)
-	},
-}
-
 var gitBranchCmd = &cobra.Command{
 	Use:   "branch",
 	Short: "Manage Git branches",
@@ -232,10 +194,6 @@ func init() {
 	gitAddCmd.Flags().StringP("username", "u", "", "Git username for authentication (stored in repository config)")
 	gitAddCmd.Flags().BoolP("set-current", "c", false, "Set this repository as current after adding")
 
-	gitCredentialsCmd.Flags().StringP("username", "u", "", "Git username for authentication")
-	gitCredentialsCmd.Flags().StringP("password", "p", "", "Git password or personal access token for authentication")
-	gitCredentialsCmd.Flags().Bool("clear", false, "Clear all stored credentials")
-
 	gitBranchCreateCmd.Flags().BoolP("switch", "s", false, "Switch to the new branch after creating it")
 	gitBranchCreateCmd.Flags().BoolP("push", "p", false, "Push the branch to remote after creating it")
 
@@ -254,8 +212,6 @@ func init() {
 	gitCmd.AddCommand(gitStatusCmd)
 	gitCmd.AddCommand(gitRemoveCmd)
 	gitCmd.AddCommand(gitResetCmd)
-	gitCmd.AddCommand(gitCredentialsCmd)
-	gitCmd.AddCommand(gitCredentialsMigrateCmd)
 	gitCmd.AddCommand(gitBranchCmd)
 	gitCmd.AddCommand(gitPullCmd)
 	gitCmd.AddCommand(gitPushCmd)
@@ -359,8 +315,7 @@ func addGitRepository(name, repoURL, username string, setCurrent bool) {
 	log.Println("\n💡 Tips:")
 	log.Println("  - Use 'hyve git list' to see all repositories")
 	log.Println("  - Use 'hyve git use <name>' to switch repositories")
-	log.Println("  - Use 'hyve git credentials' to manage global Git authentication")
-	log.Println("  - Set HYVE_GIT_TOKEN env var as fallback authentication")
+	log.Println("  - Set HYVE_GIT_TOKEN env var for authentication")
 }
 
 func listGitRepositories() {
@@ -566,116 +521,6 @@ func resetGitConfiguration() {
 
 	log.Println("✅ All Git configurations reset")
 	log.Println("Add a Git repository to continue using Hyve: hyve git add <name> --repo-url <url>")
-}
-
-func updateGitCredentials(username, password string) {
-	credsMgr, err := credentials.NewManager()
-	if err != nil {
-		log.Fatalf("Failed to create credentials manager: %v", err)
-	}
-	defer credsMgr.Close()
-
-	// Get existing credentials if any
-	existing, _ := credsMgr.GetCredentials()
-
-	// Use existing values if not provided
-	if username == "" && existing != nil {
-		username = existing.Username
-	}
-	if password == "" {
-		log.Println("⚠️  Password must be provided via --password flag for security")
-		return
-	}
-	if username == "" {
-		log.Println("⚠️  Username must be provided via --username flag")
-		return
-	}
-
-	// Store the credentials
-	_, err = credsMgr.StoreCredentials(username, password)
-	if err != nil {
-		log.Fatalf("Failed to store credentials: %v", err)
-	}
-
-	log.Println("✅ Global Git credentials stored securely")
-	log.Printf("Username: %s", username)
-	log.Println("Password: ✅ Stored and encrypted")
-}
-
-func showGitCredentials() {
-	credsMgr, err := credentials.NewManager()
-	if err != nil {
-		log.Fatalf("Failed to create credentials manager: %v", err)
-	}
-	defer credsMgr.Close()
-
-	creds, err := credsMgr.GetCredentials()
-	if err != nil {
-		log.Fatalf("Failed to get credentials: %v", err)
-	}
-
-	if creds == nil {
-		log.Println("❌ No Git credentials stored")
-		log.Println("\nTo store credentials:")
-		log.Println("  hyve git credentials --username <user> --password <token>")
-		log.Println("\nOr use environment variable as fallback:")
-		log.Println("  export HYVE_GIT_TOKEN=<your-token>")
-		return
-	}
-
-	log.Println("✅ Global Git credentials:")
-	log.Printf("Username: %s", creds.Username)
-	log.Println("Password: ✅ Stored and encrypted")
-	log.Printf("Updated: %s", creds.UpdatedAt.Format("2006-01-02 15:04:05"))
-
-	// Check environment token as well
-	envToken := os.Getenv("HYVE_GIT_TOKEN")
-	if envToken != "" {
-		log.Println("\n💡 Environment token also available as fallback")
-	}
-}
-
-func clearGitCredentials() {
-	credsMgr, err := credentials.NewManager()
-	if err != nil {
-		log.Fatalf("Failed to create credentials manager: %v", err)
-	}
-	defer credsMgr.Close()
-
-	err = credsMgr.ClearCredentials()
-	if err != nil {
-		log.Fatalf("Failed to clear credentials: %v", err)
-	}
-
-	log.Println("✅ All Git credentials cleared")
-	log.Println("\n💡 You can still use HYVE_GIT_TOKEN environment variable for authentication")
-}
-
-// migrateGitCredentialsEncryption migrates credentials encryption from hostname-based to portable
-func migrateGitCredentialsEncryption(oldHostname string) error {
-	credsMgr, err := credentials.NewManager()
-	if err != nil {
-		return err
-	}
-	defer credsMgr.Close()
-
-	log.Println("🔄 Starting credentials encryption migration")
-	log.Printf("🔑 Old hostname: %s", oldHostname)
-	log.Println()
-
-	// Perform migration
-	if err := credsMgr.MigrateEncryption(oldHostname); err != nil {
-		log.Printf("❌ Migration failed: %v", err)
-		return err
-	}
-
-	log.Println("✅ Migration completed successfully!")
-	log.Println()
-	log.Println("📝 Your credentials have been re-encrypted with the new portable key format.")
-	log.Println("💡 Your credentials will now work across different machines without hostname dependencies.")
-	log.Println()
-
-	return nil
 }
 
 func listGitBranches() {
