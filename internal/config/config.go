@@ -22,8 +22,7 @@ type GitConfig struct {
 
 // HyveConfig represents the main configuration structure
 type HyveConfig struct {
-	Git        GitConfig `yaml:"git"`
-	GitBackend string    `yaml:"git_backend,omitempty"` // "system" or "builtin", defaults to "system"
+	Git GitConfig `yaml:"git"`
 }
 
 // Manager handles configuration loading
@@ -154,42 +153,4 @@ func (m *Manager) GetCivoToken() string {
 	}
 
 	return ""
-}
-
-// GetGitBackend returns the configured git backend
-// Priority: 1) Config file 2) Environment variable 3) Default to "system"
-func (m *Manager) GetGitBackend() string {
-	// Load config if not already loaded
-	if m.config.GitBackend == "" && m.config.Git.RepoURL == "" {
-		m.LoadConfig()
-	}
-
-	// First, check config file
-	if m.config.GitBackend != "" {
-		return m.config.GitBackend
-	}
-
-	// Second, check environment variable
-	if backend := os.Getenv("GIT_BACKEND"); backend != "" {
-		return backend
-	}
-
-	// Default to system
-	return "system"
-}
-
-// SetGitBackend sets the git backend preference
-func (m *Manager) SetGitBackend(backend string) error {
-	// Validate backend value
-	if backend != "system" && backend != "builtin" {
-		return fmt.Errorf("invalid git backend '%s': must be 'system' or 'builtin'", backend)
-	}
-
-	// Load existing config
-	if err := m.LoadConfig(); err != nil {
-		return err
-	}
-
-	m.config.GitBackend = backend
-	return m.SaveConfig()
 }

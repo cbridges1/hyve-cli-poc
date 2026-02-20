@@ -2,8 +2,14 @@ package git
 
 import "context"
 
-// GitBackend defines the interface for Git operations
-// This allows switching between built-in go-git library and system git
+// BranchInfo holds information about a Git branch
+type BranchInfo struct {
+	Name      string
+	IsCurrent bool
+	Hash      string
+}
+
+// GitBackend defines the interface for Git operations using system git
 type GitBackend interface {
 	// Clone clones the repository to the local path
 	Clone(ctx context.Context) error
@@ -57,6 +63,4 @@ type BackendType string
 const (
 	// BackendSystem uses system git command
 	BackendSystem BackendType = "system"
-	// BackendBuiltIn uses built-in go-git library
-	BackendBuiltIn BackendType = "builtin"
 )

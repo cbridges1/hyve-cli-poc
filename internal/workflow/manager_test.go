@@ -5,11 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"hyve/internal/repository"
 )
 
-// setupTestEnvironment creates a test repository and workflow manager
+// setupTestEnvironment creates a test workflow manager
 func setupTestEnvironment(t *testing.T) (*Manager, string, func()) {
 	// Create temp directory for test
 	tmpDir, err := os.MkdirTemp("", "workflow-test-*")
@@ -17,37 +15,14 @@ func setupTestEnvironment(t *testing.T) (*Manager, string, func()) {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
 
-	// Create repository manager and add test repo
-	repoMgr, err := repository.NewManager()
-	if err != nil {
-		os.RemoveAll(tmpDir)
-		t.Fatalf("Failed to create repository manager: %v", err)
-	}
-
-	_, err = repoMgr.AddRepository("test-workflow-repo", "https://github.com/test/test.git", tmpDir, "testuser")
-	if err != nil {
-		repoMgr.Close()
-		os.RemoveAll(tmpDir)
-		t.Fatalf("Failed to add test repository: %v", err)
-	}
-
-	if err := repoMgr.SetCurrentRepository("test-workflow-repo"); err != nil {
-		repoMgr.Close()
-		os.RemoveAll(tmpDir)
-		t.Fatalf("Failed to set current repository: %v", err)
-	}
-
 	// Create workflow manager
-	manager, err := NewManager()
+	manager, err := NewManager(tmpDir)
 	if err != nil {
-		repoMgr.Close()
 		os.RemoveAll(tmpDir)
 		t.Fatalf("Failed to create workflow manager: %v", err)
 	}
 
 	cleanup := func() {
-		repoMgr.DeleteRepository("test-workflow-repo")
-		repoMgr.Close()
 		os.RemoveAll(tmpDir)
 	}
 

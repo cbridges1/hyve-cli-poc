@@ -11,7 +11,6 @@ import (
 	"hyve/internal/config"
 	"hyve/internal/credentials"
 	"hyve/internal/reconcile"
-	"hyve/internal/repository"
 	"hyve/internal/state"
 )
 
@@ -29,7 +28,7 @@ func runReconciliation() {
 	ctx := context.Background()
 
 	// Create state manager from current repository configuration
-	stateMgr := createStateManagerFromRepository(ctx)
+	stateMgr, _ := createStateManagerFromRepository(ctx)
 
 	clusterDefs, err := stateMgr.LoadClusterDefinitions()
 	if err != nil {
@@ -86,29 +85,24 @@ func runReconciliation() {
 }
 
 // createStateManagerFromRepository creates state manager from current repository configuration
-func createStateManagerFromRepository(ctx context.Context) *state.Manager {
-	repoMgr, err := repository.NewManager()
-	if err != nil {
-		log.Fatalf("Failed to create repository manager: %v", err)
+func createStateManagerFromRepository(ctx context.Context) (*state.Manager, string) {
+	repoConfigMgr := config.NewManager()
+	if err := repoConfigMgr.LoadConfig(); err != nil {
+		log.Fatalf("Failed to load config: %v", err)
 	}
-	defer repoMgr.Close()
-
-	currentRepo, err := repoMgr.GetCurrentRepository()
-	if err != nil {
+	if !repoConfigMgr.IsGitConfigured() {
 		log.Fatalf("❌ No Git repository configured. Hyve requires a Git repository for state management.\n\n" +
-			"To get started:\n" +
-			"  1. hyve git add <name> --repo-url <repository-url>\n" +
-			"  2. hyve reconcile\n\n" +
-			"Example:\n" +
-			"  hyve git add production --repo-url https://github.com/company/hyve-state.git")
+			"Configure your repository in ~/.hyve/config.yaml:\n" +
+			"  git:\n" +
+			"    repo_url: https://github.com/company/hyve-state.git\n" +
+			"    local_path: /path/to/local/clone")
 	}
+	gitConfig := repoConfigMgr.GetGitConfig()
+	log.Printf("Using Git repository: %s", gitConfig.RepoURL)
 
-	log.Printf("Using Git repository '%s': %s", currentRepo.Name, currentRepo.RepoURL)
-
-	// Get authentication - prefer global credentials, fallback to environment token
 	credsMgr, err := credentials.NewManager()
 	var authToken string
-	var authUsername = currentRepo.Username
+	var authUsername = gitConfig.Username
 
 	if err == nil {
 		defer credsMgr.Close()
@@ -126,12 +120,11 @@ func createStateManagerFromRepository(ctx context.Context) *state.Manager {
 		authToken = os.Getenv("HYVE_GIT_TOKEN")
 	}
 
-	stateMgr, err := state.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
+	stateMgr, err := state.NewManager(gitConfig.RepoURL, gitConfig.LocalPath, authUsername, authToken)
 	if err != nil {
 		log.Fatalf("Failed to create state manager: %v", err)
 	}
 
-	// Initialize and sync Git repository
 	if err := stateMgr.InitializeGitRepo(ctx); err != nil {
 		log.Fatalf("Failed to initialize Git repository: %v", err)
 	}
@@ -141,5 +134,5 @@ func createStateManagerFromRepository(ctx context.Context) *state.Manager {
 	}
 
 	log.Println("Git repository synchronized")
-	return stateMgr
+	return stateMgr, gitConfig.LocalPath
 }

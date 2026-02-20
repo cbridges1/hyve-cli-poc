@@ -328,8 +328,7 @@ func addGitRepository(name, repoURL, username string, setCurrent bool) {
 	}
 
 	ctx := context.Background()
-	backendType := git.GetBackendType()
-	gitMgr, err := git.NewBackend(repoURL, localPath, authUsername, authToken, backendType)
+	gitMgr, err := git.NewBackend(repoURL, localPath, authUsername, authToken)
 	if err != nil {
 		log.Fatalf("Failed to create git backend: %v", err)
 	}
@@ -503,8 +502,7 @@ func showGitStatus() {
 		authToken = envToken
 	}
 	ctx := context.Background()
-	backendType := git.GetBackendType()
-	gitMgr, err := git.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken, backendType)
+	gitMgr, err := git.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
 	if err != nil {
 		log.Fatalf("Failed to create git backend: %v", err)
 	}
@@ -698,8 +696,7 @@ func listGitBranches() {
 	authToken, authUsername := getGitAuth(currentRepo)
 
 	ctx := context.Background()
-	backendType := git.GetBackendType()
-	gitMgr, err := git.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken, backendType)
+	gitMgr, err := git.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
 	if err != nil {
 		log.Fatalf("Failed to create git backend: %v", err)
 	}
@@ -751,8 +748,7 @@ func createGitBranch(branchName string, switchToBranch, push bool) {
 	authToken, authUsername := getGitAuth(currentRepo)
 
 	ctx := context.Background()
-	backendType := git.GetBackendType()
-	gitMgr, err := git.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken, backendType)
+	gitMgr, err := git.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
 	if err != nil {
 		log.Fatalf("Failed to create git backend: %v", err)
 	}
@@ -814,8 +810,7 @@ func deleteGitBranch(branchName string, force bool) {
 	authToken, authUsername := getGitAuth(currentRepo)
 
 	ctx := context.Background()
-	backendType := git.GetBackendType()
-	gitMgr, err := git.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken, backendType)
+	gitMgr, err := git.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
 	if err != nil {
 		log.Fatalf("Failed to create git backend: %v", err)
 	}
@@ -851,8 +846,7 @@ func switchGitBranch(branchName string, pull bool) {
 	authToken, authUsername := getGitAuth(currentRepo)
 
 	ctx := context.Background()
-	backendType := git.GetBackendType()
-	gitMgr, err := git.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken, backendType)
+	gitMgr, err := git.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
 	if err != nil {
 		log.Fatalf("Failed to create git backend: %v", err)
 	}
@@ -944,8 +938,7 @@ func pullGitChanges() {
 	authToken, authUsername := getGitAuth(currentRepo)
 
 	ctx := context.Background()
-	backendType := git.GetBackendType()
-	gitMgr, err := git.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken, backendType)
+	gitMgr, err := git.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
 	if err != nil {
 		log.Fatalf("Failed to create git backend: %v", err)
 	}
@@ -987,8 +980,7 @@ func pushGitChanges(message string) {
 	authToken, authUsername := getGitAuth(currentRepo)
 
 	ctx := context.Background()
-	backendType := git.GetBackendType()
-	gitMgr, err := git.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken, backendType)
+	gitMgr, err := git.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
 	if err != nil {
 		log.Fatalf("Failed to create git backend: %v", err)
 	}
@@ -1062,8 +1054,7 @@ func syncGitChanges(message string) {
 	authToken, authUsername := getGitAuth(currentRepo)
 
 	ctx := context.Background()
-	backendType := git.GetBackendType()
-	gitMgr, err := git.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken, backendType)
+	gitMgr, err := git.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
 	if err != nil {
 		log.Fatalf("Failed to create git backend: %v", err)
 	}

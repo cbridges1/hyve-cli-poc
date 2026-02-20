@@ -22,8 +22,7 @@ type Manager struct {
 
 // NewManager creates a new state manager with Git repository support
 func NewManager(gitRepoURL, localPath, username, token string) (*Manager, error) {
-	backendType := git.GetBackendType()
-	gitMgr, err := git.NewBackend(gitRepoURL, localPath, username, token, backendType)
+	gitMgr, err := git.NewBackend(gitRepoURL, localPath, username, token)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create git backend: %w", err)
 	}

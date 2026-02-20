@@ -18,7 +18,6 @@ import (
 	"hyve/internal/ingress"
 	"hyve/internal/provider"
 	"hyve/internal/providerconfig"
-	"hyve/internal/repository"
 	"hyve/internal/state"
 	"hyve/internal/types"
 )
@@ -304,29 +303,23 @@ func init() {
 
 // createStateManager creates state manager from current repository
 func createStateManager(ctx gocontext.Context) (*state.Manager, string) {
-	repoMgr, err := repository.NewManager()
-	if err != nil {
-		log.Fatalf("Failed to create repository manager: %v", err)
+	configMgr := config.NewManager()
+	if err := configMgr.LoadConfig(); err != nil {
+		log.Fatalf("Failed to load config: %v", err)
 	}
-	defer repoMgr.Close()
-
-	currentRepo, err := repoMgr.GetCurrentRepository()
-	if err != nil {
+	if !configMgr.IsGitConfigured() {
 		log.Fatalf("❌ No Git repository configured. Hyve requires a Git repository for state management.\n\n" +
-			"To get started:\n" +
-			"  1. hyve git add <name> --repo-url <repository-url>\n" +
-			"  2. hyve cluster add <cluster-name> --region <region>\n\n" +
-			"Example:\n" +
-			"  hyve git add production --repo-url https://github.com/company/hyve-state.git")
+			"Configure your repository in ~/.hyve/config.yaml:\n" +
+			"  git:\n" +
+			"    repo_url: https://github.com/company/hyve-state.git\n" +
+			"    local_path: /path/to/local/clone")
 	}
+	gitConfig := configMgr.GetGitConfig()
+	log.Printf("Using Git repository: %s", gitConfig.RepoURL)
 
-	log.Printf("Using Git repository '%s': %s", currentRepo.Name, currentRepo.RepoURL)
-
-	// Get authentication - prefer global credentials, fallback to environment token
 	credsMgr, err := credentials.NewManager()
 	var authToken string
-	var authUsername = currentRepo.Username
-
+	var authUsername = gitConfig.Username
 	if err == nil {
 		defer credsMgr.Close()
 		if creds, _ := credsMgr.GetCredentials(); creds != nil {
@@ -338,29 +331,22 @@ func createStateManager(ctx gocontext.Context) (*state.Manager, string) {
 			}
 		}
 	}
-
 	if authToken == "" {
 		authToken = os.Getenv("HYVE_GIT_TOKEN")
 	}
 
-	stateMgr, err := state.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
+	stateMgr, err := state.NewManager(gitConfig.RepoURL, gitConfig.LocalPath, authUsername, authToken)
 	if err != nil {
 		log.Fatalf("Failed to create state manager: %v", err)
 	}
-
-	// Initialize and sync Git repository
 	if err := stateMgr.InitializeGitRepo(ctx); err != nil {
 		log.Fatalf("Failed to initialize Git repository: %v", err)
 	}
-
 	if err := stateMgr.SyncWithRemote(ctx); err != nil {
 		log.Fatalf("Failed to sync with remote repository: %v", err)
 	}
-
 	log.Println("Git repository synchronized")
-
-	// Get the state directory path
-	stateDir := filepath.Join(currentRepo.LocalPath, "clusters")
+	stateDir := filepath.Join(gitConfig.LocalPath, "clusters")
 	return stateMgr, stateDir
 }
 
@@ -399,19 +385,10 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 		log.Fatalf("Cluster %s already exists. Use 'modify' action to update it.", clusterName)
 	}
 
-	// Get repository manager for provider config resolution
-	repoMgr, err := repository.NewManager()
-	if err != nil {
-		log.Fatalf("Failed to create repository manager: %v", err)
-	}
-	defer repoMgr.Close()
-
-	currentRepo, err := repoMgr.GetCurrentRepository()
-	if err != nil {
-		log.Fatalf("No Git repository configured: %v", err)
-	}
-
-	pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
+	addConfigMgr := config.NewManager()
+	addConfigMgr.LoadConfig()
+	pcMgr := providerconfig.NewManager(addConfigMgr.GetGitConfig().LocalPath)
+	var err error
 
 	// Resolve GCP project alias to project ID
 	var gcpProjectID string
@@ -758,24 +735,16 @@ func createProviderForClusterDef(clusterDef types.ClusterDefinition) (provider.P
 			log.Printf("Using GCP project ID '%s'", clusterDef.Spec.GCPProjectID)
 		} else if clusterDef.Spec.GCPProject != "" {
 			// Fall back to resolving alias (for backward compatibility)
-			repoMgr, err := repository.NewManager()
-			if err != nil {
-				return nil, fmt.Errorf("failed to create repository manager: %w", err)
+			gcpConfigMgr := config.NewManager()
+			if err := gcpConfigMgr.LoadConfig(); err == nil {
+				pcMgr := providerconfig.NewManager(gcpConfigMgr.GetGitConfig().LocalPath)
+				projectID, err := pcMgr.GetGCPProjectID(clusterDef.Spec.GCPProject)
+				if err != nil {
+					return nil, fmt.Errorf("failed to resolve GCP project '%s': %w", clusterDef.Spec.GCPProject, err)
+				}
+				opts.ProjectID = projectID
+				log.Printf("Using GCP project '%s' (ID: %s)", clusterDef.Spec.GCPProject, projectID)
 			}
-			defer repoMgr.Close()
-
-			currentRepo, err := repoMgr.GetCurrentRepository()
-			if err != nil {
-				return nil, fmt.Errorf("failed to get current repository: %w", err)
-			}
-
-			pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
-			projectID, err := pcMgr.GetGCPProjectID(clusterDef.Spec.GCPProject)
-			if err != nil {
-				return nil, fmt.Errorf("failed to resolve GCP project '%s': %w", clusterDef.Spec.GCPProject, err)
-			}
-			opts.ProjectID = projectID
-			log.Printf("Using GCP project '%s' (ID: %s)", clusterDef.Spec.GCPProject, projectID)
 		}
 	}
 
@@ -819,18 +788,11 @@ func forceDeleteClusterFromCloud(clusterName, region, providerName, projectName 
 
 	// Handle GCP-specific configuration
 	if providerName == "gcp" && projectName != "" {
-		repoMgr, err := repository.NewManager()
-		if err != nil {
-			log.Fatalf("Failed to create repository manager: %v", err)
+		fdConfigMgr := config.NewManager()
+		if err := fdConfigMgr.LoadConfig(); err != nil {
+			log.Fatalf("Failed to load config: %v", err)
 		}
-		defer repoMgr.Close()
-
-		currentRepo, err := repoMgr.GetCurrentRepository()
-		if err != nil {
-			log.Fatalf("Failed to get current repository: %v", err)
-		}
-
-		pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
+		pcMgr := providerconfig.NewManager(fdConfigMgr.GetGitConfig().LocalPath)
 		projectID, err := pcMgr.GetGCPProjectID(projectName)
 		if err != nil {
 			log.Fatalf("GCP project alias '%s' not found in repository configuration.\n"+
@@ -895,24 +857,22 @@ func forceDeleteClusterFromCloud(clusterName, region, providerName, projectName 
 }
 
 func listClusters() {
-	// Get current repository
-	repoMgr, err := repository.NewManager()
-	if err != nil {
-		log.Fatalf("Failed to create repository manager: %v", err)
+	// Get local path from config
+	listConfigMgr := config.NewManager()
+	if err := listConfigMgr.LoadConfig(); err != nil {
+		log.Fatalf("Failed to load config: %v", err)
 	}
-	defer repoMgr.Close()
-
-	currentRepo, err := repoMgr.GetCurrentRepository()
-	if err != nil {
-		log.Fatalf("No Git repository configured. Use 'hyve git add' to configure a repository")
+	gitConfig := listConfigMgr.GetGitConfig()
+	if gitConfig.LocalPath == "" {
+		log.Fatalf("No Git repository configured. Please configure a repository in ~/.hyve/config.yaml")
 	}
 
 	// Read cluster definitions from the repository's clusters directory
-	clustersDir := filepath.Join(currentRepo.LocalPath, "clusters")
+	clustersDir := filepath.Join(gitConfig.LocalPath, "clusters")
 
 	// Check if clusters directory exists
 	if _, err := os.Stat(clustersDir); os.IsNotExist(err) {
-		log.Printf("❌ No clusters found for repository '%s'", currentRepo.Name)
+		log.Println("❌ No clusters found")
 		log.Println("\n💡 Run 'hyve cluster add <name>' to create a cluster")
 		return
 	}
@@ -955,12 +915,12 @@ func listClusters() {
 	}
 
 	if len(clusters) == 0 {
-		log.Printf("❌ No clusters found for repository '%s'", currentRepo.Name)
+		log.Println("❌ No clusters found")
 		log.Println("\n💡 Run 'hyve cluster add <name>' to create a cluster")
 		return
 	}
 
-	log.Printf("📦 Clusters in repository '%s' (%d):\n", currentRepo.Name, len(clusters))
+	log.Printf("📦 Clusters (%d):\n", len(clusters))
 
 	for _, cluster := range clusters {
 		log.Printf("  %s", cluster.Metadata.Name)

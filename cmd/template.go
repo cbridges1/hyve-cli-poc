@@ -524,7 +524,7 @@ func executeTemplate(templateName, clusterName string) {
 		log.Printf("\n4️⃣ Executing %d onCreated workflow(s)...\n", len(tmpl.Spec.Workflows.OnCreated))
 
 		// Create workflow manager
-		workflowMgr, err := workflow.NewManager()
+		workflowMgr, err := workflow.NewManager(getWorkflowLocalPath())
 		if err != nil {
 			log.Printf("⚠️  Failed to create workflow manager: %v", err)
 			return
@@ -685,7 +685,7 @@ func validateTemplate(name string) {
 	// Validate workflows exist
 	allWorkflows := append(tmpl.Spec.Workflows.OnCreated, tmpl.Spec.Workflows.OnDestroy...)
 	if len(allWorkflows) > 0 {
-		workflowMgr, err := workflow.NewManager()
+		workflowMgr, err := workflow.NewManager(getWorkflowLocalPath())
 		if err == nil {
 			availableWorkflows, err := workflowMgr.ListWorkflows()
 			if err == nil {
