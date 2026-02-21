@@ -77,6 +77,12 @@ func (m *Manager) CommitAndPush(ctx context.Context, message string) error {
 	return nil
 }
 
+// GetStateRoot returns the root directory of the state repository (the parent of the
+// clusters/ directory). Provider config files live here under provider-configs/.
+func (m *Manager) GetStateRoot() string {
+	return filepath.Dir(m.stateDir)
+}
+
 // LoadRepoConfig reads hyve.yaml from the repository root.
 // If the file does not exist, a default config with local mode is returned.
 func (m *Manager) LoadRepoConfig() (*RepoConfig, error) {

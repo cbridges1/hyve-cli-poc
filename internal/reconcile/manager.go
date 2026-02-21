@@ -52,15 +52,23 @@ func (r *Reconciler) ReconcileAll(ctx context.Context, clusterDefs []types.Clust
 
 	if len(clusterDefs) == 0 {
 		log.Println("No cluster definitions found in state/clusters directory")
-		r.cleanupAllRegions(ctx, clusterDefs, strictDelete)
-		return nil
+		r.cleanupAllRegions(ctx, clusterDefs)
+	} else {
+		for region, clusters := range regionClusters {
+			err := r.reconcileRegion(ctx, region, clusters)
+			if err != nil {
+				log.Printf("Failed to reconcile region %s: %v", region, err)
+			}
+		}
 	}
 
-	for region, clusters := range regionClusters {
-		err := r.reconcileRegion(ctx, region, clusters, strictDelete)
-		if err != nil {
-			log.Printf("Failed to reconcile region %s: %v", region, err)
-		}
+	if strictDelete {
+		log.Println("strict-delete: sweeping all configured provider accounts for orphaned clusters...")
+		r.strictDeleteSweep(ctx)
+	}
+
+	if len(clusterDefs) == 0 {
+		return nil
 	}
 
 	log.Println("Exporting cluster information...")
@@ -76,7 +84,7 @@ func (r *Reconciler) ReconcileAll(ctx context.Context, clusterDefs []types.Clust
 }
 
 // reconcileRegion reconciles clusters in a specific region
-func (r *Reconciler) reconcileRegion(ctx context.Context, region string, clusters []types.ClusterDefinition, strictDelete bool) error {
+func (r *Reconciler) reconcileRegion(ctx context.Context, region string, clusters []types.ClusterDefinition) error {
 	log.Printf("Processing region: %s", region)
 
 	// Reconcile all desired clusters
@@ -91,7 +99,7 @@ func (r *Reconciler) reconcileRegion(ctx context.Context, region string, cluster
 		clusterMgr := cluster.NewManager(prov)
 		ingressMgr := ingress.NewManager(prov)
 
-		err = r.reconcileCluster(ctx, clusterMgr, ingressMgr, clusterDef, strictDelete)
+		err = r.reconcileCluster(ctx, clusterMgr, ingressMgr, clusterDef)
 		if err != nil {
 			log.Printf("Failed to reconcile cluster %s: %v", clusterDef.Metadata.Name, err)
 		}
@@ -106,7 +114,7 @@ func (r *Reconciler) reconcileRegion(ctx context.Context, region string, cluster
 			return nil
 		}
 		clusterMgr := cluster.NewManager(prov)
-		err = r.cleanupOrphanedResources(ctx, clusterMgr, clusters, strictDelete)
+		err = r.cleanupOrphanedResources(ctx, clusterMgr, clusters)
 		if err != nil {
 			log.Printf("Failed to cleanup orphaned resources in region %s: %v", region, err)
 		}
@@ -214,8 +222,8 @@ func (r *Reconciler) resolveAzureSubscriptionID(subscriptionAlias string) (strin
 }
 
 // reconcileCluster handles the reconciliation of a single cluster
-func (r *Reconciler) reconcileCluster(ctx context.Context, clusterMgr *cluster.Manager, ingressMgr *ingress.Manager, clusterDef types.ClusterDefinition, strictDelete bool) error {
-	action := clusterMgr.DetermineAction(ctx, clusterDef, strictDelete)
+func (r *Reconciler) reconcileCluster(ctx context.Context, clusterMgr *cluster.Manager, ingressMgr *ingress.Manager, clusterDef types.ClusterDefinition) error {
+	action := clusterMgr.DetermineAction(ctx, clusterDef)
 
 	switch action {
 	case types.ActionCreate:
@@ -322,9 +330,9 @@ func (r *Reconciler) deleteCluster(ctx context.Context, clusterMgr *cluster.Mana
 	return nil
 }
 
-// cleanupOrphanedResources removes clusters that are no longer defined
-func (r *Reconciler) cleanupOrphanedResources(ctx context.Context, clusterMgr *cluster.Manager, clusters []types.ClusterDefinition, strictDelete bool) error {
-	orphanedClusters, err := clusterMgr.FindOrphaned(ctx, clusters, strictDelete)
+// cleanupOrphanedResources removes managed-prefix clusters that are no longer defined
+func (r *Reconciler) cleanupOrphanedResources(ctx context.Context, clusterMgr *cluster.Manager, clusters []types.ClusterDefinition) error {
+	orphanedClusters, err := clusterMgr.FindOrphaned(ctx, clusters)
 	if err != nil {
 		return err
 	}
@@ -332,8 +340,179 @@ func (r *Reconciler) cleanupOrphanedResources(ctx context.Context, clusterMgr *c
 	return clusterMgr.CleanupOrphaned(ctx, orphanedClusters)
 }
 
-// cleanupAllRegions handles cleanup when no clusters are defined
-func (r *Reconciler) cleanupAllRegions(ctx context.Context, clusterDefs []types.ClusterDefinition, strictDelete bool) {
+// strictDeleteSweep deletes every cloud cluster that has no matching YAML definition.
+// It reads all configured accounts/projects/subscriptions/organizations from the
+// provider config files and queries each one independently for active clusters,
+// comparing the results against the current repository state.
+func (r *Reconciler) strictDeleteSweep(ctx context.Context) {
+	// Load the current desired state fresh from the repository.
+	desiredClusters, err := r.stateMgr.LoadClusterDefinitions()
+	if err != nil {
+		log.Printf("strict-delete: failed to load cluster definitions: %v", err)
+		return
+	}
+
+	pcMgr := providerconfig.NewManager(r.stateMgr.GetStateRoot())
+
+	// --- Civo organizations ---
+	civoOrgs, err := pcMgr.ListCivoOrganizations()
+	if err != nil {
+		log.Printf("strict-delete: failed to list Civo organizations: %v", err)
+	}
+	// When no named organizations are configured, fall back to global credentials
+	// (r.apiKey / CIVO_TOKEN) so clusters in unregistered accounts are still found.
+	if len(civoOrgs) == 0 {
+		civoOrgs = []providerconfig.CivoOrganization{{Name: "", Regions: nil}}
+	}
+	for _, org := range civoOrgs {
+		regions := org.Regions
+		if len(regions) == 0 {
+			regions = []string{"PHX1", "NYC1", "FRA1", "LON1"}
+		}
+		for _, region := range dedupRegions(regions) {
+			prov, err := r.providerFactory.CreateProviderWithOptions("civo", provider.ProviderOptions{
+				APIKey:      r.apiKey,
+				Region:      region,
+				AccountName: org.Name,
+			})
+			if err != nil {
+				log.Printf("strict-delete: Civo org=%q region=%s: failed to create provider: %v", org.Name, region, err)
+				continue
+			}
+			log.Printf("strict-delete: sweeping Civo org=%q region=%s", org.Name, region)
+			if err := cluster.NewManager(prov).StrictDeleteOrphans(ctx, desiredClusters); err != nil {
+				log.Printf("strict-delete: Civo org=%q region=%s: %v", org.Name, region, err)
+			}
+		}
+	}
+
+	// --- AWS accounts ---
+	awsAccounts, err := pcMgr.ListAWSAccounts()
+	if err != nil {
+		log.Printf("strict-delete: failed to list AWS accounts: %v", err)
+	}
+	// When no named accounts are configured, fall back to the default credential
+	// chain (AWS_ACCESS_KEY_ID / AWS_PROFILE / instance role) so clusters in
+	// unregistered accounts are still found.
+	if len(awsAccounts) == 0 {
+		awsAccounts = []providerconfig.AWSAccount{{Name: "", Regions: nil}}
+	}
+	for _, account := range awsAccounts {
+		regions := account.Regions
+		if len(regions) == 0 {
+			regions = []string{"us-east-1", "us-west-2", "eu-west-1", "eu-central-1", "ap-southeast-1"}
+		}
+		for _, region := range dedupRegions(regions) {
+			prov, err := r.providerFactory.CreateProviderWithOptions("aws", provider.ProviderOptions{
+				Region:      region,
+				AccountName: account.Name,
+			})
+			if err != nil {
+				log.Printf("strict-delete: AWS account=%q region=%s: failed to create provider: %v", account.Name, region, err)
+				continue
+			}
+			log.Printf("strict-delete: sweeping AWS account=%q region=%s", account.Name, region)
+			if err := cluster.NewManager(prov).StrictDeleteOrphans(ctx, desiredClusters); err != nil {
+				log.Printf("strict-delete: AWS account=%q region=%s: %v", account.Name, region, err)
+			}
+		}
+	}
+
+	// --- GCP projects ---
+	// GCPProject has no region list; derive regions from cluster definitions for that
+	// project, supplemented by common GCP regions.
+	gcpProjects, err := pcMgr.ListGCPProjects()
+	if err != nil {
+		log.Printf("strict-delete: failed to list GCP projects: %v", err)
+	}
+	for _, project := range gcpProjects {
+		for _, region := range gcpRegionsForProject(project.Name, desiredClusters) {
+			prov, err := r.providerFactory.CreateProviderWithOptions("gcp", provider.ProviderOptions{
+				Region:      region,
+				ProjectID:   project.ProjectID,
+				AccountName: project.Name,
+			})
+			if err != nil {
+				log.Printf("strict-delete: GCP project=%q region=%s: failed to create provider: %v", project.Name, region, err)
+				continue
+			}
+			log.Printf("strict-delete: sweeping GCP project=%q region=%s", project.Name, region)
+			if err := cluster.NewManager(prov).StrictDeleteOrphans(ctx, desiredClusters); err != nil {
+				log.Printf("strict-delete: GCP project=%q region=%s: %v", project.Name, region, err)
+			}
+		}
+	}
+
+	// --- Azure subscriptions ---
+	// Each resource group is a separate provider scope; its Location is used as the region.
+	azureSubs, err := pcMgr.ListAzureSubscriptions()
+	if err != nil {
+		log.Printf("strict-delete: failed to list Azure subscriptions: %v", err)
+	}
+	for _, sub := range azureSubs {
+		if len(sub.ResourceGroups) == 0 {
+			log.Printf("strict-delete: Azure subscription=%q has no resource groups configured, skipping", sub.Name)
+			continue
+		}
+		for _, rg := range sub.ResourceGroups {
+			location := rg.Location
+			if location == "" {
+				location = "eastus"
+			}
+			prov, err := r.providerFactory.CreateProviderWithOptions("azure", provider.ProviderOptions{
+				Region:              location,
+				AzureSubscriptionID: sub.SubscriptionID,
+				AzureResourceGroup:  rg.Name,
+				AccountName:         sub.Name,
+			})
+			if err != nil {
+				log.Printf("strict-delete: Azure sub=%q rg=%q: failed to create provider: %v", sub.Name, rg.Name, err)
+				continue
+			}
+			log.Printf("strict-delete: sweeping Azure subscription=%q resource-group=%q", sub.Name, rg.Name)
+			if err := cluster.NewManager(prov).StrictDeleteOrphans(ctx, desiredClusters); err != nil {
+				log.Printf("strict-delete: Azure sub=%q rg=%q: %v", sub.Name, rg.Name, err)
+			}
+		}
+	}
+}
+
+// gcpRegionsForProject returns the regions used by the given GCP project in the desired
+// cluster definitions, supplemented by common GCP regions not already covered.
+func gcpRegionsForProject(projectName string, desired []types.ClusterDefinition) []string {
+	seen := make(map[string]bool)
+	var regions []string
+	for _, c := range desired {
+		if strings.ToLower(c.Spec.Provider) == "gcp" && c.Spec.GCPProject == projectName && c.Metadata.Region != "" {
+			if !seen[c.Metadata.Region] {
+				seen[c.Metadata.Region] = true
+				regions = append(regions, c.Metadata.Region)
+			}
+		}
+	}
+	for _, r := range []string{"us-central1", "us-east1", "us-west1", "europe-west1", "asia-east1"} {
+		if !seen[r] {
+			regions = append(regions, r)
+		}
+	}
+	return regions
+}
+
+// dedupRegions returns the input slice with duplicates removed, preserving order.
+func dedupRegions(regions []string) []string {
+	seen := make(map[string]bool)
+	out := make([]string, 0, len(regions))
+	for _, r := range regions {
+		if !seen[r] {
+			seen[r] = true
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// cleanupAllRegions handles managed-prefix cleanup when no clusters are defined
+func (r *Reconciler) cleanupAllRegions(ctx context.Context, clusterDefs []types.ClusterDefinition) {
 	// Create a default cluster definition for Civo cleanup
 	// TODO: This should be improved to handle multi-provider cleanup
 	defaultCluster := types.ClusterDefinition{
@@ -349,7 +528,7 @@ func (r *Reconciler) cleanupAllRegions(ctx context.Context, clusterDefs []types.
 
 	clusterMgr := cluster.NewManager(prov)
 
-	err = r.cleanupOrphanedResources(ctx, clusterMgr, clusterDefs, strictDelete)
+	err = r.cleanupOrphanedResources(ctx, clusterMgr, clusterDefs)
 	if err != nil {
 		log.Printf("Failed to cleanup orphaned resources: %v", err)
 	}

@@ -466,7 +466,7 @@ func executeTemplate(templateName, clusterName string) {
 
 	// Create cluster
 	log.Println("\n1️⃣ Creating cluster...")
-	action := clusterMgr.DetermineAction(ctx, *clusterDef, false)
+	action := clusterMgr.DetermineAction(ctx, *clusterDef)
 
 	var clusterID string
 	if action == types.ActionCreate {

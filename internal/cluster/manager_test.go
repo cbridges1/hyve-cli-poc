@@ -187,7 +187,7 @@ func TestDetermineAction_Create(t *testing.T) {
 		},
 	}
 
-	action := mgr.DetermineAction(context.Background(), desired, false)
+	action := mgr.DetermineAction(context.Background(), desired)
 	if action != types.ActionCreate {
 		t.Errorf("Expected ActionCreate, got %v", action)
 	}
@@ -211,7 +211,7 @@ func TestDetermineAction_None(t *testing.T) {
 		},
 	}
 
-	action := mgr.DetermineAction(context.Background(), desired, false)
+	action := mgr.DetermineAction(context.Background(), desired)
 	if action != types.ActionNone {
 		t.Errorf("Expected ActionNone, got %v", action)
 	}
@@ -235,7 +235,7 @@ func TestDetermineAction_CreateForFailedCluster(t *testing.T) {
 		},
 	}
 
-	action := mgr.DetermineAction(context.Background(), desired, false)
+	action := mgr.DetermineAction(context.Background(), desired)
 	if action != types.ActionCreate {
 		t.Errorf("Expected ActionCreate for failed cluster, got %v", action)
 	}
@@ -426,7 +426,7 @@ func TestFindOrphaned(t *testing.T) {
 		},
 	}
 
-	orphaned, err := mgr.FindOrphaned(context.Background(), desiredClusters, false)
+	orphaned, err := mgr.FindOrphaned(context.Background(), desiredClusters)
 	if err != nil {
 		t.Fatalf("Failed to find orphaned clusters: %v", err)
 	}
@@ -580,48 +580,9 @@ func TestErrorHandling(t *testing.T) {
 	}
 }
 
-// TestDetermineAction_StrictDelete_OrphanExists tests that DetermineAction returns ActionDelete
-// for an orphaned cluster when strictDelete is true (sentinel: desired.Kind == "").
-func TestDetermineAction_StrictDelete_OrphanExists(t *testing.T) {
-	mockProv := newMockProvider()
-	mockProv.clusters["unmanaged-cluster"] = &provider.Cluster{
-		ID:     "cluster-1",
-		Name:   "unmanaged-cluster",
-		Status: "ACTIVE",
-	}
-
-	mgr := NewManager(mockProv)
-
-	// Sentinel: Kind is empty — no YAML definition exists for this cluster.
-	desired := types.ClusterDefinition{
-		Metadata: types.ClusterMetadata{Name: "unmanaged-cluster"},
-	}
-
-	action := mgr.DetermineAction(context.Background(), desired, true)
-	if action != types.ActionDelete {
-		t.Errorf("Expected ActionDelete for orphaned cluster with strict-delete, got %v", action)
-	}
-}
-
-// TestDetermineAction_StrictDelete_OrphanMissing tests that DetermineAction returns ActionNone
-// when no cloud cluster is found during a strict-delete orphan check.
-func TestDetermineAction_StrictDelete_OrphanMissing(t *testing.T) {
-	mockProv := newMockProvider()
-	mgr := NewManager(mockProv)
-
-	desired := types.ClusterDefinition{
-		Metadata: types.ClusterMetadata{Name: "ghost-cluster"},
-	}
-
-	action := mgr.DetermineAction(context.Background(), desired, true)
-	if action != types.ActionNone {
-		t.Errorf("Expected ActionNone when orphan cluster not found, got %v", action)
-	}
-}
-
-// TestFindOrphaned_StrictDelete tests that strict delete finds ALL non-desired clusters,
-// not just those matching managed prefixes.
-func TestFindOrphaned_StrictDelete(t *testing.T) {
+// TestStrictDeleteOrphans tests that StrictDeleteOrphans deletes all cloud clusters
+// not present in the desired list, regardless of name prefix.
+func TestStrictDeleteOrphans(t *testing.T) {
 	mockProv := newMockProvider()
 	mockProv.clusters["hyve-managed"] = &provider.Cluster{ID: "c1", Name: "hyve-managed", Status: "ACTIVE"}
 	mockProv.clusters["hyve-orphaned"] = &provider.Cluster{ID: "c2", Name: "hyve-orphaned", Status: "ACTIVE"}
@@ -633,13 +594,19 @@ func TestFindOrphaned_StrictDelete(t *testing.T) {
 		{Metadata: types.ClusterMetadata{Name: "hyve-managed"}},
 	}
 
-	// With strictDelete=true, both hyve-orphaned AND unmanaged-cluster should be found.
-	orphaned, err := mgr.FindOrphaned(context.Background(), desiredClusters, true)
+	err := mgr.StrictDeleteOrphans(context.Background(), desiredClusters)
 	if err != nil {
-		t.Fatalf("Failed to find orphaned clusters: %v", err)
+		t.Fatalf("StrictDeleteOrphans returned error: %v", err)
 	}
 
-	if len(orphaned) != 2 {
-		t.Errorf("Expected 2 orphaned clusters with strict-delete, got %d", len(orphaned))
+	// hyve-managed should survive; hyve-orphaned and unmanaged-cluster should be gone.
+	if _, ok := mockProv.clusters["hyve-managed"]; !ok {
+		t.Error("Expected hyve-managed to still exist")
+	}
+	if _, ok := mockProv.clusters["hyve-orphaned"]; ok {
+		t.Error("Expected hyve-orphaned to be deleted")
+	}
+	if _, ok := mockProv.clusters["unmanaged-cluster"]; ok {
+		t.Error("Expected unmanaged-cluster to be deleted")
 	}
 }

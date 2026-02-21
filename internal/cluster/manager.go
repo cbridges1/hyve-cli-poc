@@ -23,23 +23,7 @@ func NewManager(p provider.Provider) *Manager {
 }
 
 // DetermineAction decides what action to take based on desired vs actual state.
-// When strictDelete is true and desired.Kind is empty, the call is an orphan check:
-// if the cluster exists in the cloud it should be deleted, otherwise no action is taken.
-func (m *Manager) DetermineAction(ctx context.Context, desired types.ClusterDefinition, strictDelete bool) types.ReconcileAction {
-	// Orphan-check sentinel: desired.Kind == "" means no YAML definition exists.
-	if desired.Kind == "" && strictDelete {
-		cluster, err := m.provider.FindClusterByName(ctx, desired.Metadata.Name)
-		if err != nil {
-			log.Printf("Error checking for orphaned cluster %s: %v", desired.Metadata.Name, err)
-			return types.ActionNone
-		}
-		if cluster != nil {
-			log.Printf("Orphaned cluster %s found (strict-delete enabled), will delete", desired.Metadata.Name)
-			return types.ActionDelete
-		}
-		return types.ActionNone
-	}
-
+func (m *Manager) DetermineAction(ctx context.Context, desired types.ClusterDefinition) types.ReconcileAction {
 	cluster, err := m.provider.FindClusterByName(ctx, desired.Metadata.Name)
 	if err != nil {
 		log.Printf("Error checking for existing cluster %s: %v", desired.Metadata.Name, err)
@@ -128,10 +112,8 @@ func (m *Manager) WaitForReady(ctx context.Context, clusterID string) error {
 }
 
 // FindOrphaned finds clusters that exist in the cloud but are not in the desired state.
-// When strictDelete is true, all cloud clusters not present in the desired list are
-// considered orphaned regardless of their name prefix. When false, only clusters whose
-// names match the managed prefixes (hyve-, civo-deploy-) are considered.
-func (m *Manager) FindOrphaned(ctx context.Context, desiredClusters []types.ClusterDefinition, strictDelete bool) ([]*provider.Cluster, error) {
+// Only clusters whose names match the managed prefixes (hyve-, civo-deploy-) are considered.
+func (m *Manager) FindOrphaned(ctx context.Context, desiredClusters []types.ClusterDefinition) ([]*provider.Cluster, error) {
 	allClusters, err := m.provider.ListClusters(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list clusters: %w", err)
@@ -144,12 +126,41 @@ func (m *Manager) FindOrphaned(ctx context.Context, desiredClusters []types.Clus
 
 	var orphaned []*provider.Cluster
 	for _, cluster := range allClusters {
-		if (strictDelete || m.ShouldManage(*cluster)) && !desiredNames[cluster.Name] {
+		if m.ShouldManage(*cluster) && !desiredNames[cluster.Name] {
 			orphaned = append(orphaned, cluster)
 		}
 	}
 
 	return orphaned, nil
+}
+
+// StrictDeleteOrphans lists every cluster from the provider and deletes any whose name
+// is not present in desiredClusters. Unlike FindOrphaned, no name-prefix filter is applied:
+// every cloud cluster not represented in the repository state is removed.
+func (m *Manager) StrictDeleteOrphans(ctx context.Context, desiredClusters []types.ClusterDefinition) error {
+	allClusters, err := m.provider.ListClusters(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list clusters: %w", err)
+	}
+
+	desiredNames := make(map[string]bool)
+	for _, d := range desiredClusters {
+		desiredNames[d.Metadata.Name] = true
+	}
+
+	for _, c := range allClusters {
+		if desiredNames[c.Name] {
+			continue
+		}
+		log.Printf("strict-delete: deleting orphaned cluster %s (ID: %s)", c.Name, c.ID)
+		if err := m.provider.DeleteCluster(ctx, c.ID); err != nil {
+			log.Printf("strict-delete: failed to delete cluster %s: %v", c.Name, err)
+		} else {
+			log.Printf("strict-delete: deleted cluster %s", c.Name)
+		}
+	}
+
+	return nil
 }
 
 // ShouldManage determines if we should manage this cluster
