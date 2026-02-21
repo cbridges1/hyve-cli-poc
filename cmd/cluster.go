@@ -205,20 +205,29 @@ Supported cloud providers (if changing provider):
 var deleteCmd = &cobra.Command{
 	Use:   "delete [cluster-name]",
 	Short: "Delete a cluster",
-	Long: `Delete a cluster both from the cloud provider and from configuration.
-This command will:
-1. Explicitly search for and delete the cluster from the cloud provider
-2. Remove the cluster configuration YAML file (if it exists)
-3. Run reconciliation to clean up any remaining resources
+	Long: `Delete a cluster by removing its YAML definition and reconciling.
 
-Use --config-only to only remove the configuration file without touching the cloud resources.
-Use --force-cloud to delete from cloud even if no configuration file exists.`,
+Default behaviour:
+  1. Remove the cluster configuration YAML file
+  2. Commit and push the removal to the state repository
+  3. Run reconciliation
+
+  In CI/CD mode with strictDelete enabled the push triggers the pipeline,
+  which then deletes the cloud cluster. In local mode with strictDelete enabled
+  the local reconcile deletes the cloud cluster immediately.
+
+Use --force to delete the cluster from the cloud provider immediately before
+removing the configuration file. This is useful when you want to bypass CI/CD
+and destroy the cluster right now.
+
+Use --force-cloud together with --force to delete from cloud even if no
+configuration file exists.`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		clusterName := args[0]
-		configOnly, _ := cmd.Flags().GetBool("config-only")
 		forceCloud, _ := cmd.Flags().GetBool("force-cloud")
-		deleteClusterFromCLI(clusterName, configOnly, forceCloud)
+		force, _ := cmd.Flags().GetBool("force")
+		deleteClusterFromCLI(clusterName, forceCloud, force)
 	},
 }
 
@@ -288,8 +297,8 @@ func init() {
 	modifyCmd.Flags().StringSliceP("nodes", "n", nil, "Node sizes")
 	modifyCmd.Flags().StringP("cluster-type", "t", "", "Type of Kubernetes cluster")
 
-	deleteCmd.Flags().Bool("config-only", false, "Only remove configuration file, skip cloud provider deletion")
-	deleteCmd.Flags().Bool("force-cloud", false, "Delete from cloud even if no configuration file exists")
+	deleteCmd.Flags().Bool("force-cloud", false, "With --force: delete from cloud even if no configuration file exists")
+	deleteCmd.Flags().Bool("force", false, "Delete cluster from cloud immediately before removing configuration (bypasses CI/CD)")
 
 	forceDeleteCmd.Flags().StringP("region", "r", "", "Specific region to search (optional, will search common regions if not provided)")
 	forceDeleteCmd.Flags().StringP("provider", "p", "civo", "Cloud provider (civo, aws, gcp, azure)")
@@ -589,7 +598,7 @@ func modifyClusterFromCLI(cmd *cobra.Command, clusterName string) {
 	}
 }
 
-func deleteClusterFromCLI(clusterName string, configOnly bool, forceCloud bool) {
+func deleteClusterFromCLI(clusterName string, forceCloud bool, force bool) {
 	ctx := gocontext.Background()
 	stateMgr, stateDir := createStateManager(ctx)
 	filePath := filepath.Join(stateDir, clusterName+".yaml")
@@ -598,36 +607,37 @@ func deleteClusterFromCLI(clusterName string, configOnly bool, forceCloud bool) 
 	configExists := false
 
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		if !forceCloud {
-			log.Fatalf("Cluster %s configuration does not exist. Use --force-cloud to delete from cloud provider anyway.", clusterName)
+		if force && forceCloud {
+			// --force --force-cloud: allow cloud deletion even without a config file
+			log.Printf("⚠️ Configuration file not found, but --force --force-cloud specified")
+			clusterDef.Metadata.Region = "PHX1" // Default region
+		} else {
+			log.Fatalf("Cluster %s configuration does not exist. Use --force --force-cloud to delete from cloud provider anyway.", clusterName)
 		}
-		log.Printf("⚠️ Configuration file not found, but --force-cloud specified")
-		// Use default region for force cloud deletion
-		clusterDef.Metadata.Region = "PHX1" // Default region
 	} else {
 		configExists = true
-		// Read the cluster definition to get the region for proper provider initialization
 		data, err := os.ReadFile(filePath)
 		if err != nil {
 			log.Fatalf("Failed to read cluster definition: %v", err)
 		}
-
 		if err := yaml.Unmarshal(data, &clusterDef); err != nil {
 			log.Fatalf("Failed to parse cluster definition: %v", err)
 		}
 	}
 
-	// Explicitly delete the cluster by name before removing the YAML file (unless config-only mode)
-	if !configOnly {
-		log.Printf("🗑️ Deleting cluster '%s' from cloud provider...", clusterName)
-		err := deleteClusterExplicitly(ctx, clusterDef)
-		if err != nil {
+	if force {
+		// Force path: delete the cluster from the cloud immediately, then clean up YAML.
+		log.Printf("🗑️ Force-deleting cluster '%s' from cloud provider...", clusterName)
+		if err := deleteClusterExplicitly(ctx, clusterDef); err != nil {
 			log.Fatalf("❌ Failed to delete cluster %s from cloud provider: %v\n\n"+
 				"Configuration file was NOT removed to prevent orphaned cluster state.\n"+
-				"Please resolve the issue and try again, or use --config-only to remove only the configuration.", clusterName, err)
+				"Please resolve the issue and try again.", clusterName, err)
 		}
 	} else {
-		log.Printf("📝 Skipping cloud provider deletion (config-only mode)")
+		// Default path: remove the YAML and let reconciliation handle cloud deletion.
+		// In CI/CD mode the push triggers the pipeline; with strictDelete enabled the
+		// pipeline (or local reconcile) will delete the orphaned cloud cluster.
+		log.Printf("📝 Removing cluster YAML and reconciling — cloud deletion will be handled by reconciliation")
 	}
 
 	// Remove configuration file if it exists
@@ -635,17 +645,13 @@ func deleteClusterFromCLI(clusterName string, configOnly bool, forceCloud bool) 
 		if err := os.Remove(filePath); err != nil {
 			log.Fatalf("Failed to delete cluster definition file: %v", err)
 		}
-
-		// Commit changes to Git if configured
 		commitStateChanges(ctx, stateMgr, fmt.Sprintf("Delete cluster %s", clusterName))
-
 		log.Printf("Deleted cluster definition file: %s", filePath)
 		log.Printf("Cluster %s has been removed from configuration", clusterName)
 	} else {
 		log.Printf("📝 No configuration file to remove")
 	}
 
-	// Run reconciliation to clean up any remaining resources
 	runReconciliation("")
 }
 
