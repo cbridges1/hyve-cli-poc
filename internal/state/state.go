@@ -26,7 +26,8 @@ const (
 
 // ReconcileConfig holds reconciliation configuration from the repository
 type ReconcileConfig struct {
-	Mode ReconcileMode `yaml:"mode"`
+	Mode         ReconcileMode `yaml:"mode"`
+	StrictDelete bool          `yaml:"strictDelete"`
 }
 
 // RepoConfig represents the repository-level Hyve configuration stored in hyve.yaml

@@ -22,8 +22,24 @@ func NewManager(p provider.Provider) *Manager {
 	}
 }
 
-// DetermineAction decides what action to take based on desired vs actual state
-func (m *Manager) DetermineAction(ctx context.Context, desired types.ClusterDefinition) types.ReconcileAction {
+// DetermineAction decides what action to take based on desired vs actual state.
+// When strictDelete is true and desired.Kind is empty, the call is an orphan check:
+// if the cluster exists in the cloud it should be deleted, otherwise no action is taken.
+func (m *Manager) DetermineAction(ctx context.Context, desired types.ClusterDefinition, strictDelete bool) types.ReconcileAction {
+	// Orphan-check sentinel: desired.Kind == "" means no YAML definition exists.
+	if desired.Kind == "" && strictDelete {
+		cluster, err := m.provider.FindClusterByName(ctx, desired.Metadata.Name)
+		if err != nil {
+			log.Printf("Error checking for orphaned cluster %s: %v", desired.Metadata.Name, err)
+			return types.ActionNone
+		}
+		if cluster != nil {
+			log.Printf("Orphaned cluster %s found (strict-delete enabled), will delete", desired.Metadata.Name)
+			return types.ActionDelete
+		}
+		return types.ActionNone
+	}
+
 	cluster, err := m.provider.FindClusterByName(ctx, desired.Metadata.Name)
 	if err != nil {
 		log.Printf("Error checking for existing cluster %s: %v", desired.Metadata.Name, err)
@@ -111,8 +127,11 @@ func (m *Manager) WaitForReady(ctx context.Context, clusterID string) error {
 	return m.provider.WaitForClusterReady(ctx, clusterID)
 }
 
-// FindOrphaned finds clusters that exist but are not in the desired state
-func (m *Manager) FindOrphaned(ctx context.Context, desiredClusters []types.ClusterDefinition) ([]*provider.Cluster, error) {
+// FindOrphaned finds clusters that exist in the cloud but are not in the desired state.
+// When strictDelete is true, all cloud clusters not present in the desired list are
+// considered orphaned regardless of their name prefix. When false, only clusters whose
+// names match the managed prefixes (hyve-, civo-deploy-) are considered.
+func (m *Manager) FindOrphaned(ctx context.Context, desiredClusters []types.ClusterDefinition, strictDelete bool) ([]*provider.Cluster, error) {
 	allClusters, err := m.provider.ListClusters(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list clusters: %w", err)
@@ -125,7 +144,7 @@ func (m *Manager) FindOrphaned(ctx context.Context, desiredClusters []types.Clus
 
 	var orphaned []*provider.Cluster
 	for _, cluster := range allClusters {
-		if m.ShouldManage(*cluster) && !desiredNames[cluster.Name] {
+		if (strictDelete || m.ShouldManage(*cluster)) && !desiredNames[cluster.Name] {
 			orphaned = append(orphaned, cluster)
 		}
 	}

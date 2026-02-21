@@ -35,6 +35,15 @@ func NewReconciler(apiKey string, stateMgr *state.Manager) *Reconciler {
 
 // ReconcileAll reconciles all clusters across all regions
 func (r *Reconciler) ReconcileAll(ctx context.Context, clusterDefs []types.ClusterDefinition) error {
+	// Load reconcile config to determine strictDelete setting.
+	strictDelete := false
+	if repoCfg, err := r.stateMgr.LoadRepoConfig(); err == nil {
+		strictDelete = repoCfg.Reconcile.StrictDelete
+	}
+	if strictDelete {
+		log.Println("Strict-delete mode enabled: cloud clusters not present in YAML will be deleted")
+	}
+
 	regionClusters := make(map[string][]types.ClusterDefinition)
 	for _, clusterDef := range clusterDefs {
 		region := clusterDef.Metadata.Region
@@ -43,12 +52,12 @@ func (r *Reconciler) ReconcileAll(ctx context.Context, clusterDefs []types.Clust
 
 	if len(clusterDefs) == 0 {
 		log.Println("No cluster definitions found in state/clusters directory")
-		r.cleanupAllRegions(ctx, clusterDefs)
+		r.cleanupAllRegions(ctx, clusterDefs, strictDelete)
 		return nil
 	}
 
 	for region, clusters := range regionClusters {
-		err := r.reconcileRegion(ctx, region, clusters)
+		err := r.reconcileRegion(ctx, region, clusters, strictDelete)
 		if err != nil {
 			log.Printf("Failed to reconcile region %s: %v", region, err)
 		}
@@ -67,7 +76,7 @@ func (r *Reconciler) ReconcileAll(ctx context.Context, clusterDefs []types.Clust
 }
 
 // reconcileRegion reconciles clusters in a specific region
-func (r *Reconciler) reconcileRegion(ctx context.Context, region string, clusters []types.ClusterDefinition) error {
+func (r *Reconciler) reconcileRegion(ctx context.Context, region string, clusters []types.ClusterDefinition, strictDelete bool) error {
 	log.Printf("Processing region: %s", region)
 
 	// Reconcile all desired clusters
@@ -82,7 +91,7 @@ func (r *Reconciler) reconcileRegion(ctx context.Context, region string, cluster
 		clusterMgr := cluster.NewManager(prov)
 		ingressMgr := ingress.NewManager(prov)
 
-		err = r.reconcileCluster(ctx, clusterMgr, ingressMgr, clusterDef)
+		err = r.reconcileCluster(ctx, clusterMgr, ingressMgr, clusterDef, strictDelete)
 		if err != nil {
 			log.Printf("Failed to reconcile cluster %s: %v", clusterDef.Metadata.Name, err)
 		}
@@ -97,7 +106,7 @@ func (r *Reconciler) reconcileRegion(ctx context.Context, region string, cluster
 			return nil
 		}
 		clusterMgr := cluster.NewManager(prov)
-		err = r.cleanupOrphanedResources(ctx, clusterMgr, clusters)
+		err = r.cleanupOrphanedResources(ctx, clusterMgr, clusters, strictDelete)
 		if err != nil {
 			log.Printf("Failed to cleanup orphaned resources in region %s: %v", region, err)
 		}
@@ -205,8 +214,8 @@ func (r *Reconciler) resolveAzureSubscriptionID(subscriptionAlias string) (strin
 }
 
 // reconcileCluster handles the reconciliation of a single cluster
-func (r *Reconciler) reconcileCluster(ctx context.Context, clusterMgr *cluster.Manager, ingressMgr *ingress.Manager, clusterDef types.ClusterDefinition) error {
-	action := clusterMgr.DetermineAction(ctx, clusterDef)
+func (r *Reconciler) reconcileCluster(ctx context.Context, clusterMgr *cluster.Manager, ingressMgr *ingress.Manager, clusterDef types.ClusterDefinition, strictDelete bool) error {
+	action := clusterMgr.DetermineAction(ctx, clusterDef, strictDelete)
 
 	switch action {
 	case types.ActionCreate:
@@ -314,8 +323,8 @@ func (r *Reconciler) deleteCluster(ctx context.Context, clusterMgr *cluster.Mana
 }
 
 // cleanupOrphanedResources removes clusters that are no longer defined
-func (r *Reconciler) cleanupOrphanedResources(ctx context.Context, clusterMgr *cluster.Manager, clusters []types.ClusterDefinition) error {
-	orphanedClusters, err := clusterMgr.FindOrphaned(ctx, clusters)
+func (r *Reconciler) cleanupOrphanedResources(ctx context.Context, clusterMgr *cluster.Manager, clusters []types.ClusterDefinition, strictDelete bool) error {
+	orphanedClusters, err := clusterMgr.FindOrphaned(ctx, clusters, strictDelete)
 	if err != nil {
 		return err
 	}
@@ -324,7 +333,7 @@ func (r *Reconciler) cleanupOrphanedResources(ctx context.Context, clusterMgr *c
 }
 
 // cleanupAllRegions handles cleanup when no clusters are defined
-func (r *Reconciler) cleanupAllRegions(ctx context.Context, clusterDefs []types.ClusterDefinition) {
+func (r *Reconciler) cleanupAllRegions(ctx context.Context, clusterDefs []types.ClusterDefinition, strictDelete bool) {
 	// Create a default cluster definition for Civo cleanup
 	// TODO: This should be improved to handle multi-provider cleanup
 	defaultCluster := types.ClusterDefinition{
@@ -340,7 +349,7 @@ func (r *Reconciler) cleanupAllRegions(ctx context.Context, clusterDefs []types.
 
 	clusterMgr := cluster.NewManager(prov)
 
-	err = r.cleanupOrphanedResources(ctx, clusterMgr, clusterDefs)
+	err = r.cleanupOrphanedResources(ctx, clusterMgr, clusterDefs, strictDelete)
 	if err != nil {
 		log.Printf("Failed to cleanup orphaned resources: %v", err)
 	}
