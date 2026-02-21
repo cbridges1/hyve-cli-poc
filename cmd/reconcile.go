@@ -11,6 +11,7 @@ import (
 	"hyve/internal/config"
 	"hyve/internal/credentials"
 	"hyve/internal/reconcile"
+	"hyve/internal/repository"
 	"hyve/internal/state"
 )
 
@@ -86,23 +87,22 @@ func runReconciliation() {
 
 // createStateManagerFromRepository creates state manager from current repository configuration
 func createStateManagerFromRepository(ctx context.Context) (*state.Manager, string) {
-	repoConfigMgr := config.NewManager()
-	if err := repoConfigMgr.LoadConfig(); err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+	repoMgr, err := repository.NewManager()
+	if err != nil {
+		log.Fatalf("Failed to create repository manager: %v", err)
 	}
-	if !repoConfigMgr.IsGitConfigured() {
+	defer repoMgr.Close()
+
+	currentRepo, err := repoMgr.GetCurrentRepository()
+	if err != nil {
 		log.Fatalf("❌ No Git repository configured. Hyve requires a Git repository for state management.\n\n" +
-			"Configure your repository in ~/.hyve/config.yaml:\n" +
-			"  git:\n" +
-			"    repo_url: https://github.com/company/hyve-state.git\n" +
-			"    local_path: /path/to/local/clone")
+			"Add a Git repository with: hyve git add <name> --repo-url <url>")
 	}
-	gitConfig := repoConfigMgr.GetGitConfig()
-	log.Printf("Using Git repository: %s", gitConfig.RepoURL)
+	log.Printf("Using Git repository: %s", currentRepo.RepoURL)
 
 	credsMgr, err := credentials.NewManager()
 	var authToken string
-	var authUsername = gitConfig.Username
+	var authUsername = currentRepo.Username
 
 	if err == nil {
 		defer credsMgr.Close()
@@ -120,7 +120,7 @@ func createStateManagerFromRepository(ctx context.Context) (*state.Manager, stri
 		authToken = os.Getenv("HYVE_GIT_TOKEN")
 	}
 
-	stateMgr, err := state.NewManager(gitConfig.RepoURL, gitConfig.LocalPath, authUsername, authToken)
+	stateMgr, err := state.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
 	if err != nil {
 		log.Fatalf("Failed to create state manager: %v", err)
 	}
@@ -134,5 +134,5 @@ func createStateManagerFromRepository(ctx context.Context) (*state.Manager, stri
 	}
 
 	log.Println("Git repository synchronized")
-	return stateMgr, gitConfig.LocalPath
+	return stateMgr, currentRepo.LocalPath
 }

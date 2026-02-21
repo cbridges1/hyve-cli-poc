@@ -19,6 +19,7 @@ import (
 	"hyve/internal/config"
 	"hyve/internal/kubeconfig"
 	"hyve/internal/provider"
+	"hyve/internal/repository"
 	"hyve/internal/types"
 )
 
@@ -39,10 +40,12 @@ func NewExecutor(manager *Manager, cluster string) (*Executor, error) {
 	var err error
 
 	var repoName string
-	execConfigMgr := config.NewManager()
-	if err := execConfigMgr.LoadConfig(); err == nil {
-		repoURL := execConfigMgr.GetGitConfig().RepoURL
-		repoName = strings.TrimSuffix(filepath.Base(repoURL), ".git")
+	execRepoMgr, repoErr := repository.NewManager()
+	if repoErr == nil {
+		defer execRepoMgr.Close()
+		if currentRepo, err := execRepoMgr.GetCurrentRepository(); err == nil {
+			repoName = strings.TrimSuffix(filepath.Base(currentRepo.RepoURL), ".git")
+		}
 	}
 
 	if cluster != "" {

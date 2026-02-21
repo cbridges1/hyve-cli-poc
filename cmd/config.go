@@ -10,11 +10,11 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"hyve/internal/config"
 	"hyve/internal/context"
 	"hyve/internal/credentials"
 	"hyve/internal/provider/aws"
 	"hyve/internal/providerconfig"
+	"hyve/internal/repository"
 )
 
 var configCmd = &cobra.Command{
@@ -1015,17 +1015,19 @@ func clearCivoToken() {
 
 // getRepoPath returns the current repository's local path
 func getRepoPath() string {
-	configMgr := config.NewManager()
-	if err := configMgr.LoadConfig(); err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+	repoMgr, err := repository.NewManager()
+	if err != nil {
+		log.Fatalf("Failed to create repository manager: %v", err)
 	}
-	gitConfig := configMgr.GetGitConfig()
-	if gitConfig.LocalPath == "" {
+	defer repoMgr.Close()
+
+	currentRepo, err := repoMgr.GetCurrentRepository()
+	if err != nil {
 		log.Fatalf("❌ No Git repository configured.\n\n" +
 			"Provider configurations are stored in the repository.\n" +
-			"Please configure a Git repository first in ~/.hyve/config.yaml")
+			"Please configure a Git repository first with: hyve git add <name> --repo-url <url>")
 	}
-	return gitConfig.LocalPath
+	return currentRepo.LocalPath
 }
 
 // parseProjectIDs parses project IDs from arguments (supports comma-separated and space-separated)
