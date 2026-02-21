@@ -72,7 +72,7 @@ go build -o hyve .
 ### Prerequisites
 
 - Go 1.21 or higher
-- Git (required - Hyve uses system git by default for easier onboarding)
+- Git (required — Hyve uses system `git` for all repository operations)
 - One or more cloud provider accounts:
   - **Civo**: API token (stored encrypted in Hyve)
   - **AWS**: AWS CLI configured (`aws configure`)
@@ -90,7 +90,7 @@ go build -o hyve .
 ### Configure
 
 ```bash
-# Verify git is available (required for default backend)
+# Verify git is available (required)
 git --version
 
 # Configure cloud provider authentication:
@@ -336,7 +336,24 @@ hyve template execute prod-template prod-cluster-01
 | `hyve config aws` | Manage AWS provider configuration (accounts, EKS roles, node roles, VPCs) |
 | `hyve config azure` | Manage Azure provider configuration (subscriptions) |
 | `hyve config civo` | Manage Civo provider configuration (organizations) |
-| `hyve reconcile` | Reconcile cluster state |
+| `hyve reconcile` | Reconcile cluster state (local or CI/CD mode) |
+
+### Reconcile Command
+
+Reconcile cluster state against the desired state defined in YAML files.
+
+```bash
+# Default: uses the configured repository, honours hyve.yaml reconcile mode
+hyve reconcile
+
+# CI/CD mode: point at a local checkout, bypasses hyve.yaml cicd check
+hyve reconcile --path ./hyve-state
+hyve reconcile -p /workspace/hyve-state
+```
+
+| Flag | Description |
+|------|-------------|
+| `--path, -p` | Path to a local repository checkout. Bypasses `cicd` mode check and always runs reconciliation locally. Intended for use inside CI/CD pipelines. |
 
 ### Cluster Commands
 
@@ -536,20 +553,197 @@ Provider configurations are stored in `provider-configs/` in your repository and
 
 See [CLI Reference](https://docs.hyve.dev/cli/overview) for complete command documentation.
 
+## CI/CD Workflow Mode
+
+Hyve supports two reconciliation modes controlled by a `hyve.yaml` file in the **root of your state repository**:
+
+| Mode | Behaviour |
+|------|-----------|
+| `local` | Reconcile runs on the local machine (default when `hyve.yaml` is absent) |
+| `cicd` | Local reconciliation is skipped; the desired state is pushed to the repository so a pipeline picks it up |
+
+### Enabling CI/CD Mode
+
+Add a `hyve.yaml` to the root of your state repository:
+
+```yaml
+# hyve.yaml (repository root)
+reconcile:
+  mode: cicd   # options: local (default), cicd
+```
+
+When `mode: cicd` is set, running `hyve reconcile` locally will:
+
+1. Load and **validate** all cluster YAML files (catches errors before they reach the pipeline)
+2. **Skip** cloud-provider provisioning
+3. **Push** the desired state to the remote repository
+4. Exit — the CI/CD pipeline takes over from there
+
+```
+$ hyve reconcile
+Using Git repository: https://github.com/company/hyve-state.git
+Git repository synchronized
+Reconcile mode: cicd
+Skipping local reconciliation — cluster provisioning will be handled by the CI/CD pipeline.
+Pushing desired state to repository...
+✅ Desired state pushed to repository. The CI/CD pipeline will reconcile.
+```
+
+### Running Reconciliation Inside a Pipeline
+
+Pipelines use `hyve reconcile --path <dir>` to target a repository that has already been checked out. This flag:
+
+- Points Hyve at the checked-out working directory directly (no clone or pull is performed)
+- **Bypasses the `cicd` mode check entirely** — reconciliation always runs locally
+- Is the intended entry point for any CI/CD runner
+
+```bash
+# Inside a pipeline (repo already checked out to ./hyve-state)
+hyve reconcile --path ./hyve-state
+# or with the short flag
+hyve reconcile -p ./hyve-state
+```
+
+### GitHub Actions Example
+
+The workflow below triggers whenever cluster YAML files change on the default branch. It checks out the state repository, builds Hyve, and runs reconciliation directly against the checkout.
+
+```yaml
+# .github/workflows/reconcile.yaml
+name: Hyve Reconcile
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "clusters/**"
+      - "hyve.yaml"
+
+jobs:
+  reconcile:
+    name: Reconcile clusters
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout state repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+          cache: true
+
+      - name: Build Hyve
+        run: go build -o hyve .
+
+      - name: Reconcile clusters
+        run: ./hyve reconcile --path .
+        env:
+          # Civo token (add to repository secrets)
+          CIVO_TOKEN: ${{ secrets.CIVO_TOKEN }}
+          # AWS credentials (if using AWS EKS)
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+          # GCP credentials (if using GCP GKE)
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
+```
+
+#### Separate State Repository
+
+If your Hyve state lives in a separate repository from your application code, use the `repository` input of `actions/checkout` to check it out alongside your build:
+
+```yaml
+# .github/workflows/reconcile.yaml
+name: Hyve Reconcile
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Check out the Hyve CLI source (to build it)
+      - name: Checkout Hyve
+        uses: actions/checkout@v4
+        with:
+          path: hyve-cli
+
+      # Check out the state repository that contains clusters/
+      - name: Checkout state repository
+        uses: actions/checkout@v4
+        with:
+          repository: company/hyve-state
+          token: ${{ secrets.STATE_REPO_TOKEN }}
+          path: hyve-state
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+          cache: true
+          cache-dependency-path: hyve-cli/go.sum
+
+      - name: Build Hyve
+        working-directory: hyve-cli
+        run: go build -o ../hyve .
+
+      - name: Reconcile clusters
+        run: ./hyve reconcile --path ./hyve-state
+        env:
+          CIVO_TOKEN: ${{ secrets.CIVO_TOKEN }}
+```
+
+#### Recommended Repository Layout
+
+```
+hyve-state/                 ← state repository (tracked by CI/CD)
+├── hyve.yaml               ← sets reconcile.mode: cicd
+├── clusters/
+│   ├── production.yaml
+│   └── staging.yaml
+├── workflows/
+├── templates/
+└── provider-configs/
+    ├── aws.yaml
+    └── gcp.yaml
+```
+
+#### End-to-end Flow
+
+```
+Developer                     State Repository          GitHub Actions
+    │                              │                         │
+    │  hyve cluster add prod ...   │                         │
+    │─────────────────────────────>│                         │
+    │                              │                         │
+    │  hyve reconcile              │                         │
+    │  (cicd mode: validates +     │                         │
+    │   pushes desired state)      │                         │
+    │─────────────────────────────>│ push                    │
+    │                              │────────────────────────>│
+    │                              │                         │ trigger
+    │                              │                         │ hyve reconcile --path .
+    │                              │                         │ (provisions clusters)
+    │                              │<────────────────────────│ commit updated state
+```
+
 ## Storage
 
 Hyve stores all data in `~/.hyve/`:
 
 ```
 ~/.hyve/
-├── config.yaml          # Global configuration
+├── hyve.db              # Unified database: repositories, credentials, kubeconfigs (SQLite + AES-GCM)
 ├── context.yaml         # Current provider context (account/project selections - local only)
-├── repositories.db      # Repository configurations (SQLite)
-├── credentials.db       # Encrypted Civo tokens (AES-GCM)
-├── kubeconfigs.db      # Encrypted cluster kubeconfigs (AES-GCM)
 ├── temp/               # Temporary kubeconfig files
 └── repositories/       # Cloned repository storage
     ├── production/
+    │   ├── hyve.yaml         # Repository-level Hyve configuration (reconcile mode, etc.)
     │   ├── clusters/         # Cluster YAML files
     │   ├── workflows/        # Workflow definitions
     │   ├── templates/        # Cluster templates
