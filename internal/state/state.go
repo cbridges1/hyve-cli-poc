@@ -14,6 +14,26 @@ import (
 	"hyve/internal/types"
 )
 
+// ReconcileMode represents how reconciliation should be executed
+type ReconcileMode string
+
+const (
+	// ReconcileModeLocal performs reconciliation on the local machine (default)
+	ReconcileModeLocal ReconcileMode = "local"
+	// ReconcileModeCICD skips local reconciliation, deferring it to a CI/CD pipeline
+	ReconcileModeCICD ReconcileMode = "cicd"
+)
+
+// ReconcileConfig holds reconciliation configuration from the repository
+type ReconcileConfig struct {
+	Mode ReconcileMode `yaml:"mode"`
+}
+
+// RepoConfig represents the repository-level Hyve configuration stored in hyve.yaml
+type RepoConfig struct {
+	Reconcile ReconcileConfig `yaml:"reconcile"`
+}
+
 // Manager handles state file operations using Git repositories
 type Manager struct {
 	stateDir   string
@@ -54,6 +74,31 @@ func (m *Manager) CommitAndPush(ctx context.Context, message string) error {
 	}
 
 	return nil
+}
+
+// LoadRepoConfig reads hyve.yaml from the repository root.
+// If the file does not exist, a default config with local mode is returned.
+func (m *Manager) LoadRepoConfig() (*RepoConfig, error) {
+	configPath := filepath.Join(filepath.Dir(m.stateDir), "hyve.yaml")
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &RepoConfig{Reconcile: ReconcileConfig{Mode: ReconcileModeLocal}}, nil
+		}
+		return nil, fmt.Errorf("failed to read hyve.yaml: %w", err)
+	}
+
+	var cfg RepoConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("failed to parse hyve.yaml: %w", err)
+	}
+
+	if cfg.Reconcile.Mode == "" {
+		cfg.Reconcile.Mode = ReconcileModeLocal
+	}
+
+	return &cfg, nil
 }
 
 // LoadClusterDefinitions loads all cluster definitions from YAML files

@@ -31,19 +31,42 @@ func runReconciliation() {
 	// Create state manager from current repository configuration
 	stateMgr, _ := createStateManagerFromRepository(ctx)
 
+	// Load cluster definitions and validate regardless of mode
 	clusterDefs, err := stateMgr.LoadClusterDefinitions()
 	if err != nil {
 		log.Fatalf("Failed to load cluster definitions: %v", err)
 	}
 
-	err = stateMgr.ValidateClusterDefinitions(clusterDefs)
-	if err != nil {
+	if err = stateMgr.ValidateClusterDefinitions(clusterDefs); err != nil {
 		log.Fatalf("Invalid cluster configuration: %v", err)
 	}
 
+	// Check the reconcile mode from hyve.yaml in the repository root
+	repoCfg, err := stateMgr.LoadRepoConfig()
+	if err != nil {
+		log.Printf("Warning: Could not load hyve.yaml: %v. Defaulting to local mode.", err)
+		repoCfg = &state.RepoConfig{Reconcile: state.ReconcileConfig{Mode: state.ReconcileModeLocal}}
+	}
+
+	if repoCfg.Reconcile.Mode == state.ReconcileModeCICD {
+		log.Println("Reconcile mode: cicd")
+		log.Println("Skipping local reconciliation — cluster provisioning will be handled by the CI/CD pipeline.")
+		log.Println("Pushing desired state to repository...")
+		if err := stateMgr.CommitAndPush(ctx, "Update desired cluster state"); err != nil {
+			log.Printf("❌ Failed to push state: %v", err)
+			if strings.Contains(err.Error(), "failed to push") {
+				log.Println("💡 Changes were committed locally but push failed")
+				log.Println("💡 Check your Git credentials and network connection")
+			}
+		} else {
+			log.Println("✅ Desired state pushed to repository. The CI/CD pipeline will reconcile.")
+		}
+		return
+	}
+
+	// Local reconciliation
 	clusterDefs = stateMgr.OrderClusters(clusterDefs)
 
-	// Check if any clusters require Civo - only then require the token
 	configMgr := config.NewManager()
 	apiKey := configMgr.GetCivoToken()
 
@@ -60,8 +83,7 @@ func runReconciliation() {
 	}
 
 	reconciler := reconcile.NewReconciler(apiKey, stateMgr)
-	err = reconciler.ReconcileAll(ctx, clusterDefs)
-	if err != nil {
+	if err = reconciler.ReconcileAll(ctx, clusterDefs); err != nil {
 		log.Fatalf("Reconciliation failed: %v", err)
 	}
 
@@ -70,7 +92,6 @@ func runReconciliation() {
 	if err := stateMgr.CommitAndPush(ctx, "Update cluster state after reconciliation"); err != nil {
 		log.Printf("❌ Failed to commit and push: %v", err)
 
-		// Provide helpful hints based on error type
 		if strings.Contains(err.Error(), "failed to push") {
 			log.Println("💡 Changes were committed locally but push failed")
 			log.Println("💡 Check your Git credentials and network connection")
