@@ -128,8 +128,10 @@ var validAWSRegions = map[string]bool{
 	"sa-east-1":      true,
 }
 
-// NewProvider creates a new AWS provider
-func NewProvider(accessKeyID, secretAccessKey, region string) (*Provider, error) {
+// NewProvider creates a new AWS provider.
+// When accessKeyID and secretAccessKey are non-empty, static credentials are used (sessionToken
+// is optional and may be empty). Otherwise the AWS SDK default credential chain is used.
+func NewProvider(accessKeyID, secretAccessKey, sessionToken, region string) (*Provider, error) {
 	ctx := context.Background()
 
 	// Validate and normalize region
@@ -152,7 +154,7 @@ func NewProvider(accessKeyID, secretAccessKey, region string) (*Provider, error)
 	opts = append(opts, config.WithRegion(region))
 
 	if accessKeyID != "" && secretAccessKey != "" {
-		opts = append(opts, config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKeyID, secretAccessKey, "")))
+		opts = append(opts, config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKeyID, secretAccessKey, sessionToken)))
 	}
 
 	cfg, err := config.LoadDefaultConfig(ctx, opts...)

@@ -87,14 +87,28 @@ type Provider struct {
 	region            string
 }
 
-// NewProvider creates a new Azure provider
-func NewProvider(subscriptionID, resourceGroupName, region string) (*Provider, error) {
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Azure credentials: %w", err)
+// NewProvider creates a new Azure provider.
+// When tenantID, clientID, and clientSecret are all non-empty, a service principal credential
+// is used (suitable for CI/CD pipelines). Otherwise the DefaultAzureCredential chain is used,
+// which covers az login, managed identity, and the standard AZURE_* environment variables.
+func NewProvider(subscriptionID, resourceGroupName, region, tenantID, clientID, clientSecret string) (*Provider, error) {
+	var clientFactory *armcontainerservice.ClientFactory
+	var err error
+
+	if tenantID != "" && clientID != "" && clientSecret != "" {
+		spCred, spErr := azidentity.NewClientSecretCredential(tenantID, clientID, clientSecret, nil)
+		if spErr != nil {
+			return nil, fmt.Errorf("failed to create Azure service principal credentials: %w", spErr)
+		}
+		clientFactory, err = armcontainerservice.NewClientFactory(subscriptionID, spCred, nil)
+	} else {
+		defaultCred, defErr := azidentity.NewDefaultAzureCredential(nil)
+		if defErr != nil {
+			return nil, fmt.Errorf("failed to create Azure credentials: %w", defErr)
+		}
+		clientFactory, err = armcontainerservice.NewClientFactory(subscriptionID, defaultCred, nil)
 	}
 
-	clientFactory, err := armcontainerservice.NewClientFactory(subscriptionID, cred, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Azure client factory: %w", err)
 	}

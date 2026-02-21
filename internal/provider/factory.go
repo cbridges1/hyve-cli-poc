@@ -21,6 +21,27 @@ func NewFactory() *Factory {
 	return &Factory{}
 }
 
+// accountEnvVar looks up an environment variable using the naming pattern
+// {accountName}-{provider}-{credential}, normalised to uppercase with underscores.
+//
+// Examples:
+//   - ("main-account", "aws",   "access-key-id")    → MAIN_ACCOUNT_AWS_ACCESS_KEY_ID
+//   - ("my-project",  "gcp",   "credentials-json")  → MY_PROJECT_GCP_CREDENTIALS_JSON
+//   - ("prod",        "azure", "client-secret")      → PROD_AZURE_CLIENT_SECRET
+//   - ("my-org",      "civo",  "token")              → MY_ORG_CIVO_TOKEN
+//
+// Returns an empty string when accountName is empty or the variable is not set.
+func accountEnvVar(accountName, providerName, credential string) string {
+	if accountName == "" {
+		return ""
+	}
+	replacer := strings.NewReplacer("-", "_", " ", "_", ".", "_")
+	key := strings.ToUpper(replacer.Replace(accountName)) +
+		"_" + strings.ToUpper(replacer.Replace(providerName)) +
+		"_" + strings.ToUpper(replacer.Replace(credential))
+	return os.Getenv(key)
+}
+
 // CreateProvider creates a provider based on the provider name
 // For Civo, the apiKey parameter is used directly (or loaded from credentials store).
 // For AWS, GCP, and Azure, authentication uses the native CLI credentials:
@@ -60,7 +81,7 @@ func (f *Factory) CreateProvider(providerName, apiKey, region string) (Provider,
 		// AWS uses native CLI authentication via AWS SDK's default credential chain
 		// This automatically checks: environment variables, ~/.aws/credentials, IAM roles, etc.
 		// No credentials need to be stored in Hyve - use 'aws configure' to set up
-		awsProvider, err := aws.NewProvider("", "", region)
+		awsProvider, err := aws.NewProvider("", "", "", region)
 		if err != nil {
 			return nil, fmt.Errorf("AWS authentication failed. Please run 'aws configure' or set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables: %w", err)
 		}
@@ -95,7 +116,7 @@ func (f *Factory) CreateProvider(providerName, apiKey, region string) (Provider,
 		if resourceGroup == "" {
 			return nil, fmt.Errorf("Azure resource group not found. Please set AZURE_RESOURCE_GROUP environment variable")
 		}
-		azureProvider, err := azure.NewProvider(subscriptionID, resourceGroup, region)
+		azureProvider, err := azure.NewProvider(subscriptionID, resourceGroup, region, "", "", "")
 		if err != nil {
 			return nil, fmt.Errorf("Azure authentication failed. Please run 'az login': %w", err)
 		}
@@ -106,13 +127,33 @@ func (f *Factory) CreateProvider(providerName, apiKey, region string) (Provider,
 	}
 }
 
-// CreateProviderWithOptions creates a provider with additional options
-// For Civo, credentials are required in opts.APIKey or stored in credentials
-// For AWS/GCP/Azure, native CLI authentication is used (options are for environment overrides only)
+// CreateProviderWithOptions creates a provider with additional options.
+//
+// When opts.AccountName is set, named environment variables are checked first using the
+// pattern {ACCOUNT_NAME}_{PROVIDER}_{CREDENTIAL} (hyphens replaced with underscores, uppercase).
+// This allows CI/CD pipelines to supply per-account credentials without changing code.
+//
+// GCP project IDs and Azure subscription IDs are resolved from the provider YAML config files
+// (provider-configs/gcp.yaml, provider-configs/azure.yaml) by the caller before this function
+// is invoked, so those values should already be present in opts.ProjectID / opts.AzureSubscriptionID.
+//
+// Examples with AccountName = "main-account":
+//   - AWS:   MAIN_ACCOUNT_AWS_ACCESS_KEY_ID, MAIN_ACCOUNT_AWS_SECRET_ACCESS_KEY, MAIN_ACCOUNT_AWS_SESSION_TOKEN
+//   - GCP:   MAIN_ACCOUNT_GCP_CREDENTIALS_JSON  (project ID comes from provider-configs/gcp.yaml)
+//   - Azure: MAIN_ACCOUNT_AZURE_TENANT_ID, MAIN_ACCOUNT_AZURE_CLIENT_ID,
+//     MAIN_ACCOUNT_AZURE_CLIENT_SECRET, MAIN_ACCOUNT_AZURE_RESOURCE_GROUP
+//     (subscription ID comes from provider-configs/azure.yaml)
+//   - Civo:  MAIN_ACCOUNT_CIVO_TOKEN
 func (f *Factory) CreateProviderWithOptions(providerName string, opts ProviderOptions) (Provider, error) {
 	switch strings.ToLower(providerName) {
 	case "civo":
 		token := opts.APIKey
+
+		// Check named env var first (e.g. MY_ORG_CIVO_TOKEN)
+		if token == "" {
+			token = accountEnvVar(opts.AccountName, "civo", "token")
+		}
+
 		if token == "" {
 			// Load token from secrets store using the current civo organization name
 			credsMgr, err := credentials.NewManager()
@@ -137,7 +178,10 @@ func (f *Factory) CreateProviderWithOptions(providerName string, opts ProviderOp
 		return &ProviderAdapter{civo: civoProvider}, nil
 
 	case "gcp":
-		// GCP uses ADC - ProjectID can be passed or read from environment
+		// Named env var for credentials JSON; project ID is resolved from provider-configs/gcp.yaml
+		// by the caller before reaching here and passed via opts.ProjectID.
+		credentialsJSON := accountEnvVar(opts.AccountName, "gcp", "credentials-json")
+
 		projectID := opts.ProjectID
 		if projectID == "" {
 			projectID = os.Getenv("GCP_PROJECT_ID")
@@ -145,31 +189,47 @@ func (f *Factory) CreateProviderWithOptions(providerName string, opts ProviderOp
 		if projectID == "" {
 			projectID = os.Getenv("GOOGLE_CLOUD_PROJECT")
 		}
-		gcpProvider, err := gcp.NewProvider("", projectID, opts.Region)
+
+		gcpProvider, err := gcp.NewProvider(credentialsJSON, projectID, opts.Region)
 		if err != nil {
 			return nil, err
 		}
 		return &ProviderAdapter{gcp: gcpProvider}, nil
 
 	case "aws":
-		// AWS uses default credential chain - no explicit credentials needed
-		awsProvider, err := aws.NewProvider("", "", opts.Region)
+		// Named env vars take priority; fall back to AWS SDK default credential chain.
+		accessKeyID := accountEnvVar(opts.AccountName, "aws", "access-key-id")
+		secretAccessKey := accountEnvVar(opts.AccountName, "aws", "secret-access-key")
+		sessionToken := accountEnvVar(opts.AccountName, "aws", "session-token")
+
+		awsProvider, err := aws.NewProvider(accessKeyID, secretAccessKey, sessionToken, opts.Region)
 		if err != nil {
 			return nil, err
 		}
 		return &ProviderAdapter{aws: awsProvider}, nil
 
 	case "azure":
-		// Azure uses DefaultAzureCredential - subscription/resource group from opts or env
+		// Subscription ID is resolved from provider-configs/azure.yaml by the caller before
+		// reaching here and passed via opts.AzureSubscriptionID. Named env vars supply
+		// credentials (tenant/client/secret) and the resource group.
 		subscriptionID := opts.AzureSubscriptionID
 		if subscriptionID == "" {
 			subscriptionID = os.Getenv("AZURE_SUBSCRIPTION_ID")
 		}
+
 		resourceGroup := opts.AzureResourceGroup
+		if resourceGroup == "" {
+			resourceGroup = accountEnvVar(opts.AccountName, "azure", "resource-group")
+		}
 		if resourceGroup == "" {
 			resourceGroup = os.Getenv("AZURE_RESOURCE_GROUP")
 		}
-		azureProvider, err := azure.NewProvider(subscriptionID, resourceGroup, opts.Region)
+
+		tenantID := accountEnvVar(opts.AccountName, "azure", "tenant-id")
+		clientID := accountEnvVar(opts.AccountName, "azure", "client-id")
+		clientSecret := accountEnvVar(opts.AccountName, "azure", "client-secret")
+
+		azureProvider, err := azure.NewProvider(subscriptionID, resourceGroup, opts.Region, tenantID, clientID, clientSecret)
 		if err != nil {
 			return nil, err
 		}
@@ -180,8 +240,13 @@ func (f *Factory) CreateProviderWithOptions(providerName string, opts ProviderOp
 	}
 }
 
-// ProviderOptions contains configuration options for creating providers
+// ProviderOptions contains configuration options for creating providers.
 type ProviderOptions struct {
+	// AccountName is the alias used for named environment variable lookups.
+	// When set, the factory checks {ACCOUNT_NAME}_{PROVIDER}_{CREDENTIAL} env vars before
+	// falling back to the standard credential chain.
+	AccountName string
+
 	// Common
 	Region string // For all providers
 
@@ -195,7 +260,7 @@ type ProviderOptions struct {
 	AzureSubscriptionID string // Azure subscription ID (can also be set via AZURE_SUBSCRIPTION_ID env var)
 	AzureResourceGroup  string // Azure resource group (can also be set via AZURE_RESOURCE_GROUP env var)
 
-	// Note: AWS uses AWS CLI authentication automatically - no options needed
+	// Note: AWS uses AWS CLI authentication automatically when no named env vars are found
 }
 
 // GetSupportedProviders returns list of supported providers

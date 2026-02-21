@@ -715,6 +715,18 @@ func createProviderForClusterDef(clusterDef types.ClusterDefinition) (provider.P
 		Region: clusterDef.Metadata.Region,
 	}
 
+	// Populate AccountName so the factory can resolve named env vars.
+	switch strings.ToLower(providerName) {
+	case "civo":
+		opts.AccountName = clusterDef.Spec.CivoOrganization
+	case "aws":
+		opts.AccountName = clusterDef.Spec.AWSAccount
+	case "gcp":
+		opts.AccountName = clusterDef.Spec.GCPProject
+	case "azure":
+		opts.AccountName = clusterDef.Spec.AzureSubscription
+	}
+
 	// Handle Civo-specific configuration
 	if providerName == "civo" {
 		configMgr := config.NewManager()
@@ -732,7 +744,6 @@ func createProviderForClusterDef(clusterDef types.ClusterDefinition) (provider.P
 			opts.ProjectID = clusterDef.Spec.GCPProjectID
 			log.Printf("Using GCP project ID '%s'", clusterDef.Spec.GCPProjectID)
 		} else if clusterDef.Spec.GCPProject != "" {
-			// Fall back to resolving alias (for backward compatibility)
 			gcpRepoMgr, err := repository.NewManager()
 			if err == nil {
 				defer gcpRepoMgr.Close()
@@ -744,6 +755,27 @@ func createProviderForClusterDef(clusterDef types.ClusterDefinition) (provider.P
 					}
 					opts.ProjectID = projectID
 					log.Printf("Using GCP project '%s' (ID: %s)", clusterDef.Spec.GCPProject, projectID)
+				}
+			}
+		}
+	}
+
+	// Handle Azure-specific configuration
+	if providerName == "azure" {
+		if clusterDef.Spec.AzureSubscriptionID != "" {
+			opts.AzureSubscriptionID = clusterDef.Spec.AzureSubscriptionID
+		} else if clusterDef.Spec.AzureSubscription != "" {
+			azureRepoMgr, err := repository.NewManager()
+			if err == nil {
+				defer azureRepoMgr.Close()
+				if currentRepo, err := azureRepoMgr.GetCurrentRepository(); err == nil {
+					pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
+					subscriptionID, err := pcMgr.GetAzureSubscriptionID(clusterDef.Spec.AzureSubscription)
+					if err != nil {
+						return nil, fmt.Errorf("failed to resolve Azure subscription '%s': %w", clusterDef.Spec.AzureSubscription, err)
+					}
+					opts.AzureSubscriptionID = subscriptionID
+					log.Printf("Using Azure subscription '%s' (ID: %s)", clusterDef.Spec.AzureSubscription, subscriptionID)
 				}
 			}
 		}

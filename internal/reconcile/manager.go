@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	"hyve/internal/cluster"
 	"hyve/internal/ingress"
@@ -105,7 +106,9 @@ func (r *Reconciler) reconcileRegion(ctx context.Context, region string, cluster
 	return nil
 }
 
-// createProviderForCluster creates a provider with the appropriate options for a cluster
+// createProviderForCluster creates a provider with the appropriate options for a cluster.
+// opts.AccountName is populated from the cluster spec's account/project/subscription alias so
+// that the factory can look up named environment variables (e.g. MY_ACCOUNT_AWS_ACCESS_KEY_ID).
 func (r *Reconciler) createProviderForCluster(clusterDef types.ClusterDefinition) (provider.Provider, error) {
 	providerName := clusterDef.Spec.Provider
 	if providerName == "" {
@@ -117,6 +120,18 @@ func (r *Reconciler) createProviderForCluster(clusterDef types.ClusterDefinition
 		APIKey: r.apiKey,
 	}
 
+	// Populate AccountName from the cluster spec so named env vars can be resolved.
+	switch strings.ToLower(providerName) {
+	case "civo":
+		opts.AccountName = clusterDef.Spec.CivoOrganization
+	case "aws":
+		opts.AccountName = clusterDef.Spec.AWSAccount
+	case "gcp":
+		opts.AccountName = clusterDef.Spec.GCPProject
+	case "azure":
+		opts.AccountName = clusterDef.Spec.AzureSubscription
+	}
+
 	// Handle GCP-specific configuration
 	if providerName == "gcp" {
 		// Use stored project ID if available, otherwise resolve from alias
@@ -125,7 +140,6 @@ func (r *Reconciler) createProviderForCluster(clusterDef types.ClusterDefinition
 			log.Printf("Using GCP project ID '%s' for cluster %s",
 				clusterDef.Spec.GCPProjectID, clusterDef.Metadata.Name)
 		} else if clusterDef.Spec.GCPProject != "" {
-			// Fall back to resolving alias (for backward compatibility)
 			projectID, err := r.resolveGCPProjectID(clusterDef.Spec.GCPProject)
 			if err != nil {
 				return nil, fmt.Errorf("failed to resolve GCP project '%s': %w", clusterDef.Spec.GCPProject, err)
@@ -136,12 +150,28 @@ func (r *Reconciler) createProviderForCluster(clusterDef types.ClusterDefinition
 		}
 	}
 
+	// Handle Azure-specific configuration
+	if providerName == "azure" {
+		if clusterDef.Spec.AzureSubscriptionID != "" {
+			opts.AzureSubscriptionID = clusterDef.Spec.AzureSubscriptionID
+			log.Printf("Using Azure subscription ID '%s' for cluster %s",
+				clusterDef.Spec.AzureSubscriptionID, clusterDef.Metadata.Name)
+		} else if clusterDef.Spec.AzureSubscription != "" {
+			subscriptionID, err := r.resolveAzureSubscriptionID(clusterDef.Spec.AzureSubscription)
+			if err != nil {
+				return nil, fmt.Errorf("failed to resolve Azure subscription '%s': %w", clusterDef.Spec.AzureSubscription, err)
+			}
+			opts.AzureSubscriptionID = subscriptionID
+			log.Printf("Using Azure subscription '%s' (ID: %s) for cluster %s",
+				clusterDef.Spec.AzureSubscription, subscriptionID, clusterDef.Metadata.Name)
+		}
+	}
+
 	return r.providerFactory.CreateProviderWithOptions(providerName, opts)
 }
 
 // resolveGCPProjectID resolves a GCP project alias to its project ID
 func (r *Reconciler) resolveGCPProjectID(projectAlias string) (string, error) {
-	// Get current repository
 	repoMgr, err := repository.NewManager()
 	if err != nil {
 		return "", fmt.Errorf("failed to create repository manager: %w", err)
@@ -155,6 +185,23 @@ func (r *Reconciler) resolveGCPProjectID(projectAlias string) (string, error) {
 
 	pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
 	return pcMgr.GetGCPProjectID(projectAlias)
+}
+
+// resolveAzureSubscriptionID resolves an Azure subscription alias to its subscription ID
+func (r *Reconciler) resolveAzureSubscriptionID(subscriptionAlias string) (string, error) {
+	repoMgr, err := repository.NewManager()
+	if err != nil {
+		return "", fmt.Errorf("failed to create repository manager: %w", err)
+	}
+	defer repoMgr.Close()
+
+	currentRepo, err := repoMgr.GetCurrentRepository()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current repository: %w", err)
+	}
+
+	pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
+	return pcMgr.GetAzureSubscriptionID(subscriptionAlias)
 }
 
 // reconcileCluster handles the reconciliation of a single cluster
