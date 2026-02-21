@@ -521,7 +521,7 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 		}
 	}
 
-	runReconciliation()
+	runReconciliation("")
 }
 
 func modifyClusterFromCLI(cmd *cobra.Command, clusterName string) {
@@ -646,7 +646,7 @@ func deleteClusterFromCLI(clusterName string, configOnly bool, forceCloud bool) 
 	}
 
 	// Run reconciliation to clean up any remaining resources
-	runReconciliation()
+	runReconciliation("")
 }
 
 // deleteClusterExplicitly deletes a cluster by name directly from the provider
