@@ -27,10 +27,12 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+        run: go test -race -coverprofile=coverage.out -covermode=atomic ./... -json > report.json
 
-      - name: Build
-        run: go build -o hyve .
+      - name: Report
+        uses: becheran/go-testreport@main
+        with:
+          input: report.json
 
       - name: Upload coverage
         uses: actions/upload-artifact@v4
