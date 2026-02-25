@@ -2,12 +2,11 @@ package config
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewManager(t *testing.T) {
 	manager := NewManager()
-
-	if manager == nil {
-		t.Fatal("Expected manager to be created, got nil")
-	}
+	require.NotNil(t, manager)
 }

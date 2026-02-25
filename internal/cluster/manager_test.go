@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"hyve/internal/provider"
 	"hyve/internal/types"
 )
@@ -177,8 +180,7 @@ func (m *mockProvider) Region() string {
 
 // TestDetermineAction_Create tests that DetermineAction returns ActionCreate for new cluster
 func TestDetermineAction_Create(t *testing.T) {
-	mockProv := newMockProvider()
-	mgr := NewManager(mockProv)
+	mgr := NewManager(newMockProvider())
 
 	desired := types.ClusterDefinition{
 		Metadata: types.ClusterMetadata{
@@ -188,9 +190,7 @@ func TestDetermineAction_Create(t *testing.T) {
 	}
 
 	action := mgr.DetermineAction(context.Background(), desired)
-	if action != types.ActionCreate {
-		t.Errorf("Expected ActionCreate, got %v", action)
-	}
+	assert.Equal(t, types.ActionCreate, action)
 }
 
 // TestDetermineAction_None tests that DetermineAction returns ActionNone for active cluster
@@ -212,9 +212,7 @@ func TestDetermineAction_None(t *testing.T) {
 	}
 
 	action := mgr.DetermineAction(context.Background(), desired)
-	if action != types.ActionNone {
-		t.Errorf("Expected ActionNone, got %v", action)
-	}
+	assert.Equal(t, types.ActionNone, action)
 }
 
 // TestDetermineAction_CreateForFailedCluster tests recreation for failed cluster
@@ -236,9 +234,7 @@ func TestDetermineAction_CreateForFailedCluster(t *testing.T) {
 	}
 
 	action := mgr.DetermineAction(context.Background(), desired)
-	if action != types.ActionCreate {
-		t.Errorf("Expected ActionCreate for failed cluster, got %v", action)
-	}
+	assert.Equal(t, types.ActionCreate, action)
 }
 
 // TestFindByName tests finding a cluster by name
@@ -253,34 +249,22 @@ func TestFindByName(t *testing.T) {
 	mgr := NewManager(mockProv)
 
 	cluster, err := mgr.FindByName(context.Background(), "test-cluster")
-	if err != nil {
-		t.Fatalf("Failed to find cluster: %v", err)
-	}
-
-	if cluster.Name != "test-cluster" {
-		t.Errorf("Expected cluster name test-cluster, got %s", cluster.Name)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "test-cluster", cluster.Name)
 }
 
 // TestFindByName_NotFound tests finding a non-existent cluster
 func TestFindByName_NotFound(t *testing.T) {
-	mockProv := newMockProvider()
-	mgr := NewManager(mockProv)
+	mgr := NewManager(newMockProvider())
 
 	cluster, err := mgr.FindByName(context.Background(), "nonexistent")
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-
-	if cluster != nil {
-		t.Error("Expected nil cluster for non-existent name")
-	}
+	require.NoError(t, err)
+	assert.Nil(t, cluster)
 }
 
 // TestCreate tests creating a new cluster
 func TestCreate(t *testing.T) {
-	mockProv := newMockProvider()
-	mgr := NewManager(mockProv)
+	mgr := NewManager(newMockProvider())
 
 	clusterDef := types.ClusterDefinition{
 		Metadata: types.ClusterMetadata{
@@ -294,17 +278,9 @@ func TestCreate(t *testing.T) {
 	}
 
 	cluster, err := mgr.Create(context.Background(), clusterDef)
-	if err != nil {
-		t.Fatalf("Failed to create cluster: %v", err)
-	}
-
-	if cluster.Name != "new-cluster" {
-		t.Errorf("Expected cluster name new-cluster, got %s", cluster.Name)
-	}
-
-	if cluster.Status != "BUILDING" {
-		t.Errorf("Expected cluster status BUILDING, got %s", cluster.Status)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "new-cluster", cluster.Name)
+	assert.Equal(t, "BUILDING", cluster.Status)
 }
 
 // TestUpdate tests updating an existing cluster
@@ -329,15 +305,12 @@ func TestUpdate(t *testing.T) {
 	}
 
 	err := mgr.Update(context.Background(), clusterDef)
-	if err != nil {
-		t.Fatalf("Failed to update cluster: %v", err)
-	}
+	require.NoError(t, err)
 }
 
 // TestUpdate_NotFound tests updating a non-existent cluster
 func TestUpdate_NotFound(t *testing.T) {
-	mockProv := newMockProvider()
-	mgr := NewManager(mockProv)
+	mgr := NewManager(newMockProvider())
 
 	clusterDef := types.ClusterDefinition{
 		Metadata: types.ClusterMetadata{
@@ -347,9 +320,7 @@ func TestUpdate_NotFound(t *testing.T) {
 	}
 
 	err := mgr.Update(context.Background(), clusterDef)
-	if err == nil {
-		t.Error("Expected error when updating non-existent cluster")
-	}
+	assert.Error(t, err)
 }
 
 // TestDelete tests deleting a cluster
@@ -364,14 +335,8 @@ func TestDelete(t *testing.T) {
 	mgr := NewManager(mockProv)
 
 	err := mgr.Delete(context.Background(), "cluster-1")
-	if err != nil {
-		t.Fatalf("Failed to delete cluster: %v", err)
-	}
-
-	// Verify cluster is gone
-	if _, exists := mockProv.clusters["test-cluster"]; exists {
-		t.Error("Cluster should have been deleted")
-	}
+	require.NoError(t, err)
+	assert.NotContains(t, mockProv.clusters, "test-cluster")
 }
 
 // TestWaitForReady tests waiting for cluster to be ready
@@ -386,59 +351,28 @@ func TestWaitForReady(t *testing.T) {
 	mgr := NewManager(mockProv)
 
 	err := mgr.WaitForReady(context.Background(), "cluster-1")
-	if err != nil {
-		t.Fatalf("Failed to wait for cluster: %v", err)
-	}
-
-	// Verify cluster is now ACTIVE
-	cluster := mockProv.clusters["test-cluster"]
-	if cluster.Status != "ACTIVE" {
-		t.Errorf("Expected cluster status ACTIVE, got %s", cluster.Status)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "ACTIVE", mockProv.clusters["test-cluster"].Status)
 }
 
 // TestFindOrphaned tests finding orphaned clusters
 func TestFindOrphaned(t *testing.T) {
 	mockProv := newMockProvider()
-	mockProv.clusters["hyve-managed"] = &provider.Cluster{
-		ID:     "cluster-1",
-		Name:   "hyve-managed",
-		Status: "ACTIVE",
-	}
-	mockProv.clusters["hyve-orphaned"] = &provider.Cluster{
-		ID:     "cluster-2",
-		Name:   "hyve-orphaned",
-		Status: "ACTIVE",
-	}
-	mockProv.clusters["unmanaged-cluster"] = &provider.Cluster{
-		ID:     "cluster-3",
-		Name:   "unmanaged-cluster",
-		Status: "ACTIVE",
-	}
+	mockProv.clusters["hyve-managed"] = &provider.Cluster{ID: "cluster-1", Name: "hyve-managed", Status: "ACTIVE"}
+	mockProv.clusters["hyve-orphaned"] = &provider.Cluster{ID: "cluster-2", Name: "hyve-orphaned", Status: "ACTIVE"}
+	mockProv.clusters["unmanaged-cluster"] = &provider.Cluster{ID: "cluster-3", Name: "unmanaged-cluster", Status: "ACTIVE"}
 
 	mgr := NewManager(mockProv)
 
 	desiredClusters := []types.ClusterDefinition{
-		{
-			Metadata: types.ClusterMetadata{
-				Name: "hyve-managed",
-			},
-		},
+		{Metadata: types.ClusterMetadata{Name: "hyve-managed"}},
 	}
 
 	orphaned, err := mgr.FindOrphaned(context.Background(), desiredClusters)
-	if err != nil {
-		t.Fatalf("Failed to find orphaned clusters: %v", err)
-	}
-
+	require.NoError(t, err)
 	// Should find hyve-orphaned but not unmanaged-cluster
-	if len(orphaned) != 1 {
-		t.Errorf("Expected 1 orphaned cluster, got %d", len(orphaned))
-	}
-
-	if len(orphaned) > 0 && orphaned[0].Name != "hyve-orphaned" {
-		t.Errorf("Expected orphaned cluster hyve-orphaned, got %s", orphaned[0].Name)
-	}
+	require.Len(t, orphaned, 1)
+	assert.Equal(t, "hyve-orphaned", orphaned[0].Name)
 }
 
 // TestShouldManage tests the ShouldManage logic
@@ -450,34 +384,15 @@ func TestShouldManage(t *testing.T) {
 		cluster  provider.Cluster
 		expected bool
 	}{
-		{
-			name:     "hyve prefix",
-			cluster:  provider.Cluster{Name: "hyve-test-cluster"},
-			expected: true,
-		},
-		{
-			name:     "civo-deploy prefix",
-			cluster:  provider.Cluster{Name: "civo-deploy-test"},
-			expected: true,
-		},
-		{
-			name:     "unmanaged cluster",
-			cluster:  provider.Cluster{Name: "my-custom-cluster"},
-			expected: false,
-		},
-		{
-			name:     "empty name",
-			cluster:  provider.Cluster{Name: ""},
-			expected: false,
-		},
+		{"hyve prefix", provider.Cluster{Name: "hyve-test-cluster"}, true},
+		{"civo-deploy prefix", provider.Cluster{Name: "civo-deploy-test"}, true},
+		{"unmanaged cluster", provider.Cluster{Name: "my-custom-cluster"}, false},
+		{"empty name", provider.Cluster{Name: ""}, false},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			result := mgr.ShouldManage(tc.cluster)
-			if result != tc.expected {
-				t.Errorf("Expected ShouldManage to return %v for %s, got %v", tc.expected, tc.cluster.Name, result)
-			}
+			assert.Equal(t, tc.expected, mgr.ShouldManage(tc.cluster))
 		})
 	}
 }
@@ -496,31 +411,16 @@ func TestGetClusterInfo(t *testing.T) {
 	mgr := NewManager(mockProv)
 
 	info, err := mgr.GetClusterInfo(context.Background(), "test-cluster")
-	if err != nil {
-		t.Fatalf("Failed to get cluster info: %v", err)
-	}
-
-	if info.Name != "test-cluster" {
-		t.Errorf("Expected name test-cluster, got %s", info.Name)
-	}
-	if info.IPAddress != "1.2.3.4" {
-		t.Errorf("Expected IP 1.2.3.4, got %s", info.IPAddress)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "test-cluster", info.Name)
+	assert.Equal(t, "1.2.3.4", info.IPAddress)
 }
 
 // TestCleanupOrphaned tests cleaning up orphaned clusters
 func TestCleanupOrphaned(t *testing.T) {
 	mockProv := newMockProvider()
-	mockProv.clusters["orphan1"] = &provider.Cluster{
-		ID:     "cluster-1",
-		Name:   "orphan1",
-		Status: "ACTIVE",
-	}
-	mockProv.clusters["orphan2"] = &provider.Cluster{
-		ID:     "cluster-2",
-		Name:   "orphan2",
-		Status: "ACTIVE",
-	}
+	mockProv.clusters["orphan1"] = &provider.Cluster{ID: "cluster-1", Name: "orphan1", Status: "ACTIVE"}
+	mockProv.clusters["orphan2"] = &provider.Cluster{ID: "cluster-2", Name: "orphan2", Status: "ACTIVE"}
 
 	mgr := NewManager(mockProv)
 
@@ -530,14 +430,8 @@ func TestCleanupOrphaned(t *testing.T) {
 	}
 
 	err := mgr.CleanupOrphaned(context.Background(), orphaned)
-	if err != nil {
-		t.Fatalf("Failed to cleanup orphaned clusters: %v", err)
-	}
-
-	// Verify clusters were deleted
-	if len(mockProv.clusters) != 0 {
-		t.Errorf("Expected all orphaned clusters to be deleted, %d remaining", len(mockProv.clusters))
-	}
+	require.NoError(t, err)
+	assert.Empty(t, mockProv.clusters)
 }
 
 // TestErrorHandling tests error handling in various operations
@@ -548,7 +442,6 @@ func TestErrorHandling(t *testing.T) {
 
 	mgr := NewManager(mockProv)
 
-	// Test Create error
 	clusterDef := types.ClusterDefinition{
 		Metadata: types.ClusterMetadata{
 			Name:   "test-cluster",
@@ -557,27 +450,16 @@ func TestErrorHandling(t *testing.T) {
 	}
 
 	_, err := mgr.Create(context.Background(), clusterDef)
-	if err == nil {
-		t.Error("Expected error from Create")
-	}
+	assert.Error(t, err)
 
-	// Test Delete error
 	err = mgr.Delete(context.Background(), "cluster-1")
-	if err == nil {
-		t.Error("Expected error from Delete")
-	}
+	assert.Error(t, err)
 
-	// Test WaitForReady error
 	err = mgr.WaitForReady(context.Background(), "cluster-1")
-	if err == nil {
-		t.Error("Expected error from WaitForReady")
-	}
+	assert.Error(t, err)
 
-	// Test GetClusterInfo error
 	_, err = mgr.GetClusterInfo(context.Background(), "test-cluster")
-	if err == nil {
-		t.Error("Expected error from GetClusterInfo")
-	}
+	assert.Error(t, err)
 }
 
 // TestStrictDeleteOrphans tests that StrictDeleteOrphans deletes all cloud clusters
@@ -595,18 +477,10 @@ func TestStrictDeleteOrphans(t *testing.T) {
 	}
 
 	err := mgr.StrictDeleteOrphans(context.Background(), desiredClusters)
-	if err != nil {
-		t.Fatalf("StrictDeleteOrphans returned error: %v", err)
-	}
+	require.NoError(t, err)
 
 	// hyve-managed should survive; hyve-orphaned and unmanaged-cluster should be gone.
-	if _, ok := mockProv.clusters["hyve-managed"]; !ok {
-		t.Error("Expected hyve-managed to still exist")
-	}
-	if _, ok := mockProv.clusters["hyve-orphaned"]; ok {
-		t.Error("Expected hyve-orphaned to be deleted")
-	}
-	if _, ok := mockProv.clusters["unmanaged-cluster"]; ok {
-		t.Error("Expected unmanaged-cluster to be deleted")
-	}
+	assert.Contains(t, mockProv.clusters, "hyve-managed")
+	assert.NotContains(t, mockProv.clusters, "hyve-orphaned")
+	assert.NotContains(t, mockProv.clusters, "unmanaged-cluster")
 }

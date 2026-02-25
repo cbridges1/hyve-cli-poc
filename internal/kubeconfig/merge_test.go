@@ -3,8 +3,10 @@ package kubeconfig
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestMergeKubeconfigs tests merging two kubeconfig YAML strings
@@ -45,38 +47,15 @@ users:
 `
 
 	merged, err := MergeKubeconfigs(existingConfig, newConfig)
-	if err != nil {
-		t.Fatalf("Failed to merge kubeconfigs: %v", err)
-	}
+	require.NoError(t, err)
 
-	// Verify merged config contains both clusters
-	if !strings.Contains(merged, "existing-cluster") {
-		t.Error("Merged config should contain existing-cluster")
-	}
-	if !strings.Contains(merged, "new-cluster") {
-		t.Error("Merged config should contain new-cluster")
-	}
-
-	// Verify merged config contains both contexts
-	if !strings.Contains(merged, "existing-context") {
-		t.Error("Merged config should contain existing-context")
-	}
-	if !strings.Contains(merged, "new-context") {
-		t.Error("Merged config should contain new-context")
-	}
-
-	// Verify merged config contains both users
-	if !strings.Contains(merged, "existing-user") {
-		t.Error("Merged config should contain existing-user")
-	}
-	if !strings.Contains(merged, "new-user") {
-		t.Error("Merged config should contain new-user")
-	}
-
-	// Verify current-context is preserved
-	if !strings.Contains(merged, "current-context: existing-context") {
-		t.Error("Merged config should preserve current-context")
-	}
+	assert.Contains(t, merged, "existing-cluster")
+	assert.Contains(t, merged, "new-cluster")
+	assert.Contains(t, merged, "existing-context")
+	assert.Contains(t, merged, "new-context")
+	assert.Contains(t, merged, "existing-user")
+	assert.Contains(t, merged, "new-user")
+	assert.Contains(t, merged, "current-context: existing-context")
 }
 
 // TestMergeKubeconfigsReplace tests that new configs replace old ones with same name
@@ -116,29 +95,17 @@ users:
 `
 
 	merged, err := MergeKubeconfigs(existingConfig, newConfig)
-	if err != nil {
-		t.Fatalf("Failed to merge kubeconfigs: %v", err)
-	}
+	require.NoError(t, err)
 
-	// Verify new values replaced old values
-	if strings.Contains(merged, "old.example.com") {
-		t.Error("Merged config should not contain old server URL")
-	}
-	if !strings.Contains(merged, "new.example.com") {
-		t.Error("Merged config should contain new server URL")
-	}
-	if strings.Contains(merged, "old-token") {
-		t.Error("Merged config should not contain old token")
-	}
-	if !strings.Contains(merged, "new-token") {
-		t.Error("Merged config should contain new token")
-	}
+	assert.NotContains(t, merged, "old.example.com")
+	assert.Contains(t, merged, "new.example.com")
+	assert.NotContains(t, merged, "old-token")
+	assert.Contains(t, merged, "new-token")
 }
 
 // TestRemoveKubeconfigContext tests removing a context from kubeconfig
 func TestRemoveKubeconfigContext(t *testing.T) {
-	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, "config")
+	configPath := filepath.Join(t.TempDir(), "config")
 
 	originalConfig := `apiVersion: v1
 kind: Config
@@ -168,57 +135,28 @@ users:
     token: keep-token
 `
 
-	// Write original config
 	err := os.WriteFile(configPath, []byte(originalConfig), 0600)
-	if err != nil {
-		t.Fatalf("Failed to write config file: %v", err)
-	}
+	require.NoError(t, err)
 
-	// Remove context
 	err = RemoveKubeconfigContext(originalConfig, "context-to-remove", configPath)
-	if err != nil {
-		t.Fatalf("Failed to remove context: %v", err)
-	}
+	require.NoError(t, err)
 
-	// Read modified config
 	modifiedData, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("Failed to read modified config: %v", err)
-	}
+	require.NoError(t, err)
 	modified := string(modifiedData)
 
-	// Verify removed items are gone
-	if strings.Contains(modified, "context-to-remove") {
-		t.Error("Modified config should not contain removed context")
-	}
-	if strings.Contains(modified, "cluster-to-remove") {
-		t.Error("Modified config should not contain removed cluster")
-	}
-	if strings.Contains(modified, "user-to-remove") {
-		t.Error("Modified config should not contain removed user")
-	}
-
-	// Verify kept items remain
-	if !strings.Contains(modified, "context-to-keep") {
-		t.Error("Modified config should contain kept context")
-	}
-	if !strings.Contains(modified, "cluster-to-keep") {
-		t.Error("Modified config should contain kept cluster")
-	}
-	if !strings.Contains(modified, "user-to-keep") {
-		t.Error("Modified config should contain kept user")
-	}
-
-	// Verify current-context is cleared
-	if strings.Contains(modified, "current-context: context-to-remove") {
-		t.Error("Current-context should be cleared when removing active context")
-	}
+	assert.NotContains(t, modified, "context-to-remove")
+	assert.NotContains(t, modified, "cluster-to-remove")
+	assert.NotContains(t, modified, "user-to-remove")
+	assert.Contains(t, modified, "context-to-keep")
+	assert.Contains(t, modified, "cluster-to-keep")
+	assert.Contains(t, modified, "user-to-keep")
+	assert.NotContains(t, modified, "current-context: context-to-remove")
 }
 
 // TestRemoveNonExistentContext tests removing a context that doesn't exist
 func TestRemoveNonExistentContext(t *testing.T) {
-	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, "config")
+	configPath := filepath.Join(t.TempDir(), "config")
 
 	originalConfig := `apiVersion: v1
 kind: Config
@@ -237,35 +175,19 @@ users:
     token: my-token
 `
 
-	// Write original config
 	err := os.WriteFile(configPath, []byte(originalConfig), 0600)
-	if err != nil {
-		t.Fatalf("Failed to write config file: %v", err)
-	}
+	require.NoError(t, err)
 
-	// Try to remove non-existent context (should not error)
 	err = RemoveKubeconfigContext(originalConfig, "non-existent", configPath)
-	if err != nil {
-		t.Fatalf("Should not error when removing non-existent context: %v", err)
-	}
+	require.NoError(t, err)
 
-	// Verify config is unchanged
 	modifiedData, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("Failed to read modified config: %v", err)
-	}
+	require.NoError(t, err)
 	modified := string(modifiedData)
 
-	// Verify all original items remain
-	if !strings.Contains(modified, "my-cluster") {
-		t.Error("Original cluster should remain")
-	}
-	if !strings.Contains(modified, "my-context") {
-		t.Error("Original context should remain")
-	}
-	if !strings.Contains(modified, "my-user") {
-		t.Error("Original user should remain")
-	}
+	assert.Contains(t, modified, "my-cluster")
+	assert.Contains(t, modified, "my-context")
+	assert.Contains(t, modified, "my-user")
 }
 
 // TestMergeEmptyExistingConfig tests merging when existing config is empty
@@ -295,20 +217,11 @@ users:
 `
 
 	merged, err := MergeKubeconfigs(emptyConfig, newConfig)
-	if err != nil {
-		t.Fatalf("Failed to merge kubeconfigs: %v", err)
-	}
+	require.NoError(t, err)
 
-	// Verify new config items are in merged config
-	if !strings.Contains(merged, "new-cluster") {
-		t.Error("Merged config should contain new-cluster")
-	}
-	if !strings.Contains(merged, "new-context") {
-		t.Error("Merged config should contain new-context")
-	}
-	if !strings.Contains(merged, "new-user") {
-		t.Error("Merged config should contain new-user")
-	}
+	assert.Contains(t, merged, "new-cluster")
+	assert.Contains(t, merged, "new-context")
+	assert.Contains(t, merged, "new-user")
 }
 
 // TestMergeInvalidYAML tests error handling for invalid YAML
@@ -317,20 +230,13 @@ func TestMergeInvalidYAML(t *testing.T) {
 kind: Config
 clusters: []
 `
-
 	invalidConfig := `this is not valid yaml: {[}`
 
-	// Test invalid existing config
 	_, err := MergeKubeconfigs(invalidConfig, validConfig)
-	if err == nil {
-		t.Error("Expected error when merging with invalid existing config")
-	}
+	assert.Error(t, err, "Expected error when merging with invalid existing config")
 
-	// Test invalid new config
 	_, err = MergeKubeconfigs(validConfig, invalidConfig)
-	if err == nil {
-		t.Error("Expected error when merging with invalid new config")
-	}
+	assert.Error(t, err, "Expected error when merging with invalid new config")
 }
 
 // TestRemoveItemByName tests the removeItemByName helper function
@@ -341,31 +247,18 @@ func TestRemoveItemByName(t *testing.T) {
 		{"name": "item3", "data": "value3"},
 	}
 
-	// Remove middle item
 	result := removeItemByName(items, "item2")
+	require.Len(t, result, 2)
 
-	if len(result) != 2 {
-		t.Errorf("Expected 2 items after removal, got %d", len(result))
-	}
-
-	// Verify correct items remain
-	foundItem1 := false
-	foundItem3 := false
+	names := make([]string, 0, len(result))
 	for _, item := range result {
-		if item["name"] == "item1" {
-			foundItem1 = true
-		}
-		if item["name"] == "item3" {
-			foundItem3 = true
-		}
-		if item["name"] == "item2" {
-			t.Error("Removed item should not be in result")
+		if name, ok := item["name"].(string); ok {
+			names = append(names, name)
 		}
 	}
-
-	if !foundItem1 || !foundItem3 {
-		t.Error("Expected items not found in result")
-	}
+	assert.Contains(t, names, "item1")
+	assert.Contains(t, names, "item3")
+	assert.NotContains(t, names, "item2")
 }
 
 // TestMergeItems tests the mergeItems helper function
@@ -375,19 +268,14 @@ func TestMergeItems(t *testing.T) {
 		{"name": "item2", "data": "value2"},
 	}
 
-	new := []map[string]interface{}{
+	newItems := []map[string]interface{}{
 		{"name": "item1", "data": "new-value1"}, // Update existing
 		{"name": "item3", "data": "value3"},     // Add new
 	}
 
-	result := mergeItems(existing, new)
+	result := mergeItems(existing, newItems)
+	require.Len(t, result, 3)
 
-	// Should have 3 items (item1 updated, item2 kept, item3 added)
-	if len(result) != 3 {
-		t.Errorf("Expected 3 items after merge, got %d", len(result))
-	}
-
-	// Verify items
 	itemMap := make(map[string]string)
 	for _, item := range result {
 		if name, ok := item["name"].(string); ok {
@@ -397,26 +285,14 @@ func TestMergeItems(t *testing.T) {
 		}
 	}
 
-	// Check item1 was updated
-	if itemMap["item1"] != "new-value1" {
-		t.Errorf("Expected item1 to be updated to new-value1, got %s", itemMap["item1"])
-	}
-
-	// Check item2 was kept
-	if itemMap["item2"] != "value2" {
-		t.Errorf("Expected item2 to remain value2, got %s", itemMap["item2"])
-	}
-
-	// Check item3 was added
-	if itemMap["item3"] != "value3" {
-		t.Errorf("Expected item3 to be value3, got %s", itemMap["item3"])
-	}
+	assert.Equal(t, "new-value1", itemMap["item1"])
+	assert.Equal(t, "value2", itemMap["item2"])
+	assert.Equal(t, "value3", itemMap["item3"])
 }
 
 // TestMultipleContextRemoval tests removing multiple contexts sequentially
 func TestMultipleContextRemoval(t *testing.T) {
-	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, "config")
+	configPath := filepath.Join(t.TempDir(), "config")
 
 	originalConfig := `apiVersion: v1
 kind: Config
@@ -455,37 +331,23 @@ users:
     token: token3
 `
 
-	// Write original config
 	err := os.WriteFile(configPath, []byte(originalConfig), 0600)
-	if err != nil {
-		t.Fatalf("Failed to write config file: %v", err)
-	}
+	require.NoError(t, err)
 
-	// Remove first context
 	err = RemoveKubeconfigContext(originalConfig, "context1", configPath)
-	if err != nil {
-		t.Fatalf("Failed to remove context1: %v", err)
-	}
+	require.NoError(t, err)
 
-	// Read and remove second context
-	data, _ := os.ReadFile(configPath)
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+
 	err = RemoveKubeconfigContext(string(data), "context2", configPath)
-	if err != nil {
-		t.Fatalf("Failed to remove context2: %v", err)
-	}
+	require.NoError(t, err)
 
-	// Verify final config
 	finalData, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("Failed to read final config: %v", err)
-	}
+	require.NoError(t, err)
 	final := string(finalData)
 
-	// Should only have context3 remaining
-	if strings.Contains(final, "context1") || strings.Contains(final, "context2") {
-		t.Error("Removed contexts should not be in final config")
-	}
-	if !strings.Contains(final, "context3") {
-		t.Error("Context3 should remain in final config")
-	}
+	assert.NotContains(t, final, "context1")
+	assert.NotContains(t, final, "context2")
+	assert.Contains(t, final, "context3")
 }
