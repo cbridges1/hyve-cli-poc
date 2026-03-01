@@ -1,7 +1,7 @@
 package main
 
 import (
-	"civo-cluster-deploy/cmd"
+	"hyve/cmd"
 )
 
 func main() {

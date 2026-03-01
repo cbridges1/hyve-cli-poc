@@ -3,8 +3,8 @@ package ingress
 import (
 	"context"
 
-	"civo-cluster-deploy/internal/provider"
-	"civo-cluster-deploy/internal/types"
+	"hyve/internal/provider"
+	"hyve/internal/types"
 )
 
 // Manager handles ingress operations using a generic provider

@@ -9,7 +9,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"civo-cluster-deploy/internal/types"
+	"hyve/internal/types"
 )
 
 // Manager handles cluster template operations
@@ -154,6 +154,10 @@ func (m *Manager) ConvertToClusterDefinition(template *Template, clusterName str
 				Enabled:      template.Spec.Ingress.Enabled,
 				LoadBalancer: template.Spec.Ingress.LoadBalancer,
 				ChartVersion: template.Spec.Ingress.ChartVersion,
+			},
+			Workflows: types.WorkflowsSpec{
+				OnCreated: template.Spec.Workflows.OnCreated,
+				OnDestroy: template.Spec.Workflows.OnDestroy,
 			},
 		},
 	}

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log"
 
-	"civo-cluster-deploy/internal/provider"
-	"civo-cluster-deploy/internal/types"
+	"hyve/internal/provider"
+	"hyve/internal/types"
 )
 
 // Syncer handles synchronization of kubeconfigs from clusters
@@ -75,12 +75,10 @@ func (s *Syncer) SyncKubeconfigs(ctx context.Context, clusterDefinitions []types
 		successCount++
 	}
 
-	// Clean up orphaned kubeconfigs
+	// Clean up orphaned kubeconfigs (those without corresponding cluster definitions)
 	err := s.manager.CleanupOrphanedKubeconfigs(activeClusterNames)
 	if err != nil {
-		log.Printf("Failed to cleanup orphaned kubeconfigs: %v", err)
-	} else {
-		log.Println("✅ Cleaned up orphaned kubeconfigs")
+		log.Printf("⚠️  Failed to cleanup orphaned kubeconfigs: %v", err)
 	}
 
 	log.Printf("Kubeconfig sync completed: %d/%d clusters synced successfully",

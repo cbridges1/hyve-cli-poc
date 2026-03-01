@@ -15,11 +15,12 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"civo-cluster-deploy/internal/cluster"
-	"civo-cluster-deploy/internal/config"
-	"civo-cluster-deploy/internal/kubeconfig"
-	"civo-cluster-deploy/internal/provider"
-	"civo-cluster-deploy/internal/types"
+	"hyve/internal/cluster"
+	"hyve/internal/config"
+	"hyve/internal/kubeconfig"
+	"hyve/internal/provider"
+	"hyve/internal/repository"
+	"hyve/internal/types"
 )
 
 // Executor handles workflow execution
@@ -30,6 +31,7 @@ type Executor struct {
 	currentCluster    string
 	variables         map[string]string
 	workingDir        string
+	repoName          string
 }
 
 // NewExecutor creates a new workflow executor
@@ -37,8 +39,17 @@ func NewExecutor(manager *Manager, cluster string) (*Executor, error) {
 	var kubeconfigMgr *kubeconfig.Manager
 	var err error
 
+	var repoName string
+	execRepoMgr, repoErr := repository.NewManager()
+	if repoErr == nil {
+		defer execRepoMgr.Close()
+		if currentRepo, err := execRepoMgr.GetCurrentRepository(); err == nil {
+			repoName = strings.TrimSuffix(filepath.Base(currentRepo.RepoURL), ".git")
+		}
+	}
+
 	if cluster != "" {
-		kubeconfigMgr, err = kubeconfig.NewManager(manager.currentRepo.Name)
+		kubeconfigMgr, err = kubeconfig.NewManager(repoName)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create kubeconfig manager: %w", err)
 		}
@@ -49,7 +60,8 @@ func NewExecutor(manager *Manager, cluster string) (*Executor, error) {
 		kubeconfigManager: kubeconfigMgr,
 		currentCluster:    cluster,
 		variables:         make(map[string]string),
-		workingDir:        manager.currentRepo.LocalPath,
+		workingDir:        manager.localPath,
+		repoName:          repoName,
 	}, nil
 }
 
@@ -492,8 +504,8 @@ func (e *Executor) setupEnvironmentVariables(ctx context.Context, workflow *Work
 	e.variables["WORKFLOW_NAME"] = workflow.Metadata.Name
 	e.variables["WORKFLOW_CLUSTER"] = e.currentCluster
 	e.variables["WORKFLOW_EXECUTION_ID"] = e.execution.ID
-	e.variables["HYVE_REPOSITORY"] = e.manager.currentRepo.Name
-	e.variables["HYVE_REPOSITORY_PATH"] = e.manager.currentRepo.LocalPath
+	e.variables["HYVE_REPOSITORY"] = e.repoName
+	e.variables["HYVE_REPOSITORY_PATH"] = e.manager.localPath
 
 	if kubeconfigPath != "" {
 		e.variables["KUBECONFIG"] = kubeconfigPath
@@ -574,7 +586,7 @@ func (e *Executor) exportClusterEnvironmentVariables(ctx context.Context, cluste
 
 // loadClusterDefinition loads a cluster definition from YAML file
 func (e *Executor) loadClusterDefinition(clusterName string) (*types.ClusterDefinition, error) {
-	clustersDir := filepath.Join(e.manager.currentRepo.LocalPath, "clusters")
+	clustersDir := filepath.Join(e.manager.localPath, "clusters")
 	var clusterDef *types.ClusterDefinition
 
 	// Check if clusters directory exists

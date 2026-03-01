@@ -9,11 +9,9 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	"hyve/internal/database"
 )
 
 // Credentials represents stored Git credentials
@@ -34,85 +32,36 @@ func (c *Credentials) GetPassword() (string, error) {
 	return c.manager.decryptPassword(c.EncryptedPassword)
 }
 
-// Manager handles global Git credentials using SQLite
+// Manager handles global Git credentials using the unified database
 type Manager struct {
+	db     *database.DB
 	dbPath string
-	db     *sql.DB
 }
 
 // NewManager creates a new credentials manager
 func NewManager() (*Manager, error) {
-	homeDir, err := os.UserHomeDir()
+	db, err := database.GetDB()
 	if err != nil {
-		homeDir = "."
+		return nil, fmt.Errorf("failed to get database: %w", err)
 	}
 
-	configDir := filepath.Join(homeDir, ".hyve")
-	dbPath := filepath.Join(configDir, "credentials.db")
-
-	// Ensure config directory exists
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create config directory: %w", err)
-	}
-
-	mgr := &Manager{
-		dbPath: dbPath,
-	}
-
-	if err := mgr.initializeDB(); err != nil {
-		return nil, err
-	}
-
-	return mgr, nil
+	return &Manager{
+		db:     db,
+		dbPath: db.Path(),
+	}, nil
 }
 
-// initializeDB creates and initializes the SQLite database
-func (m *Manager) initializeDB() error {
-	db, err := sql.Open("sqlite3", m.dbPath)
-	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
+// NewManagerWithDB creates a new credentials manager with a specific database (for testing)
+func NewManagerWithDB(db *database.DB) *Manager {
+	return &Manager{
+		db:     db,
+		dbPath: db.Path(),
 	}
-
-	m.db = db
-
-	// Create credentials table
-	createTableSQL := `
-	CREATE TABLE IF NOT EXISTS credentials (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		username TEXT NOT NULL,
-		encrypted_password TEXT NOT NULL,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	);
-	`
-
-	if _, err := db.Exec(createTableSQL); err != nil {
-		return fmt.Errorf("failed to create credentials table: %w", err)
-	}
-
-	// Create API tokens table
-	createAPITokensSQL := `
-	CREATE TABLE IF NOT EXISTS api_tokens (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		provider TEXT NOT NULL UNIQUE,
-		encrypted_token TEXT NOT NULL,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	);
-	`
-
-	if _, err := db.Exec(createAPITokensSQL); err != nil {
-		return fmt.Errorf("failed to create api_tokens table: %w", err)
-	}
-
-	return nil
 }
 
-// Close closes the database connection
+// Close is a no-op for credentials manager since the database is managed centrally
 func (m *Manager) Close() error {
-	if m.db != nil {
-		return m.db.Close()
-	}
+	// Database is managed by the database package, don't close it here
 	return nil
 }
 
@@ -133,11 +82,11 @@ func (m *Manager) StoreCredentials(username, password string) (*Credentials, err
 	if existing != nil {
 		// Update existing credentials
 		updateSQL := `
-		UPDATE credentials 
+		UPDATE credentials
 		SET username = ?, encrypted_password = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
 		`
-		_, err := m.db.Exec(updateSQL, username, encryptedPassword, existing.ID)
+		_, err := m.db.Conn().Exec(updateSQL, username, encryptedPassword, existing.ID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to update credentials: %w", err)
 		}
@@ -147,7 +96,7 @@ func (m *Manager) StoreCredentials(username, password string) (*Credentials, err
 		INSERT INTO credentials (username, encrypted_password)
 		VALUES (?, ?)
 		`
-		_, err := m.db.Exec(insertSQL, username, encryptedPassword)
+		_, err := m.db.Conn().Exec(insertSQL, username, encryptedPassword)
 		if err != nil {
 			return nil, fmt.Errorf("failed to insert credentials: %w", err)
 		}
@@ -168,7 +117,7 @@ func (m *Manager) GetCredentials() (*Credentials, error) {
 	creds := &Credentials{}
 	var createdAt, updatedAt string
 
-	err := m.db.QueryRow(selectSQL).Scan(&creds.ID, &creds.Username,
+	err := m.db.Conn().QueryRow(selectSQL).Scan(&creds.ID, &creds.Username,
 		&creds.EncryptedPassword, &createdAt, &updatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -202,18 +151,18 @@ func (m *Manager) HasCredentials() (bool, error) {
 // ClearCredentials removes all stored credentials
 func (m *Manager) ClearCredentials() error {
 	deleteSQL := `DELETE FROM credentials`
-	_, err := m.db.Exec(deleteSQL)
+	_, err := m.db.Conn().Exec(deleteSQL)
 	if err != nil {
 		return fmt.Errorf("failed to clear credentials: %w", err)
 	}
 	return nil
 }
 
-// getEncryptionKey generates a deterministic encryption key based on database path
+// getEncryptionKey generates a deterministic encryption key
 func (m *Manager) getEncryptionKey() []byte {
-	// Use database path for key derivation
-	// Note: Hostname is intentionally excluded to make the database portable across machines
-	keyMaterial := m.dbPath
+	// Use a fixed key material for consistent encryption across database migrations
+	// Note: This is portable across machines and database locations
+	keyMaterial := "hyve-credentials-v1"
 	hash := sha256.Sum256([]byte(keyMaterial))
 	return hash[:]
 }
@@ -353,7 +302,7 @@ func (m *Manager) MigrateEncryption(oldHostname string) error {
 	SET encrypted_password = ?, updated_at = CURRENT_TIMESTAMP
 	WHERE id = ?
 	`
-	_, err = m.db.Exec(updateSQL, newEncrypted, creds.ID)
+	_, err = m.db.Conn().Exec(updateSQL, newEncrypted, creds.ID)
 	if err != nil {
 		return fmt.Errorf("failed to update credentials: %w", err)
 	}
@@ -361,113 +310,115 @@ func (m *Manager) MigrateEncryption(oldHostname string) error {
 	return nil
 }
 
-// StoreAPIToken stores or updates an API token for a provider (e.g., "civo")
-func (m *Manager) StoreAPIToken(provider, token string) error {
-	if provider == "" || token == "" {
-		return fmt.Errorf("provider and token are required")
+// StoreSecret stores or updates a named secret value with a given type.
+// Use an empty string for secretType when no classification is needed.
+func (m *Manager) StoreSecret(name, secretType, value string) error {
+	if name == "" {
+		return fmt.Errorf("secret name is required")
+	}
+	if value == "" {
+		return fmt.Errorf("secret value is required")
 	}
 
-	// Encrypt the token
-	encryptedToken, err := m.encryptPassword(token)
+	encryptedValue, err := m.encryptPassword(value)
 	if err != nil {
-		return fmt.Errorf("failed to encrypt token: %w", err)
+		return fmt.Errorf("failed to encrypt secret: %w", err)
 	}
 
-	// Try to update existing token first
-	updateSQL := `
-	UPDATE api_tokens
-	SET encrypted_token = ?, updated_at = CURRENT_TIMESTAMP
-	WHERE provider = ?
+	upsertSQL := `
+	INSERT OR REPLACE INTO secrets (name, type, encrypted_value, created_at, updated_at)
+	VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 	`
-	result, err := m.db.Exec(updateSQL, encryptedToken, provider)
+	_, err = m.db.Conn().Exec(upsertSQL, name, secretType, encryptedValue)
 	if err != nil {
-		return fmt.Errorf("failed to update token: %w", err)
-	}
-
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
-		// Insert new token if update didn't affect any rows
-		insertSQL := `
-		INSERT INTO api_tokens (provider, encrypted_token)
-		VALUES (?, ?)
-		`
-		_, err := m.db.Exec(insertSQL, provider, encryptedToken)
-		if err != nil {
-			return fmt.Errorf("failed to insert token: %w", err)
-		}
+		return fmt.Errorf("failed to store secret %q: %w", name, err)
 	}
 
 	return nil
 }
 
-// GetAPIToken retrieves and decrypts an API token for a provider
-func (m *Manager) GetAPIToken(provider string) (string, error) {
-	selectSQL := `
-	SELECT encrypted_token
-	FROM api_tokens
-	WHERE provider = ?
-	LIMIT 1
-	`
+// GetSecret retrieves and decrypts a named secret, optionally filtered by type.
+// Pass an empty string for secretType to match any type.
+func (m *Manager) GetSecret(name, secretType string) (string, error) {
+	var (
+		encryptedValue string
+		err            error
+	)
 
-	var encryptedToken string
-	err := m.db.QueryRow(selectSQL, provider).Scan(&encryptedToken)
+	if secretType == "" {
+		err = m.db.Conn().QueryRow(
+			`SELECT encrypted_value FROM secrets WHERE name = ?`, name,
+		).Scan(&encryptedValue)
+	} else {
+		err = m.db.Conn().QueryRow(
+			`SELECT encrypted_value FROM secrets WHERE name = ? AND type = ?`, name, secretType,
+		).Scan(&encryptedValue)
+	}
+
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return "", nil // No token stored
+			return "", nil
 		}
-		return "", fmt.Errorf("failed to get token: %w", err)
+		return "", fmt.Errorf("failed to get secret %q: %w", name, err)
 	}
 
-	// Decrypt the token
-	token, err := m.decryptPassword(encryptedToken)
+	value, err := m.decryptPassword(encryptedValue)
 	if err != nil {
-		return "", fmt.Errorf("failed to decrypt token: %w", err)
+		return "", fmt.Errorf("failed to decrypt secret: %w", err)
 	}
 
-	return token, nil
+	return value, nil
 }
 
-// HasAPIToken checks if a token is stored for the given provider
-func (m *Manager) HasAPIToken(provider string) (bool, error) {
-	token, err := m.GetAPIToken(provider)
+// HasSecret checks if a named secret is stored, optionally filtered by type.
+// Pass an empty string for secretType to match any type.
+func (m *Manager) HasSecret(name, secretType string) (bool, error) {
+	value, err := m.GetSecret(name, secretType)
 	if err != nil {
 		return false, err
 	}
-	return token != "", nil
+	return value != "", nil
 }
 
-// ClearAPIToken removes the stored API token for a provider
-func (m *Manager) ClearAPIToken(provider string) error {
-	deleteSQL := `DELETE FROM api_tokens WHERE provider = ?`
-	_, err := m.db.Exec(deleteSQL, provider)
+// ClearSecret removes a named secret, optionally filtered by type.
+// Pass an empty string for secretType to delete regardless of type.
+func (m *Manager) ClearSecret(name, secretType string) error {
+	var err error
+	if secretType == "" {
+		_, err = m.db.Conn().Exec(`DELETE FROM secrets WHERE name = ?`, name)
+	} else {
+		_, err = m.db.Conn().Exec(`DELETE FROM secrets WHERE name = ? AND type = ?`, name, secretType)
+	}
 	if err != nil {
-		return fmt.Errorf("failed to clear token: %w", err)
+		return fmt.Errorf("failed to clear secret %q: %w", name, err)
 	}
 	return nil
 }
 
-// ListAPITokens returns a list of providers that have tokens stored
-func (m *Manager) ListAPITokens() ([]string, error) {
-	selectSQL := `
-	SELECT provider
-	FROM api_tokens
-	ORDER BY provider
-	`
+// SecretTypeCivo is the type identifier for Civo API tokens in the secrets table.
+const SecretTypeCivo = "civo"
 
-	rows, err := m.db.Query(selectSQL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list tokens: %w", err)
-	}
-	defer rows.Close()
+// CivoTokenName returns the secrets table name for a Civo organization's token.
+func CivoTokenName(orgName string) string {
+	return orgName + "-token"
+}
 
-	var providers []string
-	for rows.Next() {
-		var provider string
-		if err := rows.Scan(&provider); err != nil {
-			return nil, fmt.Errorf("failed to scan provider: %w", err)
-		}
-		providers = append(providers, provider)
-	}
+// StoreCivoToken stores the Civo API token for the given organization.
+func (m *Manager) StoreCivoToken(orgName, token string) error {
+	return m.StoreSecret(CivoTokenName(orgName), SecretTypeCivo, token)
+}
 
-	return providers, nil
+// GetCivoToken retrieves the Civo API token for the given organization.
+func (m *Manager) GetCivoToken(orgName string) (string, error) {
+	return m.GetSecret(CivoTokenName(orgName), SecretTypeCivo)
+}
+
+// HasCivoToken checks if a Civo token is stored for the given organization.
+func (m *Manager) HasCivoToken(orgName string) (bool, error) {
+	return m.HasSecret(CivoTokenName(orgName), SecretTypeCivo)
+}
+
+// ClearCivoToken removes the Civo API token for the given organization.
+func (m *Manager) ClearCivoToken(orgName string) error {
+	return m.ClearSecret(CivoTokenName(orgName), SecretTypeCivo)
 }

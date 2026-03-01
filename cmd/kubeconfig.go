@@ -5,15 +5,18 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
-	"civo-cluster-deploy/internal/config"
-	"civo-cluster-deploy/internal/credentials"
-	"civo-cluster-deploy/internal/kubeconfig"
-	"civo-cluster-deploy/internal/provider"
-	"civo-cluster-deploy/internal/repository"
-	"civo-cluster-deploy/internal/state"
+	"hyve/internal/config"
+	"hyve/internal/credentials"
+	"hyve/internal/kubeconfig"
+	"hyve/internal/provider"
+	"hyve/internal/providerconfig"
+	"hyve/internal/repository"
+	"hyve/internal/state"
+	"hyve/internal/types"
 )
 
 var kubeconfigCmd = &cobra.Command{
@@ -209,6 +212,77 @@ func createProviderFromCurrentRepo(ctx context.Context) (provider.Provider, erro
 	return prov, nil
 }
 
+// createProviderForCluster creates a provider with the appropriate options for a specific cluster
+func createProviderForCluster(factory *provider.Factory, clusterDef types.ClusterDefinition) (provider.Provider, error) {
+	providerName := clusterDef.Spec.Provider
+	if providerName == "" {
+		providerName = "civo" // default
+	}
+
+	opts := provider.ProviderOptions{
+		Region: clusterDef.Metadata.Region,
+	}
+
+	// Populate AccountName so the factory can resolve named env vars.
+	switch strings.ToLower(providerName) {
+	case "civo":
+		opts.AccountName = clusterDef.Spec.CivoOrganization
+	case "aws":
+		opts.AccountName = clusterDef.Spec.AWSAccount
+	case "gcp":
+		opts.AccountName = clusterDef.Spec.GCPProject
+	case "azure":
+		opts.AccountName = clusterDef.Spec.AzureSubscription
+	}
+
+	// Handle Civo-specific configuration
+	if providerName == "civo" {
+		configMgr := config.NewManager()
+		opts.APIKey = configMgr.GetCivoToken()
+		if opts.APIKey == "" {
+			return nil, fmt.Errorf("CIVO API token not found. Please run 'hyve config set-token civo' or set CIVO_TOKEN environment variable")
+		}
+	}
+
+	// Handle GCP-specific configuration
+	if providerName == "gcp" {
+		if clusterDef.Spec.GCPProjectID != "" {
+			opts.ProjectID = clusterDef.Spec.GCPProjectID
+		} else if clusterDef.Spec.GCPProject != "" {
+			repoMgr, err := repository.NewManager()
+			if err == nil {
+				defer repoMgr.Close()
+				if currentRepo, err := repoMgr.GetCurrentRepository(); err == nil {
+					pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
+					if projectID, err := pcMgr.GetGCPProjectID(clusterDef.Spec.GCPProject); err == nil {
+						opts.ProjectID = projectID
+					}
+				}
+			}
+		}
+	}
+
+	// Handle Azure-specific configuration
+	if providerName == "azure" {
+		if clusterDef.Spec.AzureSubscriptionID != "" {
+			opts.AzureSubscriptionID = clusterDef.Spec.AzureSubscriptionID
+		} else if clusterDef.Spec.AzureSubscription != "" {
+			azRepoMgr, err := repository.NewManager()
+			if err == nil {
+				defer azRepoMgr.Close()
+				if currentRepo, err := azRepoMgr.GetCurrentRepository(); err == nil {
+					pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
+					if subscriptionID, err := pcMgr.GetAzureSubscriptionID(clusterDef.Spec.AzureSubscription); err == nil {
+						opts.AzureSubscriptionID = subscriptionID
+					}
+				}
+			}
+		}
+	}
+
+	return factory.CreateProviderWithOptions(providerName, opts)
+}
+
 func syncKubeconfigs() {
 	ctx := context.Background()
 
@@ -219,12 +293,6 @@ func syncKubeconfigs() {
 	}
 	defer kubeconfigMgr.Close()
 
-	// Create provider
-	prov, err := createProviderFromCurrentRepo(ctx)
-	if err != nil {
-		log.Fatalf("Failed to create provider: %v", err)
-	}
-
 	// Create state manager to load cluster definitions
 	stateMgr, _ := createStateManager(ctx)
 	clusterDefs, err := stateMgr.LoadClusterDefinitions()
@@ -234,14 +302,30 @@ func syncKubeconfigs() {
 
 	log.Printf("📁 Syncing kubeconfigs for repository '%s'", repoName)
 
-	// Create syncer and sync kubeconfigs
-	syncer := kubeconfig.NewSyncer(kubeconfigMgr, prov)
-	err = syncer.SyncKubeconfigs(ctx, clusterDefs)
-	if err != nil {
-		log.Fatalf("Failed to sync kubeconfigs: %v", err)
+	// Create a provider factory for creating per-cluster providers
+	providerFactory := provider.NewFactory()
+	successCount := 0
+
+	// Sync kubeconfigs for each cluster using the appropriate provider
+	for _, clusterDef := range clusterDefs {
+		// Create provider with appropriate options for this cluster
+		prov, err := createProviderForCluster(providerFactory, clusterDef)
+		if err != nil {
+			log.Printf("Failed to create provider for cluster %s: %v", clusterDef.Metadata.Name, err)
+			continue
+		}
+
+		// Create syncer for this cluster
+		syncer := kubeconfig.NewSyncer(kubeconfigMgr, prov)
+		err = syncer.SyncKubeconfigs(ctx, []types.ClusterDefinition{clusterDef})
+		if err != nil {
+			log.Printf("Failed to sync kubeconfig for cluster %s: %v", clusterDef.Metadata.Name, err)
+			continue
+		}
+		successCount++
 	}
 
-	log.Println("✅ Kubeconfig sync completed")
+	log.Printf("✅ Kubeconfig sync completed: %d/%d clusters synced successfully", successCount, len(clusterDefs))
 }
 
 func getKubeconfig(cmd *cobra.Command, clusterName string) {

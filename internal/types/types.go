@@ -7,12 +7,41 @@ type IngressSpec struct {
 	ChartVersion string `yaml:"chartVersion,omitempty"` // Specific helm chart version to install
 }
 
+// WorkflowsSpec defines workflows to run on cluster lifecycle events
+type WorkflowsSpec struct {
+	OnCreated []string `yaml:"onCreated,omitempty"` // Workflows to run after cluster creation
+	OnDestroy []string `yaml:"onDestroy,omitempty"` // Workflows to run before cluster destruction
+}
+
 // ClusterSpec represents the desired cluster configuration
 type ClusterSpec struct {
-	Provider    string      `yaml:"provider"`
-	Nodes       []string    `yaml:"nodes"`
-	ClusterType string      `yaml:"clusterType"`
-	Ingress     IngressSpec `yaml:"ingress"`
+	Provider    string        `yaml:"provider"`
+	Nodes       []string      `yaml:"nodes"`
+	ClusterType string        `yaml:"clusterType"`
+	Ingress     IngressSpec   `yaml:"ingress"`
+	Workflows   WorkflowsSpec `yaml:"workflows,omitempty"`
+
+	// GCP-specific configuration
+	GCPProject   string `yaml:"gcpProject,omitempty"`   // GCP project name alias
+	GCPProjectID string `yaml:"gcpProjectId,omitempty"` // GCP project ID (resolved from alias)
+
+	// AWS-specific configuration
+	AWSAccount     string `yaml:"awsAccount,omitempty"`     // AWS account name alias
+	AWSAccountID   string `yaml:"awsAccountId,omitempty"`   // AWS account ID (resolved from alias)
+	AWSVPCName     string `yaml:"awsVpcName,omitempty"`     // AWS VPC name alias
+	AWSVPCID       string `yaml:"awsVpcId,omitempty"`       // AWS VPC ID (resolved from alias)
+	AWSEKSRole     string `yaml:"awsEksRole,omitempty"`     // AWS EKS role name alias
+	AWSEKSRoleARN  string `yaml:"awsEksRoleArn,omitempty"`  // AWS EKS role ARN (resolved from alias)
+	AWSNodeRole    string `yaml:"awsNodeRole,omitempty"`    // AWS EKS node role name alias
+	AWSNodeRoleARN string `yaml:"awsNodeRoleArn,omitempty"` // AWS EKS node role ARN (resolved from alias)
+
+	// Azure-specific configuration
+	AzureSubscription   string `yaml:"azureSubscription,omitempty"`   // Azure subscription name alias
+	AzureSubscriptionID string `yaml:"azureSubscriptionId,omitempty"` // Azure subscription ID (resolved from alias)
+
+	// Civo-specific configuration
+	CivoOrganization string `yaml:"civoOrganization,omitempty"` // Civo organization name alias
+	CivoOrgID        string `yaml:"civoOrgId,omitempty"`        // Civo organization ID (resolved from alias)
 }
 
 // ClusterMetadata represents cluster metadata

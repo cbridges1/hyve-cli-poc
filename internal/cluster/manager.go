@@ -6,8 +6,8 @@ import (
 	"log"
 	"strings"
 
-	"civo-cluster-deploy/internal/provider"
-	"civo-cluster-deploy/internal/types"
+	"hyve/internal/provider"
+	"hyve/internal/types"
 )
 
 // Manager handles cluster operations using a generic provider
@@ -22,7 +22,7 @@ func NewManager(p provider.Provider) *Manager {
 	}
 }
 
-// DetermineAction decides what action to take based on desired vs actual state
+// DetermineAction decides what action to take based on desired vs actual state.
 func (m *Manager) DetermineAction(ctx context.Context, desired types.ClusterDefinition) types.ReconcileAction {
 	cluster, err := m.provider.FindClusterByName(ctx, desired.Metadata.Name)
 	if err != nil {
@@ -72,6 +72,10 @@ func (m *Manager) Create(ctx context.Context, clusterDef types.ClusterDefinition
 		Region:      clusterDef.Metadata.Region,
 		Nodes:       clusterDef.Spec.Nodes,
 		ClusterType: clusterDef.Spec.ClusterType,
+		// AWS-specific configuration
+		AWSRoleARN:     clusterDef.Spec.AWSEKSRoleARN,
+		AWSNodeRoleARN: clusterDef.Spec.AWSNodeRoleARN,
+		AWSVPCID:       clusterDef.Spec.AWSVPCID,
 	}
 
 	return m.provider.CreateCluster(ctx, config)
@@ -107,7 +111,8 @@ func (m *Manager) WaitForReady(ctx context.Context, clusterID string) error {
 	return m.provider.WaitForClusterReady(ctx, clusterID)
 }
 
-// FindOrphaned finds clusters that exist but are not in the desired state
+// FindOrphaned finds clusters that exist in the cloud but are not in the desired state.
+// Only clusters whose names match the managed prefixes (hyve-, civo-deploy-) are considered.
 func (m *Manager) FindOrphaned(ctx context.Context, desiredClusters []types.ClusterDefinition) ([]*provider.Cluster, error) {
 	allClusters, err := m.provider.ListClusters(ctx)
 	if err != nil {
@@ -127,6 +132,35 @@ func (m *Manager) FindOrphaned(ctx context.Context, desiredClusters []types.Clus
 	}
 
 	return orphaned, nil
+}
+
+// StrictDeleteOrphans lists every cluster from the provider and deletes any whose name
+// is not present in desiredClusters. Unlike FindOrphaned, no name-prefix filter is applied:
+// every cloud cluster not represented in the repository state is removed.
+func (m *Manager) StrictDeleteOrphans(ctx context.Context, desiredClusters []types.ClusterDefinition) error {
+	allClusters, err := m.provider.ListClusters(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list clusters: %w", err)
+	}
+
+	desiredNames := make(map[string]bool)
+	for _, d := range desiredClusters {
+		desiredNames[d.Metadata.Name] = true
+	}
+
+	for _, c := range allClusters {
+		if desiredNames[c.Name] {
+			continue
+		}
+		log.Printf("strict-delete: deleting orphaned cluster %s (ID: %s)", c.Name, c.ID)
+		if err := m.provider.DeleteCluster(ctx, c.ID); err != nil {
+			log.Printf("strict-delete: failed to delete cluster %s: %v", c.Name, err)
+		} else {
+			log.Printf("strict-delete: deleted cluster %s", c.Name)
+		}
+	}
+
+	return nil
 }
 
 // ShouldManage determines if we should manage this cluster

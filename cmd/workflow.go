@@ -12,7 +12,8 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
-	"civo-cluster-deploy/internal/workflow"
+	"hyve/internal/repository"
+	"hyve/internal/workflow"
 )
 
 var workflowCmd = &cobra.Command{
@@ -121,12 +122,25 @@ func init() {
 	workflowCmd.AddCommand(workflowValidateCmd)
 }
 
+func getWorkflowLocalPath() string {
+	repoMgr, err := repository.NewManager()
+	if err != nil {
+		log.Fatalf("Failed to create repository manager: %v", err)
+	}
+	defer repoMgr.Close()
+	currentRepo, err := repoMgr.GetCurrentRepository()
+	if err != nil {
+		log.Fatal("No Git repository configured. Use 'hyve git add' to configure a repository")
+	}
+	return currentRepo.LocalPath
+}
+
 func createWorkflowTemplate(name, description string) {
 	if name == "" {
 		log.Fatal("Workflow name is required when using --template")
 	}
 
-	manager, err := workflow.NewManager()
+	manager, err := workflow.NewManager(getWorkflowLocalPath())
 	if err != nil {
 		log.Fatalf("Failed to create workflow manager: %v", err)
 	}
@@ -144,7 +158,7 @@ func createWorkflowTemplate(name, description string) {
 }
 
 func createWorkflowFromFile(filePath string) {
-	manager, err := workflow.NewManager()
+	manager, err := workflow.NewManager(getWorkflowLocalPath())
 	if err != nil {
 		log.Fatalf("Failed to create workflow manager: %v", err)
 	}
@@ -171,7 +185,7 @@ func createWorkflowFromFile(filePath string) {
 }
 
 func listWorkflows() {
-	manager, err := workflow.NewManager()
+	manager, err := workflow.NewManager(getWorkflowLocalPath())
 	if err != nil {
 		log.Fatalf("Failed to create workflow manager: %v", err)
 	}
@@ -219,7 +233,7 @@ func listWorkflows() {
 }
 
 func showWorkflow(name string) {
-	manager, err := workflow.NewManager()
+	manager, err := workflow.NewManager(getWorkflowLocalPath())
 	if err != nil {
 		log.Fatalf("Failed to create workflow manager: %v", err)
 	}
@@ -285,7 +299,7 @@ func showWorkflow(name string) {
 }
 
 func runWorkflow(name, cluster string, showLogs, showOutput bool) {
-	manager, err := workflow.NewManager()
+	manager, err := workflow.NewManager(getWorkflowLocalPath())
 	if err != nil {
 		log.Fatalf("Failed to create workflow manager: %v", err)
 	}
@@ -336,7 +350,7 @@ func deleteWorkflow(name string, force bool) {
 		}
 	}
 
-	manager, err := workflow.NewManager()
+	manager, err := workflow.NewManager(getWorkflowLocalPath())
 	if err != nil {
 		log.Fatalf("Failed to create workflow manager: %v", err)
 	}
@@ -349,7 +363,7 @@ func deleteWorkflow(name string, force bool) {
 }
 
 func validateWorkflow(name string) {
-	manager, err := workflow.NewManager()
+	manager, err := workflow.NewManager(getWorkflowLocalPath())
 	if err != nil {
 		log.Fatalf("Failed to create workflow manager: %v", err)
 	}

@@ -7,7 +7,8 @@ import (
 	"regexp"
 	"strings"
 
-	"civo-cluster-deploy/internal/credentials"
+	"hyve/internal/context"
+	"hyve/internal/credentials"
 )
 
 // RequirementValidator validates workflow requirements
@@ -98,19 +99,34 @@ func (v *RequirementValidator) validateSecret(secret SecretRequirement) error {
 		return nil // Secret available in environment
 	}
 
-	// If provider specified, check credentials database
-	if secret.Provider != "" {
-		hasToken, err := v.credsMgr.HasAPIToken(secret.Provider)
-		if err != nil {
-			if secret.Required {
-				return fmt.Errorf("error checking secret '%s' for provider '%s': %w", secret.Name, secret.Provider, err)
+	// Handle different providers
+	switch secret.Provider {
+	case "civo":
+		// Civo tokens are stored in our credentials database, keyed by org name
+		orgName := getCivoOrgName()
+		if orgName != "" {
+			hasToken, err := v.credsMgr.HasCivoToken(orgName)
+			if err != nil {
+				if secret.Required {
+					return fmt.Errorf("error checking secret '%s' for provider '%s': %w", secret.Name, secret.Provider, err)
+				}
+				return nil // Non-required secret, ignore errors
 			}
-			return nil // Non-required secret, ignore errors
+			if hasToken {
+				return nil // Secret available in database
+			}
 		}
 
-		if hasToken {
-			return nil // Secret available in database
-		}
+	case "aws", "gcp", "azure":
+		// These providers use native CLI authentication
+		// We can't easily check if they're authenticated here, so we skip validation
+		// Authentication will be validated when the provider is actually used
+		return nil
+
+	default:
+		// Unknown provider or no provider specified
+		// If no provider is specified, we can only check environment variable (already done above)
+		// For unknown providers, we fall through to the "not found" logic
 	}
 
 	// Secret not found
@@ -120,10 +136,17 @@ func (v *RequirementValidator) validateSecret(secret SecretRequirement) error {
 			msg = fmt.Sprintf("%s (%s)", msg, secret.Description)
 		}
 
-		// Add helpful suggestions
+		// Add helpful suggestions based on provider
 		suggestions := []string{}
-		if secret.Provider != "" {
-			suggestions = append(suggestions, fmt.Sprintf("hyve config set-token %s", secret.Provider))
+		switch secret.Provider {
+		case "civo":
+			suggestions = append(suggestions, "hyve config civo set-token")
+		case "aws":
+			suggestions = append(suggestions, "aws configure")
+		case "gcp":
+			suggestions = append(suggestions, "gcloud auth application-default login")
+		case "azure":
+			suggestions = append(suggestions, "az login")
 		}
 		suggestions = append(suggestions, fmt.Sprintf("export %s=your-secret", secret.Name))
 
@@ -206,14 +229,20 @@ func (v *RequirementValidator) LoadSecretsIntoEnvironment(requirements *Workflow
 			continue
 		}
 
-		// Try to load from database if provider specified
-		if secret.Provider != "" {
-			token, err := v.credsMgr.GetAPIToken(secret.Provider)
-			if err != nil {
-				if secret.Required {
-					return fmt.Errorf("failed to load secret '%s' from provider '%s': %w", secret.Name, secret.Provider, err)
+		// Only Civo stores credentials in our database
+		// AWS, GCP, Azure use native CLI authentication
+		if secret.Provider == "civo" {
+			orgName := getCivoOrgName()
+			var token string
+			var err error
+			if orgName != "" {
+				token, err = v.credsMgr.GetCivoToken(orgName)
+				if err != nil {
+					if secret.Required {
+						return fmt.Errorf("failed to load secret '%s' from Civo credentials: %w", secret.Name, err)
+					}
+					continue // Skip non-required secrets on error
 				}
-				continue // Skip non-required secrets on error
 			}
 
 			if token != "" {
@@ -223,7 +252,17 @@ func (v *RequirementValidator) LoadSecretsIntoEnvironment(requirements *Workflow
 				}
 			}
 		}
+		// For other providers (AWS, GCP, Azure), their SDKs handle auth automatically
 	}
 
 	return nil
+}
+
+// getCivoOrgName returns the current Civo organization name from context
+func getCivoOrgName() string {
+	ctxMgr, err := context.NewManager()
+	if err != nil {
+		return ""
+	}
+	return ctxMgr.GetCivoOrganization()
 }

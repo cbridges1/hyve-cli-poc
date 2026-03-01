@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
-
-	"civo-cluster-deploy/internal/repository"
 )
 
 const (
@@ -22,29 +20,21 @@ const (
 
 // Manager handles workflow operations
 type Manager struct {
-	repositoryManager *repository.Manager
-	currentRepo       *repository.Repository
-	workflowsPath     string
+	workflowsPath string
+	localPath     string
 }
 
-// NewManager creates a new workflow manager
-func NewManager() (*Manager, error) {
-	repoMgr, err := repository.NewManager()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create repository manager: %w", err)
+// NewManager creates a new workflow manager with the given repository local path
+func NewManager(localPath string) (*Manager, error) {
+	if localPath == "" {
+		return nil, fmt.Errorf("local path is required")
 	}
 
-	currentRepo, err := repoMgr.GetCurrentRepository()
-	if err != nil {
-		return nil, fmt.Errorf("no current repository configured: %w", err)
-	}
-
-	workflowsPath := filepath.Join(currentRepo.LocalPath, WorkflowsDir)
+	workflowsPath := filepath.Join(localPath, WorkflowsDir)
 
 	return &Manager{
-		repositoryManager: repoMgr,
-		currentRepo:       currentRepo,
-		workflowsPath:     workflowsPath,
+		workflowsPath: workflowsPath,
+		localPath:     localPath,
 	}, nil
 }
 

@@ -9,12 +9,10 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
-	"strings"
+	"log"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	"hyve/internal/database"
 )
 
 // Kubeconfig represents stored kubeconfig data
@@ -36,74 +34,39 @@ func (k *Kubeconfig) GetConfig() (string, error) {
 	return k.manager.decryptConfig(k.EncryptedConfig)
 }
 
-// Manager handles kubeconfig storage using SQLite with encryption
+// Manager handles kubeconfig storage using the unified database with encryption
 type Manager struct {
+	db             *database.DB
 	dbPath         string
-	db             *sql.DB
 	repositoryName string
 }
 
 // NewManager creates a new kubeconfig manager for a specific repository
 func NewManager(repositoryName string) (*Manager, error) {
-	homeDir, err := os.UserHomeDir()
+	db, err := database.GetDB()
 	if err != nil {
-		homeDir = "."
+		return nil, fmt.Errorf("failed to get database: %w", err)
 	}
 
-	configDir := filepath.Join(homeDir, ".hyve")
-	dbPath := filepath.Join(configDir, "kubeconfigs.db")
+	return &Manager{
+		db:             db,
+		dbPath:         db.Path(),
+		repositoryName: repositoryName,
+	}, nil
+}
 
-	// Ensure config directory exists
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create config directory: %w", err)
-	}
-
-	mgr := &Manager{
-		dbPath:         dbPath,
+// NewManagerWithDB creates a new kubeconfig manager with a specific database (for testing)
+func NewManagerWithDB(db *database.DB, repositoryName string) *Manager {
+	return &Manager{
+		db:             db,
+		dbPath:         db.Path(),
 		repositoryName: repositoryName,
 	}
-
-	if err := mgr.initializeDB(); err != nil {
-		return nil, err
-	}
-
-	return mgr, nil
 }
 
-// initializeDB creates and initializes the SQLite database
-func (m *Manager) initializeDB() error {
-	db, err := sql.Open("sqlite3", m.dbPath)
-	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
-	}
-
-	m.db = db
-
-	// Create kubeconfigs table
-	createTableSQL := `
-	CREATE TABLE IF NOT EXISTS kubeconfigs (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		cluster_name TEXT NOT NULL,
-		repository_name TEXT NOT NULL,
-		encrypted_config TEXT NOT NULL,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		UNIQUE(cluster_name, repository_name)
-	);
-	`
-
-	if _, err := db.Exec(createTableSQL); err != nil {
-		return fmt.Errorf("failed to create tables: %w", err)
-	}
-
-	return nil
-}
-
-// Close closes the database connection
+// Close is a no-op for kubeconfig manager since the database is managed centrally
 func (m *Manager) Close() error {
-	if m.db != nil {
-		return m.db.Close()
-	}
+	// Database is managed by the database package, don't close it here
 	return nil
 }
 
@@ -124,11 +87,11 @@ func (m *Manager) StoreKubeconfig(clusterName, kubeconfig string) (*Kubeconfig, 
 	if existing != nil {
 		// Update existing kubeconfig
 		updateSQL := `
-		UPDATE kubeconfigs 
+		UPDATE kubeconfigs
 		SET encrypted_config = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE cluster_name = ? AND repository_name = ?
 		`
-		_, err := m.db.Exec(updateSQL, encryptedConfig, clusterName, m.repositoryName)
+		_, err := m.db.Conn().Exec(updateSQL, encryptedConfig, clusterName, m.repositoryName)
 		if err != nil {
 			return nil, fmt.Errorf("failed to update kubeconfig: %w", err)
 		}
@@ -138,7 +101,7 @@ func (m *Manager) StoreKubeconfig(clusterName, kubeconfig string) (*Kubeconfig, 
 		INSERT INTO kubeconfigs (cluster_name, repository_name, encrypted_config)
 		VALUES (?, ?, ?)
 		`
-		_, err := m.db.Exec(insertSQL, clusterName, m.repositoryName, encryptedConfig)
+		_, err := m.db.Conn().Exec(insertSQL, clusterName, m.repositoryName, encryptedConfig)
 		if err != nil {
 			return nil, fmt.Errorf("failed to insert kubeconfig: %w", err)
 		}
@@ -158,7 +121,7 @@ func (m *Manager) GetKubeconfig(clusterName string) (*Kubeconfig, error) {
 	kc := &Kubeconfig{}
 	var createdAt, updatedAt string
 
-	err := m.db.QueryRow(selectSQL, clusterName, m.repositoryName).Scan(&kc.ID, &kc.ClusterName,
+	err := m.db.Conn().QueryRow(selectSQL, clusterName, m.repositoryName).Scan(&kc.ID, &kc.ClusterName,
 		&kc.RepositoryName, &kc.EncryptedConfig, &createdAt, &updatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -189,7 +152,7 @@ func (m *Manager) ListKubeconfigs() ([]*Kubeconfig, error) {
 	ORDER BY cluster_name
 	`
 
-	rows, err := m.db.Query(selectSQL, m.repositoryName)
+	rows, err := m.db.Conn().Query(selectSQL, m.repositoryName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list kubeconfigs: %w", err)
 	}
@@ -225,7 +188,7 @@ func (m *Manager) ListKubeconfigs() ([]*Kubeconfig, error) {
 // DeleteKubeconfig removes a kubeconfig for a specific cluster
 func (m *Manager) DeleteKubeconfig(clusterName string) error {
 	deleteSQL := `DELETE FROM kubeconfigs WHERE cluster_name = ? AND repository_name = ?`
-	_, err := m.db.Exec(deleteSQL, clusterName, m.repositoryName)
+	_, err := m.db.Conn().Exec(deleteSQL, clusterName, m.repositoryName)
 	if err != nil {
 		return fmt.Errorf("failed to delete kubeconfig: %w", err)
 	}
@@ -234,45 +197,78 @@ func (m *Manager) DeleteKubeconfig(clusterName string) error {
 
 // CleanupOrphanedKubeconfigs removes kubeconfigs that don't have corresponding cluster definitions
 func (m *Manager) CleanupOrphanedKubeconfigs(activeClusterNames []string) error {
+	// First, find orphaned kubeconfigs to log what will be removed
+	var orphanedNames []string
+
 	if len(activeClusterNames) == 0 {
-		// If no active clusters, remove all kubeconfigs for this repository
-		deleteSQL := `DELETE FROM kubeconfigs WHERE repository_name = ?`
-		_, err := m.db.Exec(deleteSQL, m.repositoryName)
+		// If no active clusters, all kubeconfigs are orphaned
+		rows, err := m.db.Conn().Query(`SELECT cluster_name FROM kubeconfigs WHERE repository_name = ?`, m.repositoryName)
 		if err != nil {
-			return fmt.Errorf("failed to cleanup all kubeconfigs: %w", err)
+			return fmt.Errorf("failed to query kubeconfigs: %w", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err == nil {
+				orphanedNames = append(orphanedNames, name)
+			}
+		}
+
+		if len(orphanedNames) > 0 {
+			deleteSQL := `DELETE FROM kubeconfigs WHERE repository_name = ?`
+			_, err := m.db.Conn().Exec(deleteSQL, m.repositoryName)
+			if err != nil {
+				return fmt.Errorf("failed to cleanup all kubeconfigs: %w", err)
+			}
+			for _, name := range orphanedNames {
+				log.Printf("🗑️  Removed orphaned kubeconfig: %s", name)
+			}
 		}
 		return nil
 	}
 
-	// Create placeholders for the IN clause
-	placeholders := make([]string, len(activeClusterNames))
-	args := make([]interface{}, len(activeClusterNames)+1)
-	args[0] = m.repositoryName
-
-	for i, name := range activeClusterNames {
-		placeholders[i] = "?"
-		args[i+1] = name
+	// Build a map for quick lookup of active cluster names
+	activeSet := make(map[string]bool)
+	for _, name := range activeClusterNames {
+		activeSet[name] = true
 	}
 
-	deleteSQL := fmt.Sprintf(`
-		DELETE FROM kubeconfigs 
-		WHERE repository_name = ? 
-		AND cluster_name NOT IN (%s)
-	`, "?"+strings.Join(placeholders, ",?"))
-
-	_, err := m.db.Exec(deleteSQL, args...)
+	// Query all kubeconfigs for this repository to find orphans
+	rows, err := m.db.Conn().Query(`SELECT cluster_name FROM kubeconfigs WHERE repository_name = ?`, m.repositoryName)
 	if err != nil {
-		return fmt.Errorf("failed to cleanup orphaned kubeconfigs: %w", err)
+		return fmt.Errorf("failed to query kubeconfigs: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err == nil {
+			if !activeSet[name] {
+				orphanedNames = append(orphanedNames, name)
+			}
+		}
+	}
+
+	// Delete orphaned kubeconfigs
+	for _, orphanName := range orphanedNames {
+		deleteSQL := `DELETE FROM kubeconfigs WHERE repository_name = ? AND cluster_name = ?`
+		_, err := m.db.Conn().Exec(deleteSQL, m.repositoryName, orphanName)
+		if err != nil {
+			log.Printf("⚠️  Failed to remove orphaned kubeconfig %s: %v", orphanName, err)
+			continue
+		}
+		log.Printf("🗑️  Removed orphaned kubeconfig: %s", orphanName)
 	}
 
 	return nil
 }
 
-// getEncryptionKey generates a deterministic encryption key based on database path and repository
+// getEncryptionKey generates a deterministic encryption key based on repository name
 func (m *Manager) getEncryptionKey() []byte {
-	// Use a combination of database path and repository name for key derivation
-	// Note: Hostname is intentionally excluded to make the database portable across machines
-	keyMaterial := fmt.Sprintf("%s:%s", m.dbPath, m.repositoryName)
+	// Use a combination of fixed prefix and repository name for key derivation
+	// Note: This is portable across machines and database locations
+	keyMaterial := fmt.Sprintf("hyve-kubeconfig-v1:%s", m.repositoryName)
 	hash := sha256.Sum256([]byte(keyMaterial))
 	return hash[:]
 }
@@ -388,14 +384,8 @@ func (m *Manager) decryptConfigWithHostname(encryptedConfig string, hostname str
 
 // MigrateEncryption migrates all kubeconfigs from hostname-based encryption to portable encryption
 func (m *Manager) MigrateEncryption(oldHostname string) error {
-	db, err := sql.Open("sqlite3", m.dbPath)
-	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
-	}
-	defer db.Close()
-
 	// Get all kubeconfigs for this repository
-	rows, err := db.Query(`
+	rows, err := m.db.Conn().Query(`
 		SELECT id, cluster_name, encrypted_config
 		FROM kubeconfigs
 		WHERE repository_name = ?
@@ -405,15 +395,15 @@ func (m *Manager) MigrateEncryption(oldHostname string) error {
 	}
 	defer rows.Close()
 
-	type kubeconfig struct {
+	type kubeconfigRecord struct {
 		id              int
 		clusterName     string
 		encryptedConfig string
 	}
 
-	var kubeconfigs []kubeconfig
+	var kubeconfigs []kubeconfigRecord
 	for rows.Next() {
-		var kc kubeconfig
+		var kc kubeconfigRecord
 		if err := rows.Scan(&kc.id, &kc.clusterName, &kc.encryptedConfig); err != nil {
 			return fmt.Errorf("failed to scan kubeconfig: %w", err)
 		}
@@ -439,7 +429,7 @@ func (m *Manager) MigrateEncryption(oldHostname string) error {
 		}
 
 		// Update the database
-		_, err = db.Exec(`
+		_, err = m.db.Conn().Exec(`
 			UPDATE kubeconfigs
 			SET encrypted_config = ?, updated_at = CURRENT_TIMESTAMP
 			WHERE id = ?

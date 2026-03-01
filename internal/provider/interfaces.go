@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"civo-cluster-deploy/internal/types"
+	"hyve/internal/types"
 )
 
 // Cluster represents a generic cluster
@@ -50,6 +50,12 @@ type ClusterConfig struct {
 	ClusterType  string
 	FirewallID   string
 	Applications []string
+
+	// AWS-specific configuration
+	AWSRoleARN     string   // IAM role ARN for EKS cluster
+	AWSNodeRoleARN string   // IAM role ARN for EKS node group
+	AWSVPCID       string   // VPC ID for EKS cluster
+	AWSSubnetIDs   []string // Subnet IDs for EKS cluster (optional, discovered from VPC if not provided)
 }
 
 // ClusterUpdateConfig represents cluster update configuration

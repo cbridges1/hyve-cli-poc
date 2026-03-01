@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"context"
+	gocontext "context"
 	"fmt"
 	"log"
 	"os"
@@ -11,16 +11,36 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
-	"civo-cluster-deploy/internal/cluster"
-	"civo-cluster-deploy/internal/config"
-	"civo-cluster-deploy/internal/credentials"
-	"civo-cluster-deploy/internal/ingress"
-	"civo-cluster-deploy/internal/kubeconfig"
-	"civo-cluster-deploy/internal/provider"
-	"civo-cluster-deploy/internal/repository"
-	"civo-cluster-deploy/internal/state"
-	"civo-cluster-deploy/internal/types"
+	"hyve/internal/cluster"
+	"hyve/internal/config"
+	"hyve/internal/context"
+	"hyve/internal/credentials"
+	"hyve/internal/ingress"
+	"hyve/internal/provider"
+	"hyve/internal/providerconfig"
+	"hyve/internal/repository"
+	"hyve/internal/state"
+	"hyve/internal/types"
 )
+
+// ValidProviders is the list of supported cloud providers
+var ValidProviders = []string{"civo", "aws", "gcp", "azure"}
+
+// isValidProvider checks if the given provider is in the list of valid providers
+func isValidProvider(provider string) bool {
+	provider = strings.ToLower(provider)
+	for _, p := range ValidProviders {
+		if p == provider {
+			return true
+		}
+	}
+	return false
+}
+
+// validProvidersString returns a formatted string of valid providers for error messages
+func validProvidersString() string {
+	return strings.Join(ValidProviders, ", ")
+}
 
 var clusterCmd = &cobra.Command{
 	Use:   "cluster",
@@ -31,26 +51,152 @@ var clusterCmd = &cobra.Command{
 var addCmd = &cobra.Command{
 	Use:   "add [cluster-name]",
 	Short: "Add a new cluster",
-	Long:  "Create a new cluster configuration YAML file",
-	Args:  cobra.ExactArgs(1),
+	Long: `Create a new cluster configuration YAML file.
+
+Supported cloud providers:
+  - civo    Civo Cloud (K3s/Talos clusters)
+  - aws     Amazon Web Services (EKS)
+  - gcp     Google Cloud Platform (GKE)
+  - azure   Microsoft Azure (AKS)
+
+The command uses the current context (account/project/subscription) by default.
+Use --account-name, --project-name, --subscription-name, or --org-name to override.`,
+	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		clusterName := args[0]
 
 		region, _ := cmd.Flags().GetString("region")
-		provider, _ := cmd.Flags().GetString("provider")
+		providerName, _ := cmd.Flags().GetString("provider")
 		nodes, _ := cmd.Flags().GetStringSlice("nodes")
 		clusterType, _ := cmd.Flags().GetString("cluster-type")
-		addClusterFromCLI(clusterName, region, provider, nodes, clusterType)
+
+		// Provider-specific account/project override flags
+		accountName, _ := cmd.Flags().GetString("account-name")
+		projectName, _ := cmd.Flags().GetString("project-name")
+		subscriptionName, _ := cmd.Flags().GetString("subscription-name")
+		orgName, _ := cmd.Flags().GetString("org-name")
+
+		// AWS-specific flags
+		vpcName, _ := cmd.Flags().GetString("vpc-name")
+		eksRoleName, _ := cmd.Flags().GetString("eks-role-name")
+		nodeRoleName, _ := cmd.Flags().GetString("node-role-name")
+
+		// Validate provider
+		if !isValidProvider(providerName) {
+			log.Fatalf("Invalid provider '%s'. Valid providers are: %s", providerName, validProvidersString())
+		}
+
+		// Normalize provider to lowercase
+		providerName = strings.ToLower(providerName)
+
+		// Get context manager for current account lookups
+		ctxMgr, err := context.NewManager()
+		if err != nil {
+			log.Fatalf("Failed to create context manager: %v", err)
+		}
+
+		// Resolve account/project from context if not provided via flag
+		switch providerName {
+		case "aws":
+			if accountName == "" {
+				accountName = ctxMgr.GetAWSAccount()
+				if accountName == "" {
+					cmds := context.GetSwitchCommands("aws", "")
+					log.Fatalf("❌ No AWS account selected.\n\n"+
+						"Set the current account with:\n"+
+						"  hyve config use aws <account-name>\n\n"+
+						"Or specify an account with the --account-name flag:\n"+
+						"  hyve cluster add %s --provider aws --account-name <name> ...\n\n"+
+						"Check current AWS CLI credentials:\n"+
+						"  %s", clusterName, cmds.CheckCommand)
+				}
+				log.Printf("Using current AWS account context: %s", accountName)
+			}
+			// Validate AWS-specific flags
+			if vpcName == "" {
+				log.Fatalf("AWS provider requires --vpc-name flag. Use 'hyve config aws vpc-list' to see available VPCs.")
+			}
+			if eksRoleName == "" {
+				log.Fatalf("AWS provider requires --eks-role-name flag. Use 'hyve config aws eks-role-list' to see available roles.")
+			}
+			if nodeRoleName == "" {
+				log.Fatalf("AWS provider requires --node-role-name flag. Use 'hyve config aws node-role-list' to see available roles.")
+			}
+
+		case "gcp":
+			if projectName == "" {
+				projectName = ctxMgr.GetGCPProject()
+				if projectName == "" {
+					cmds := context.GetSwitchCommands("gcp", "")
+					log.Fatalf("❌ No GCP project selected.\n\n"+
+						"Set the current project with:\n"+
+						"  hyve config use gcp <project-name>\n\n"+
+						"Or specify a project with the --project-name flag:\n"+
+						"  hyve cluster add %s --provider gcp --project-name <name> ...\n\n"+
+						"Check current GCP project:\n"+
+						"  %s", clusterName, cmds.CheckCommand)
+				}
+				log.Printf("Using current GCP project context: %s", projectName)
+			}
+
+		case "azure":
+			if subscriptionName == "" {
+				subscriptionName = ctxMgr.GetAzureSubscription()
+				if subscriptionName == "" {
+					cmds := context.GetSwitchCommands("azure", "")
+					log.Fatalf("❌ No Azure subscription selected.\n\n"+
+						"Set the current subscription with:\n"+
+						"  hyve config use azure <subscription-name>\n\n"+
+						"Or specify a subscription with the --subscription-name flag:\n"+
+						"  hyve cluster add %s --provider azure --subscription-name <name> ...\n\n"+
+						"Check current Azure subscription:\n"+
+						"  %s", clusterName, cmds.CheckCommand)
+				}
+				log.Printf("Using current Azure subscription context: %s", subscriptionName)
+			}
+
+		case "civo":
+			if orgName == "" {
+				orgName = ctxMgr.GetCivoOrganization()
+				if orgName == "" {
+					cmds := context.GetSwitchCommands("civo", "")
+					log.Fatalf("❌ No Civo organization selected.\n\n"+
+						"Set the current organization with:\n"+
+						"  hyve config use civo <org-name>\n\n"+
+						"Or specify an organization with the --org-name flag:\n"+
+						"  hyve cluster add %s --provider civo --org-name <name> ...\n\n"+
+						"Check current Civo API key:\n"+
+						"  %s", clusterName, cmds.CheckCommand)
+				}
+				log.Printf("Using current Civo organization context: %s", orgName)
+			}
+		}
+
+		addClusterFromCLI(clusterName, region, providerName, nodes, clusterType, accountName, projectName, subscriptionName, orgName, vpcName, eksRoleName, nodeRoleName)
 	},
 }
 
 var modifyCmd = &cobra.Command{
 	Use:   "modify [cluster-name]",
 	Short: "Modify an existing cluster",
-	Long:  "Update an existing cluster configuration YAML file",
-	Args:  cobra.ExactArgs(1),
+	Long: `Update an existing cluster configuration YAML file.
+
+Supported cloud providers (if changing provider):
+  - civo    Civo Cloud (K3s/Talos clusters)
+  - aws     Amazon Web Services (EKS)
+  - gcp     Google Cloud Platform (GKE)
+  - azure   Microsoft Azure (AKS)`,
+	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		clusterName := args[0]
+
+		// Validate provider if it's being changed
+		if cmd.Flags().Changed("provider") {
+			providerName, _ := cmd.Flags().GetString("provider")
+			if !isValidProvider(providerName) {
+				log.Fatalf("Invalid provider '%s'. Valid providers are: %s", providerName, validProvidersString())
+			}
+		}
 
 		modifyClusterFromCLI(cmd, clusterName)
 	},
@@ -59,20 +205,29 @@ var modifyCmd = &cobra.Command{
 var deleteCmd = &cobra.Command{
 	Use:   "delete [cluster-name]",
 	Short: "Delete a cluster",
-	Long: `Delete a cluster both from the cloud provider and from configuration.
-This command will:
-1. Explicitly search for and delete the cluster from the cloud provider
-2. Remove the cluster configuration YAML file (if it exists)
-3. Run reconciliation to clean up any remaining resources
+	Long: `Delete a cluster by removing its YAML definition and reconciling.
 
-Use --config-only to only remove the configuration file without touching the cloud resources.
-Use --force-cloud to delete from cloud even if no configuration file exists.`,
+Default behaviour:
+  1. Remove the cluster configuration YAML file
+  2. Commit and push the removal to the state repository
+  3. Run reconciliation
+
+  In CI/CD mode with strictDelete enabled the push triggers the pipeline,
+  which then deletes the cloud cluster. In local mode with strictDelete enabled
+  the local reconcile deletes the cloud cluster immediately.
+
+Use --force to delete the cluster from the cloud provider immediately before
+removing the configuration file. This is useful when you want to bypass CI/CD
+and destroy the cluster right now.
+
+Use --force-cloud together with --force to delete from cloud even if no
+configuration file exists.`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		clusterName := args[0]
-		configOnly, _ := cmd.Flags().GetBool("config-only")
 		forceCloud, _ := cmd.Flags().GetBool("force-cloud")
-		deleteClusterFromCLI(clusterName, configOnly, forceCloud)
+		force, _ := cmd.Flags().GetBool("force")
+		deleteClusterFromCLI(clusterName, forceCloud, force)
 	},
 }
 
@@ -88,14 +243,32 @@ Note: This command does not remove configuration files or run reconciliation.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		clusterName := args[0]
 		region, _ := cmd.Flags().GetString("region")
-		forceDeleteClusterFromCloud(clusterName, region)
+		providerName, _ := cmd.Flags().GetString("provider")
+		projectName, _ := cmd.Flags().GetString("project-name")
+
+		// Default to civo for backward compatibility
+		if providerName == "" {
+			providerName = "civo"
+		}
+
+		// Validate provider
+		if !isValidProvider(providerName) {
+			log.Fatalf("Invalid provider '%s'. Valid providers are: %s", providerName, validProvidersString())
+		}
+
+		// Validate project-name is provided for GCP provider
+		if providerName == "gcp" && projectName == "" {
+			log.Fatalf("GCP provider requires --project-name flag. Use 'hyve config gcp list-projects' to see available projects.")
+		}
+
+		forceDeleteClusterFromCloud(clusterName, region, providerName, projectName)
 	},
 }
 
 var listCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List all stored cluster kubeconfigs",
-	Long:  "Display all kubeconfigs stored for clusters in the current repository",
+	Short: "List all cluster definitions",
+	Long:  "Display all cluster definitions from the current repository",
 	Run: func(cmd *cobra.Command, args []string) {
 		listClusters()
 	},
@@ -103,19 +276,33 @@ var listCmd = &cobra.Command{
 
 func init() {
 	addCmd.Flags().StringP("region", "r", "PHX1", "Region for the cluster")
-	addCmd.Flags().StringP("provider", "p", "civo", "Cloud provider (e.g., civo, aws, gcp, azure)")
+	addCmd.Flags().StringP("provider", "p", "", "Cloud provider (civo, aws, gcp, azure)")
+	addCmd.MarkFlagRequired("provider")
 	addCmd.Flags().StringSliceP("nodes", "n", []string{"g4s.kube.small"}, "Node sizes")
 	addCmd.Flags().StringP("cluster-type", "t", "k3s", "Type of Kubernetes cluster")
+
+	// Provider account/project override flags (uses current context if not specified)
+	addCmd.Flags().String("account-name", "", "AWS account name (overrides current context)")
+	addCmd.Flags().String("project-name", "", "GCP project name (overrides current context)")
+	addCmd.Flags().String("subscription-name", "", "Azure subscription name (overrides current context)")
+	addCmd.Flags().String("org-name", "", "Civo organization name (overrides current context)")
+
+	// AWS-specific flags
+	addCmd.Flags().String("vpc-name", "", "AWS VPC name alias (required for AWS provider)")
+	addCmd.Flags().String("eks-role-name", "", "AWS EKS IAM role name alias (required for AWS provider)")
+	addCmd.Flags().String("node-role-name", "", "AWS EKS node IAM role name alias (required for AWS provider)")
 
 	modifyCmd.Flags().StringP("region", "r", "", "Region for the cluster")
 	modifyCmd.Flags().StringP("provider", "p", "", "Cloud provider")
 	modifyCmd.Flags().StringSliceP("nodes", "n", nil, "Node sizes")
 	modifyCmd.Flags().StringP("cluster-type", "t", "", "Type of Kubernetes cluster")
 
-	deleteCmd.Flags().Bool("config-only", false, "Only remove configuration file, skip cloud provider deletion")
-	deleteCmd.Flags().Bool("force-cloud", false, "Delete from cloud even if no configuration file exists")
+	deleteCmd.Flags().Bool("force-cloud", false, "With --force: delete from cloud even if no configuration file exists")
+	deleteCmd.Flags().Bool("force", false, "Delete cluster from cloud immediately before removing configuration (bypasses CI/CD)")
 
 	forceDeleteCmd.Flags().StringP("region", "r", "", "Specific region to search (optional, will search common regions if not provided)")
+	forceDeleteCmd.Flags().StringP("provider", "p", "civo", "Cloud provider (civo, aws, gcp, azure)")
+	forceDeleteCmd.Flags().String("project-name", "", "Project/account name alias (required for GCP provider)")
 
 	clusterCmd.AddCommand(addCmd)
 	clusterCmd.AddCommand(listCmd)
@@ -125,7 +312,7 @@ func init() {
 }
 
 // createStateManager creates state manager from current repository
-func createStateManager(ctx context.Context) (*state.Manager, string) {
+func createStateManager(ctx gocontext.Context) (*state.Manager, string) {
 	repoMgr, err := repository.NewManager()
 	if err != nil {
 		log.Fatalf("Failed to create repository manager: %v", err)
@@ -135,20 +322,13 @@ func createStateManager(ctx context.Context) (*state.Manager, string) {
 	currentRepo, err := repoMgr.GetCurrentRepository()
 	if err != nil {
 		log.Fatalf("❌ No Git repository configured. Hyve requires a Git repository for state management.\n\n" +
-			"To get started:\n" +
-			"  1. hyve git add <name> --repo-url <repository-url>\n" +
-			"  2. hyve cluster add <cluster-name> --region <region>\n\n" +
-			"Example:\n" +
-			"  hyve git add production --repo-url https://github.com/company/hyve-state.git")
+			"Add a Git repository with: hyve git add <name> --repo-url <url>")
 	}
+	log.Printf("Using Git repository: %s", currentRepo.RepoURL)
 
-	log.Printf("Using Git repository '%s': %s", currentRepo.Name, currentRepo.RepoURL)
-
-	// Get authentication - prefer global credentials, fallback to environment token
 	credsMgr, err := credentials.NewManager()
 	var authToken string
 	var authUsername = currentRepo.Username
-
 	if err == nil {
 		defer credsMgr.Close()
 		if creds, _ := credsMgr.GetCredentials(); creds != nil {
@@ -160,7 +340,6 @@ func createStateManager(ctx context.Context) (*state.Manager, string) {
 			}
 		}
 	}
-
 	if authToken == "" {
 		authToken = os.Getenv("HYVE_GIT_TOKEN")
 	}
@@ -169,25 +348,19 @@ func createStateManager(ctx context.Context) (*state.Manager, string) {
 	if err != nil {
 		log.Fatalf("Failed to create state manager: %v", err)
 	}
-
-	// Initialize and sync Git repository
 	if err := stateMgr.InitializeGitRepo(ctx); err != nil {
 		log.Fatalf("Failed to initialize Git repository: %v", err)
 	}
-
 	if err := stateMgr.SyncWithRemote(ctx); err != nil {
 		log.Fatalf("Failed to sync with remote repository: %v", err)
 	}
-
 	log.Println("Git repository synchronized")
-
-	// Get the state directory path
 	stateDir := filepath.Join(currentRepo.LocalPath, "clusters")
 	return stateMgr, stateDir
 }
 
 // commitStateChanges commits changes to Git repository and pushes to remote
-func commitStateChanges(ctx context.Context, stateMgr *state.Manager, message string) {
+func commitStateChanges(ctx gocontext.Context, stateMgr *state.Manager, message string) {
 	log.Println("📝 Committing and pushing changes to Git repository...")
 
 	if err := stateMgr.CommitAndPush(ctx, message); err != nil {
@@ -207,8 +380,8 @@ func commitStateChanges(ctx context.Context, stateMgr *state.Manager, message st
 	log.Println("✅ Changes committed and pushed to remote repository successfully")
 }
 
-func addClusterFromCLI(clusterName, region, provider string, nodes []string, clusterType string) {
-	ctx := context.Background()
+func addClusterFromCLI(clusterName, region, providerName string, nodes []string, clusterType, accountName, projectName, subscriptionName, orgName, vpcName, eksRoleName, nodeRoleName string) {
+	ctx := gocontext.Background()
 	stateMgr, stateDir := createStateManager(ctx)
 
 	if err := os.MkdirAll(stateDir, 0755); err != nil {
@@ -221,6 +394,68 @@ func addClusterFromCLI(clusterName, region, provider string, nodes []string, clu
 		log.Fatalf("Cluster %s already exists. Use 'modify' action to update it.", clusterName)
 	}
 
+	pcMgr := providerconfig.NewManager(filepath.Dir(stateDir))
+	var err error
+
+	// Resolve GCP project alias to project ID
+	var gcpProjectID string
+	if providerName == "gcp" && projectName != "" {
+		gcpProjectID, err = pcMgr.GetGCPProjectID(projectName)
+		if err != nil {
+			log.Fatalf("GCP project alias '%s' not found in repository configuration.\n"+
+				"Use 'hyve config gcp add-project --name %s --id <project-id>' to add it.", projectName, projectName)
+		}
+		log.Printf("Using GCP project '%s' (ID: %s)", projectName, gcpProjectID)
+	}
+
+	// Resolve AWS aliases
+	var awsAccountID, awsVPCID, awsEKSRoleARN, awsNodeRoleARN string
+	if providerName == "aws" {
+		// Resolve AWS account alias
+		awsAccountID, err = pcMgr.GetAWSAccountID(accountName)
+		if err != nil {
+			log.Fatalf("AWS account alias '%s' not found in repository configuration.\n"+
+				"Use 'hyve config aws account-add --name %s --id <account-id>' to add it.", accountName, accountName)
+		}
+		log.Printf("Using AWS account '%s' (ID: %s)", accountName, awsAccountID)
+
+		// Resolve VPC alias (required for AWS)
+		if vpcName != "" {
+			awsVPCID, err = pcMgr.GetAWSVPCID(accountName, vpcName)
+			if err != nil {
+				log.Fatalf("AWS VPC alias '%s' not found in account '%s'.\n"+
+					"Use 'hyve config use aws %s' to set the account, then:\n"+
+					"  hyve config aws vpc-add --name %s --id <vpc-id>\n"+
+					"Or use 'hyve config aws vpc-create --name %s --region %s' to create one.", vpcName, accountName, accountName, vpcName, vpcName, region)
+			}
+			log.Printf("Using AWS VPC '%s' (ID: %s)", vpcName, awsVPCID)
+		}
+
+		// Resolve EKS role alias (required for AWS)
+		if eksRoleName != "" {
+			awsEKSRoleARN, err = pcMgr.GetAWSEKSRoleARN(accountName, eksRoleName)
+			if err != nil {
+				log.Fatalf("AWS EKS role alias '%s' not found in account '%s'.\n"+
+					"Use 'hyve config use aws %s' to set the account, then:\n"+
+					"  hyve config aws eks-role-add --name %s --role-arn <arn>\n"+
+					"Or use 'hyve config aws eks-role-create --name %s --role-name <name> --region %s' to create one.", eksRoleName, accountName, accountName, eksRoleName, eksRoleName, region)
+			}
+			log.Printf("Using AWS EKS role '%s' (ARN: %s)", eksRoleName, awsEKSRoleARN)
+		}
+
+		// Resolve node role alias (required for AWS)
+		if nodeRoleName != "" {
+			awsNodeRoleARN, err = pcMgr.GetAWSNodeRoleARN(accountName, nodeRoleName)
+			if err != nil {
+				log.Fatalf("AWS node role alias '%s' not found in account '%s'.\n"+
+					"Use 'hyve config use aws %s' to set the account, then:\n"+
+					"  hyve config aws node-role-add --name %s --role-arn <arn>\n"+
+					"Or use 'hyve config aws node-role-create --name %s --role-name <name> --region %s' to create one.", nodeRoleName, accountName, accountName, nodeRoleName, nodeRoleName, region)
+			}
+			log.Printf("Using AWS node role '%s' (ARN: %s)", nodeRoleName, awsNodeRoleARN)
+		}
+	}
+
 	clusterDef := types.ClusterDefinition{
 		APIVersion: "v1",
 		Kind:       "Cluster",
@@ -229,9 +464,25 @@ func addClusterFromCLI(clusterName, region, provider string, nodes []string, clu
 			Region: region,
 		},
 		Spec: types.ClusterSpec{
-			Provider:    provider,
+			Provider:    providerName,
 			Nodes:       nodes,
 			ClusterType: clusterType,
+			// GCP-specific
+			GCPProject:   projectName,
+			GCPProjectID: gcpProjectID,
+			// AWS-specific
+			AWSAccount:     accountName,
+			AWSAccountID:   awsAccountID,
+			AWSVPCName:     vpcName,
+			AWSVPCID:       awsVPCID,
+			AWSEKSRole:     eksRoleName,
+			AWSEKSRoleARN:  awsEKSRoleARN,
+			AWSNodeRole:    nodeRoleName,
+			AWSNodeRoleARN: awsNodeRoleARN,
+			// Azure-specific
+			AzureSubscription: subscriptionName,
+			// Civo-specific
+			CivoOrganization: orgName,
 			Ingress: types.IngressSpec{
 				Enabled:      true,
 				LoadBalancer: true,
@@ -251,9 +502,21 @@ func addClusterFromCLI(clusterName, region, provider string, nodes []string, clu
 	log.Printf("Created cluster definition file: %s", filePath)
 	log.Printf("Cluster %s configuration:", clusterName)
 	log.Printf("  Region: %s", region)
-	log.Printf("  Provider: %s", provider)
+	log.Printf("  Provider: %s", providerName)
 	log.Printf("  Nodes: %v", nodes)
 	log.Printf("  Cluster Type: %s", clusterType)
+	if projectName != "" {
+		log.Printf("  GCP Project: %s (ID: %s)", projectName, gcpProjectID)
+	}
+	if awsVPCID != "" {
+		log.Printf("  AWS VPC: %s (ID: %s)", vpcName, awsVPCID)
+	}
+	if awsEKSRoleARN != "" {
+		log.Printf("  AWS EKS Role: %s", eksRoleName)
+	}
+	if awsNodeRoleARN != "" {
+		log.Printf("  AWS Node Role: %s", nodeRoleName)
+	}
 
 	// Commit changes to Git if configured
 	commitStateChanges(ctx, stateMgr, fmt.Sprintf("Add cluster %s", clusterName))
@@ -267,11 +530,11 @@ func addClusterFromCLI(clusterName, region, provider string, nodes []string, clu
 		}
 	}
 
-	runReconciliation()
+	runReconciliation("")
 }
 
 func modifyClusterFromCLI(cmd *cobra.Command, clusterName string) {
-	ctx := context.Background()
+	ctx := gocontext.Background()
 	stateMgr, stateDir := createStateManager(ctx)
 	filePath := filepath.Join(stateDir, clusterName+".yaml")
 
@@ -295,7 +558,7 @@ func modifyClusterFromCLI(cmd *cobra.Command, clusterName string) {
 	}
 	if cmd.Flags().Changed("provider") {
 		provider, _ := cmd.Flags().GetString("provider")
-		clusterDef.Spec.Provider = provider
+		clusterDef.Spec.Provider = strings.ToLower(provider)
 	}
 	if cmd.Flags().Changed("nodes") {
 		nodes, _ := cmd.Flags().GetStringSlice("nodes")
@@ -335,8 +598,8 @@ func modifyClusterFromCLI(cmd *cobra.Command, clusterName string) {
 	}
 }
 
-func deleteClusterFromCLI(clusterName string, configOnly bool, forceCloud bool) {
-	ctx := context.Background()
+func deleteClusterFromCLI(clusterName string, forceCloud bool, force bool) {
+	ctx := gocontext.Background()
 	stateMgr, stateDir := createStateManager(ctx)
 	filePath := filepath.Join(stateDir, clusterName+".yaml")
 
@@ -344,35 +607,37 @@ func deleteClusterFromCLI(clusterName string, configOnly bool, forceCloud bool) 
 	configExists := false
 
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		if !forceCloud {
-			log.Fatalf("Cluster %s configuration does not exist. Use --force-cloud to delete from cloud provider anyway.", clusterName)
+		if force && forceCloud {
+			// --force --force-cloud: allow cloud deletion even without a config file
+			log.Printf("⚠️ Configuration file not found, but --force --force-cloud specified")
+			clusterDef.Metadata.Region = "PHX1" // Default region
+		} else {
+			log.Fatalf("Cluster %s configuration does not exist. Use --force --force-cloud to delete from cloud provider anyway.", clusterName)
 		}
-		log.Printf("⚠️ Configuration file not found, but --force-cloud specified")
-		// Use default region for force cloud deletion
-		clusterDef.Metadata.Region = "PHX1" // Default region
 	} else {
 		configExists = true
-		// Read the cluster definition to get the region for proper provider initialization
 		data, err := os.ReadFile(filePath)
 		if err != nil {
 			log.Fatalf("Failed to read cluster definition: %v", err)
 		}
-
 		if err := yaml.Unmarshal(data, &clusterDef); err != nil {
 			log.Fatalf("Failed to parse cluster definition: %v", err)
 		}
 	}
 
-	// Explicitly delete the cluster by name before removing the YAML file (unless config-only mode)
-	if !configOnly {
-		log.Printf("🗑️ Deleting cluster '%s' from cloud provider...", clusterName)
-		err := deleteClusterExplicitly(ctx, clusterName, clusterDef.Metadata.Region)
-		if err != nil {
-			log.Printf("Warning: Failed to delete cluster %s from cloud provider: %v", clusterName, err)
-			log.Printf("Continuing with configuration file removal...")
+	if force {
+		// Force path: delete the cluster from the cloud immediately, then clean up YAML.
+		log.Printf("🗑️ Force-deleting cluster '%s' from cloud provider...", clusterName)
+		if err := deleteClusterExplicitly(ctx, clusterDef); err != nil {
+			log.Fatalf("❌ Failed to delete cluster %s from cloud provider: %v\n\n"+
+				"Configuration file was NOT removed to prevent orphaned cluster state.\n"+
+				"Please resolve the issue and try again.", clusterName, err)
 		}
 	} else {
-		log.Printf("📝 Skipping cloud provider deletion (config-only mode)")
+		// Default path: remove the YAML and let reconciliation handle cloud deletion.
+		// In CI/CD mode the push triggers the pipeline; with strictDelete enabled the
+		// pipeline (or local reconcile) will delete the orphaned cloud cluster.
+		log.Printf("📝 Removing cluster YAML and reconciling — cloud deletion will be handled by reconciliation")
 	}
 
 	// Remove configuration file if it exists
@@ -380,32 +645,28 @@ func deleteClusterFromCLI(clusterName string, configOnly bool, forceCloud bool) 
 		if err := os.Remove(filePath); err != nil {
 			log.Fatalf("Failed to delete cluster definition file: %v", err)
 		}
-
-		// Commit changes to Git if configured
 		commitStateChanges(ctx, stateMgr, fmt.Sprintf("Delete cluster %s", clusterName))
-
 		log.Printf("Deleted cluster definition file: %s", filePath)
 		log.Printf("Cluster %s has been removed from configuration", clusterName)
 	} else {
 		log.Printf("📝 No configuration file to remove")
 	}
 
-	// Run reconciliation to clean up any remaining resources
-	runReconciliation()
+	runReconciliation("")
 }
 
 // deleteClusterExplicitly deletes a cluster by name directly from the provider
 // This ensures deletion even if the cluster doesn't appear in provider API listings
-func deleteClusterExplicitly(ctx context.Context, clusterName, region string) error {
-	configMgr := config.NewManager()
-	apiKey := configMgr.GetCivoToken()
-	if apiKey == "" {
-		return fmt.Errorf("CIVO API token not found. Please run 'hyve config set-token civo' or set CIVO_TOKEN environment variable")
+func deleteClusterExplicitly(ctx gocontext.Context, clusterDef types.ClusterDefinition) error {
+	clusterName := clusterDef.Metadata.Name
+	region := clusterDef.Metadata.Region
+	providerName := clusterDef.Spec.Provider
+	if providerName == "" {
+		providerName = "civo" // default for backward compatibility
 	}
 
-	// Create provider factory and provider for the cluster's region
-	providerFactory := provider.NewFactory()
-	prov, err := providerFactory.CreateProvider("civo", apiKey, region)
+	// Create provider with appropriate options
+	prov, err := createProviderForClusterDef(clusterDef)
 	if err != nil {
 		return fmt.Errorf("failed to create provider: %w", err)
 	}
@@ -414,7 +675,7 @@ func deleteClusterExplicitly(ctx context.Context, clusterName, region string) er
 	clusterMgr := cluster.NewManager(prov)
 	ingressMgr := ingress.NewManager(prov)
 
-	log.Printf("🔍 Explicitly searching for cluster '%s' in region %s...", clusterName, region)
+	log.Printf("🔍 Explicitly searching for cluster '%s' in region %s (provider: %s)...", clusterName, region, providerName)
 
 	// Try to find the cluster by name
 	existingCluster, err := clusterMgr.FindByName(ctx, clusterName)
@@ -447,30 +708,152 @@ func deleteClusterExplicitly(ctx context.Context, clusterName, region string) er
 	return nil
 }
 
-// forceDeleteClusterFromCloud deletes a cluster by name from the cloud provider across multiple regions
-func forceDeleteClusterFromCloud(clusterName, region string) {
-	ctx := context.Background()
-
-	configMgr := config.NewManager()
-	apiKey := configMgr.GetCivoToken()
-	if apiKey == "" {
-		log.Fatalf("CIVO API token not found. Please run 'hyve config set-token civo' or set CIVO_TOKEN environment variable")
+// createProviderForClusterDef creates a provider with appropriate options for a cluster definition
+func createProviderForClusterDef(clusterDef types.ClusterDefinition) (provider.Provider, error) {
+	providerName := clusterDef.Spec.Provider
+	if providerName == "" {
+		providerName = "civo" // default
 	}
+
+	providerFactory := provider.NewFactory()
+
+	opts := provider.ProviderOptions{
+		Region: clusterDef.Metadata.Region,
+	}
+
+	// Populate AccountName so the factory can resolve named env vars.
+	switch strings.ToLower(providerName) {
+	case "civo":
+		opts.AccountName = clusterDef.Spec.CivoOrganization
+	case "aws":
+		opts.AccountName = clusterDef.Spec.AWSAccount
+	case "gcp":
+		opts.AccountName = clusterDef.Spec.GCPProject
+	case "azure":
+		opts.AccountName = clusterDef.Spec.AzureSubscription
+	}
+
+	// Handle Civo-specific configuration
+	if providerName == "civo" {
+		configMgr := config.NewManager()
+		apiKey := configMgr.GetCivoToken()
+		if apiKey == "" {
+			return nil, fmt.Errorf("Civo API token not found. Please run 'hyve config set-token civo' or set CIVO_TOKEN environment variable")
+		}
+		opts.APIKey = apiKey
+	}
+
+	// Handle GCP-specific configuration
+	if providerName == "gcp" {
+		// Use stored project ID if available, otherwise resolve from alias
+		if clusterDef.Spec.GCPProjectID != "" {
+			opts.ProjectID = clusterDef.Spec.GCPProjectID
+			log.Printf("Using GCP project ID '%s'", clusterDef.Spec.GCPProjectID)
+		} else if clusterDef.Spec.GCPProject != "" {
+			gcpRepoMgr, err := repository.NewManager()
+			if err == nil {
+				defer gcpRepoMgr.Close()
+				if currentRepo, err := gcpRepoMgr.GetCurrentRepository(); err == nil {
+					pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
+					projectID, err := pcMgr.GetGCPProjectID(clusterDef.Spec.GCPProject)
+					if err != nil {
+						return nil, fmt.Errorf("failed to resolve GCP project '%s': %w", clusterDef.Spec.GCPProject, err)
+					}
+					opts.ProjectID = projectID
+					log.Printf("Using GCP project '%s' (ID: %s)", clusterDef.Spec.GCPProject, projectID)
+				}
+			}
+		}
+	}
+
+	// Handle Azure-specific configuration
+	if providerName == "azure" {
+		if clusterDef.Spec.AzureSubscriptionID != "" {
+			opts.AzureSubscriptionID = clusterDef.Spec.AzureSubscriptionID
+		} else if clusterDef.Spec.AzureSubscription != "" {
+			azureRepoMgr, err := repository.NewManager()
+			if err == nil {
+				defer azureRepoMgr.Close()
+				if currentRepo, err := azureRepoMgr.GetCurrentRepository(); err == nil {
+					pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
+					subscriptionID, err := pcMgr.GetAzureSubscriptionID(clusterDef.Spec.AzureSubscription)
+					if err != nil {
+						return nil, fmt.Errorf("failed to resolve Azure subscription '%s': %w", clusterDef.Spec.AzureSubscription, err)
+					}
+					opts.AzureSubscriptionID = subscriptionID
+					log.Printf("Using Azure subscription '%s' (ID: %s)", clusterDef.Spec.AzureSubscription, subscriptionID)
+				}
+			}
+		}
+	}
+
+	return providerFactory.CreateProviderWithOptions(providerName, opts)
+}
+
+// forceDeleteClusterFromCloud deletes a cluster by name from the cloud provider across multiple regions
+func forceDeleteClusterFromCloud(clusterName, region, providerName, projectName string) {
+	ctx := gocontext.Background()
 
 	regions := []string{region}
 	if region == "" {
-		// Search common regions if none specified
-		regions = []string{"PHX1", "NYC1", "FRA1", "LON1"}
-		log.Printf("🔍 No region specified, searching common regions: %v", regions)
+		// Search common regions based on provider
+		switch providerName {
+		case "civo":
+			regions = []string{"PHX1", "NYC1", "FRA1", "LON1"}
+		case "gcp":
+			regions = []string{"us-central1", "us-east1", "us-west1", "europe-west1"}
+		case "aws":
+			regions = []string{"us-east-1", "us-west-2", "eu-west-1", "ap-southeast-1"}
+		case "azure":
+			regions = []string{"eastus", "westus2", "westeurope", "southeastasia"}
+		default:
+			regions = []string{"PHX1"}
+		}
+		log.Printf("🔍 No region specified, searching common %s regions: %v", providerName, regions)
+	}
+
+	// Build provider options
+	opts := provider.ProviderOptions{}
+
+	// Handle Civo-specific configuration
+	if providerName == "civo" {
+		configMgr := config.NewManager()
+		apiKey := configMgr.GetCivoToken()
+		if apiKey == "" {
+			log.Fatalf("Civo API token not found. Please run 'hyve config set-token civo' or set CIVO_TOKEN environment variable")
+		}
+		opts.APIKey = apiKey
+	}
+
+	// Handle GCP-specific configuration
+	if providerName == "gcp" && projectName != "" {
+		fdRepoMgr, err := repository.NewManager()
+		if err != nil {
+			log.Fatalf("Failed to create repository manager: %v", err)
+		}
+		defer fdRepoMgr.Close()
+		fdCurrentRepo, err := fdRepoMgr.GetCurrentRepository()
+		if err != nil {
+			log.Fatalf("Failed to get current repository: %v", err)
+		}
+		pcMgr := providerconfig.NewManager(fdCurrentRepo.LocalPath)
+		projectID, err := pcMgr.GetGCPProjectID(projectName)
+		if err != nil {
+			log.Fatalf("GCP project alias '%s' not found in repository configuration.\n"+
+				"Use 'hyve config gcp add-project --name %s --id <project-id>' to add it.", projectName, projectName)
+		}
+		opts.ProjectID = projectID
+		log.Printf("Using GCP project '%s' (ID: %s)", projectName, projectID)
 	}
 
 	providerFactory := provider.NewFactory()
 	found := false
 
 	for _, r := range regions {
-		log.Printf("🔍 Searching for cluster '%s' in region %s...", clusterName, r)
+		log.Printf("🔍 Searching for cluster '%s' in region %s (provider: %s)...", clusterName, r, providerName)
 
-		prov, err := providerFactory.CreateProvider("civo", apiKey, r)
+		opts.Region = r
+		prov, err := providerFactory.CreateProviderWithOptions(providerName, opts)
 		if err != nil {
 			log.Printf("Failed to create provider for region %s: %v", r, err)
 			continue
@@ -518,49 +901,87 @@ func forceDeleteClusterFromCloud(clusterName, region string) {
 }
 
 func listClusters() {
-	// Get current repository
-	repoMgr, err := repository.NewManager()
+	// Get local path from current repository
+	listRepoMgr, err := repository.NewManager()
 	if err != nil {
 		log.Fatalf("Failed to create repository manager: %v", err)
 	}
-	defer repoMgr.Close()
+	defer listRepoMgr.Close()
 
-	currentRepo, err := repoMgr.GetCurrentRepository()
+	listCurrentRepo, err := listRepoMgr.GetCurrentRepository()
 	if err != nil {
-		log.Fatalf("No Git repository configured. Use 'hyve git add' to configure a repository")
+		log.Fatalf("No Git repository configured. Add one with: hyve git add <name> --repo-url <url>")
 	}
 
-	// Create kubeconfig manager
-	kubeconfigMgr, err := kubeconfig.NewManager(currentRepo.Name)
-	if err != nil {
-		log.Fatalf("Failed to create kubeconfig manager: %v", err)
-	}
-	defer kubeconfigMgr.Close()
+	// Read cluster definitions from the repository's clusters directory
+	clustersDir := filepath.Join(listCurrentRepo.LocalPath, "clusters")
 
-	kubeconfigs, err := kubeconfigMgr.ListKubeconfigs()
-	if err != nil {
-		log.Fatalf("Failed to list kubeconfigs: %v", err)
-	}
-
-	if len(kubeconfigs) == 0 {
-		log.Printf("❌ No clusters found for repository '%s'", currentRepo.Name)
-		log.Println("\n💡 Run 'hyve kubeconfig sync' to retrieve kubeconfigs from active clusters")
+	// Check if clusters directory exists
+	if _, err := os.Stat(clustersDir); os.IsNotExist(err) {
+		log.Println("❌ No clusters found")
+		log.Println("\n💡 Run 'hyve cluster add <name>' to create a cluster")
 		return
 	}
 
-	log.Printf("🔑 Clusters in repository '%s' (%d):\n", currentRepo.Name, len(kubeconfigs))
+	// Read all YAML files from the clusters directory
+	entries, err := os.ReadDir(clustersDir)
+	if err != nil {
+		log.Fatalf("Failed to read clusters directory: %v", err)
+	}
 
-	for _, kc := range kubeconfigs {
-		log.Printf("  %s", kc.ClusterName)
-		log.Printf("    Repository: %s", kc.RepositoryName)
-		log.Printf("    Stored: %s", kc.UpdatedAt.Format("2006-01-02 15:04:05"))
+	var clusters []types.ClusterDefinition
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		// Only process .yaml and .yml files
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
+			continue
+		}
+
+		filePath := filepath.Join(clustersDir, name)
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			log.Printf("Warning: Failed to read %s: %v", name, err)
+			continue
+		}
+
+		var clusterDef types.ClusterDefinition
+		if err := yaml.Unmarshal(data, &clusterDef); err != nil {
+			log.Printf("Warning: Failed to parse %s: %v", name, err)
+			continue
+		}
+
+		// Only include files with Kind: Cluster
+		if clusterDef.Kind == "Cluster" {
+			clusters = append(clusters, clusterDef)
+		}
+	}
+
+	if len(clusters) == 0 {
+		log.Println("❌ No clusters found")
+		log.Println("\n💡 Run 'hyve cluster add <name>' to create a cluster")
+		return
+	}
+
+	log.Printf("📦 Clusters (%d):\n", len(clusters))
+
+	for _, cluster := range clusters {
+		log.Printf("  %s", cluster.Metadata.Name)
+		log.Printf("    Provider: %s", cluster.Spec.Provider)
+		log.Printf("    Region: %s", cluster.Metadata.Region)
+		log.Printf("    Nodes: %d (%s)", len(cluster.Spec.Nodes), strings.Join(cluster.Spec.Nodes, ", "))
+		if cluster.Spec.Ingress.Enabled {
+			log.Printf("    Ingress: enabled")
+		}
 		log.Println()
 	}
 
 	log.Println("💡 Commands:")
-	log.Println("  eval $(hyve use <cluster-name>)              # Quickly set kubeconfig (recommended)")
-	log.Println("  hyve kubeconfig get <cluster-name>           # Display kubeconfig")
-	log.Println("  hyve kubeconfig get <cluster-name> --save    # Save to ~/.kube/config-<cluster-name>")
-	log.Println("  hyve kubeconfig get <cluster-name> -o <file> # Save to specific file")
-	log.Println("  hyve kubeconfig use <cluster-name>           # Set kubeconfig for current terminal session")
+	log.Println("  hyve cluster add <name>       # Add a new cluster")
+	log.Println("  hyve cluster modify <name>    # Modify an existing cluster")
+	log.Println("  hyve cluster delete <name>    # Delete a cluster")
+	log.Println("  hyve reconcile                # Apply cluster changes to cloud")
 }

@@ -10,9 +10,30 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"civo-cluster-deploy/internal/git"
-	"civo-cluster-deploy/internal/types"
+	"hyve/internal/git"
+	"hyve/internal/types"
 )
+
+// ReconcileMode represents how reconciliation should be executed
+type ReconcileMode string
+
+const (
+	// ReconcileModeLocal performs reconciliation on the local machine (default)
+	ReconcileModeLocal ReconcileMode = "local"
+	// ReconcileModeCICD skips local reconciliation, deferring it to a CI/CD pipeline
+	ReconcileModeCICD ReconcileMode = "cicd"
+)
+
+// ReconcileConfig holds reconciliation configuration from the repository
+type ReconcileConfig struct {
+	Mode         ReconcileMode `yaml:"mode"`
+	StrictDelete bool          `yaml:"strictDelete"`
+}
+
+// RepoConfig represents the repository-level Hyve configuration stored in hyve.yaml
+type RepoConfig struct {
+	Reconcile ReconcileConfig `yaml:"reconcile"`
+}
 
 // Manager handles state file operations using Git repositories
 type Manager struct {
@@ -22,8 +43,7 @@ type Manager struct {
 
 // NewManager creates a new state manager with Git repository support
 func NewManager(gitRepoURL, localPath, username, token string) (*Manager, error) {
-	backendType := git.GetBackendType()
-	gitMgr, err := git.NewBackend(gitRepoURL, localPath, username, token, backendType)
+	gitMgr, err := git.NewBackend(gitRepoURL, localPath, username, token)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create git backend: %w", err)
 	}
@@ -55,6 +75,37 @@ func (m *Manager) CommitAndPush(ctx context.Context, message string) error {
 	}
 
 	return nil
+}
+
+// GetStateRoot returns the root directory of the state repository (the parent of the
+// clusters/ directory). Provider config files live here under provider-configs/.
+func (m *Manager) GetStateRoot() string {
+	return filepath.Dir(m.stateDir)
+}
+
+// LoadRepoConfig reads hyve.yaml from the repository root.
+// If the file does not exist, a default config with local mode is returned.
+func (m *Manager) LoadRepoConfig() (*RepoConfig, error) {
+	configPath := filepath.Join(filepath.Dir(m.stateDir), "hyve.yaml")
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &RepoConfig{Reconcile: ReconcileConfig{Mode: ReconcileModeLocal}}, nil
+		}
+		return nil, fmt.Errorf("failed to read hyve.yaml: %w", err)
+	}
+
+	var cfg RepoConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("failed to parse hyve.yaml: %w", err)
+	}
+
+	if cfg.Reconcile.Mode == "" {
+		cfg.Reconcile.Mode = ReconcileModeLocal
+	}
+
+	return &cfg, nil
 }
 
 // LoadClusterDefinitions loads all cluster definitions from YAML files

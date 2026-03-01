@@ -1,75 +1,31 @@
 package workflow
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"civo-cluster-deploy/internal/repository"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// setupTestEnvironment creates a test repository and workflow manager
-func setupTestEnvironment(t *testing.T) (*Manager, string, func()) {
-	// Create temp directory for test
-	tmpDir, err := os.MkdirTemp("", "workflow-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-
-	// Create repository manager and add test repo
-	repoMgr, err := repository.NewManager()
-	if err != nil {
-		os.RemoveAll(tmpDir)
-		t.Fatalf("Failed to create repository manager: %v", err)
-	}
-
-	_, err = repoMgr.AddRepository("test-workflow-repo", "https://github.com/test/test.git", tmpDir, "testuser")
-	if err != nil {
-		repoMgr.Close()
-		os.RemoveAll(tmpDir)
-		t.Fatalf("Failed to add test repository: %v", err)
-	}
-
-	if err := repoMgr.SetCurrentRepository("test-workflow-repo"); err != nil {
-		repoMgr.Close()
-		os.RemoveAll(tmpDir)
-		t.Fatalf("Failed to set current repository: %v", err)
-	}
-
-	// Create workflow manager
-	manager, err := NewManager()
-	if err != nil {
-		repoMgr.Close()
-		os.RemoveAll(tmpDir)
-		t.Fatalf("Failed to create workflow manager: %v", err)
-	}
-
-	cleanup := func() {
-		repoMgr.DeleteRepository("test-workflow-repo")
-		repoMgr.Close()
-		os.RemoveAll(tmpDir)
-	}
-
-	return manager, tmpDir, cleanup
+// setupTestEnvironment creates a test workflow manager
+func setupTestEnvironment(t *testing.T) (*Manager, string) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	manager, err := NewManager(tmpDir)
+	require.NoError(t, err, "Failed to create workflow manager")
+	return manager, tmpDir
 }
 
 func TestNewManager(t *testing.T) {
-	manager, _, cleanup := setupTestEnvironment(t)
-	defer cleanup()
-
-	if manager == nil {
-		t.Fatal("Expected manager to be created, got nil")
-	}
-
-	if manager.workflowsPath == "" {
-		t.Error("Expected workflowsPath to be set")
-	}
+	manager, _ := setupTestEnvironment(t)
+	require.NotNil(t, manager)
+	assert.NotEmpty(t, manager.workflowsPath)
 }
 
 func TestCreateWorkflow(t *testing.T) {
-	manager, _, cleanup := setupTestEnvironment(t)
-	defer cleanup()
+	manager, _ := setupTestEnvironment(t)
 
 	workflow := &Workflow{
 		Metadata: WorkflowMetadata{
@@ -81,10 +37,7 @@ func TestCreateWorkflow(t *testing.T) {
 				{
 					Name: "test-job",
 					Steps: []WorkflowStep{
-						{
-							Name:    "test-step",
-							Command: "echo 'test'",
-						},
+						{Name: "test-step", Command: "echo 'test'"},
 					},
 				},
 			},
@@ -92,70 +45,41 @@ func TestCreateWorkflow(t *testing.T) {
 	}
 
 	err := manager.CreateWorkflow(workflow)
-	if err != nil {
-		t.Fatalf("Failed to create workflow: %v", err)
-	}
+	require.NoError(t, err)
 
-	// Verify file exists
-	filePath := filepath.Join(manager.workflowsPath, "test-workflow.yaml")
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		t.Error("Workflow file was not created")
-	}
-
-	// Verify metadata was set
-	if workflow.APIVersion != WorkflowAPIVersion {
-		t.Errorf("Expected APIVersion %s, got %s", WorkflowAPIVersion, workflow.APIVersion)
-	}
-
-	if workflow.Kind != WorkflowKind {
-		t.Errorf("Expected Kind %s, got %s", WorkflowKind, workflow.Kind)
-	}
-
-	if workflow.Metadata.Created.IsZero() {
-		t.Error("Expected Created timestamp to be set")
-	}
+	assert.FileExists(t, filepath.Join(manager.workflowsPath, "test-workflow.yaml"))
+	assert.Equal(t, WorkflowAPIVersion, workflow.APIVersion)
+	assert.Equal(t, WorkflowKind, workflow.Kind)
+	assert.False(t, workflow.Metadata.Created.IsZero(), "Expected Created timestamp to be set")
 }
 
 func TestCreateWorkflow_DuplicateName(t *testing.T) {
-	manager, _, cleanup := setupTestEnvironment(t)
-	defer cleanup()
+	manager, _ := setupTestEnvironment(t)
 
 	workflow := &Workflow{
-		Metadata: WorkflowMetadata{
-			Name: "duplicate-workflow",
-		},
+		Metadata: WorkflowMetadata{Name: "duplicate-workflow"},
 		Spec: WorkflowSpec{
 			Jobs: []WorkflowJob{
 				{
 					Name: "test-job",
 					Steps: []WorkflowStep{
-						{
-							Name:    "test-step",
-							Command: "echo 'test'",
-						},
+						{Name: "test-step", Command: "echo 'test'"},
 					},
 				},
 			},
 		},
 	}
 
-	// Create first workflow
-	if err := manager.CreateWorkflow(workflow); err != nil {
-		t.Fatalf("Failed to create first workflow: %v", err)
-	}
-
-	// Try to create duplicate
 	err := manager.CreateWorkflow(workflow)
-	if err == nil {
-		t.Error("Expected error when creating duplicate workflow, got nil")
-	}
+	require.NoError(t, err)
+
+	err = manager.CreateWorkflow(workflow)
+	assert.Error(t, err)
 }
 
 func TestGetWorkflow(t *testing.T) {
-	manager, _, cleanup := setupTestEnvironment(t)
-	defer cleanup()
+	manager, _ := setupTestEnvironment(t)
 
-	// Create workflow
 	original := &Workflow{
 		Metadata: WorkflowMetadata{
 			Name:        "get-test-workflow",
@@ -166,50 +90,33 @@ func TestGetWorkflow(t *testing.T) {
 				{
 					Name: "test-job",
 					Steps: []WorkflowStep{
-						{
-							Name:    "test-step",
-							Command: "echo 'test'",
-						},
+						{Name: "test-step", Command: "echo 'test'"},
 					},
 				},
 			},
 		},
 	}
 
-	if err := manager.CreateWorkflow(original); err != nil {
-		t.Fatalf("Failed to create workflow: %v", err)
-	}
+	err := manager.CreateWorkflow(original)
+	require.NoError(t, err)
 
-	// Get workflow
 	retrieved, err := manager.GetWorkflow("get-test-workflow")
-	if err != nil {
-		t.Fatalf("Failed to get workflow: %v", err)
-	}
+	require.NoError(t, err)
 
-	if retrieved.Metadata.Name != original.Metadata.Name {
-		t.Errorf("Expected name %s, got %s", original.Metadata.Name, retrieved.Metadata.Name)
-	}
-
-	if retrieved.Metadata.Description != original.Metadata.Description {
-		t.Errorf("Expected description %s, got %s", original.Metadata.Description, retrieved.Metadata.Description)
-	}
+	assert.Equal(t, original.Metadata.Name, retrieved.Metadata.Name)
+	assert.Equal(t, original.Metadata.Description, retrieved.Metadata.Description)
 }
 
 func TestGetWorkflow_NotFound(t *testing.T) {
-	manager, _, cleanup := setupTestEnvironment(t)
-	defer cleanup()
+	manager, _ := setupTestEnvironment(t)
 
 	_, err := manager.GetWorkflow("nonexistent-workflow")
-	if err == nil {
-		t.Error("Expected error when getting nonexistent workflow, got nil")
-	}
+	assert.Error(t, err)
 }
 
 func TestUpdateWorkflow(t *testing.T) {
-	manager, _, cleanup := setupTestEnvironment(t)
-	defer cleanup()
+	manager, _ := setupTestEnvironment(t)
 
-	// Create workflow
 	workflow := &Workflow{
 		Metadata: WorkflowMetadata{
 			Name:        "update-test-workflow",
@@ -220,92 +127,63 @@ func TestUpdateWorkflow(t *testing.T) {
 				{
 					Name: "test-job",
 					Steps: []WorkflowStep{
-						{
-							Name:    "test-step",
-							Command: "echo 'test'",
-						},
+						{Name: "test-step", Command: "echo 'test'"},
 					},
 				},
 			},
 		},
 	}
 
-	if err := manager.CreateWorkflow(workflow); err != nil {
-		t.Fatalf("Failed to create workflow: %v", err)
-	}
+	err := manager.CreateWorkflow(workflow)
+	require.NoError(t, err)
 
-	// Update workflow
 	originalUpdated := workflow.Metadata.Updated
 	time.Sleep(10 * time.Millisecond) // Ensure timestamp difference
 
 	workflow.Metadata.Description = "Updated description"
-	if err := manager.UpdateWorkflow(workflow); err != nil {
-		t.Fatalf("Failed to update workflow: %v", err)
-	}
+	err = manager.UpdateWorkflow(workflow)
+	require.NoError(t, err)
 
-	// Verify update
 	updated, err := manager.GetWorkflow("update-test-workflow")
-	if err != nil {
-		t.Fatalf("Failed to get updated workflow: %v", err)
-	}
+	require.NoError(t, err)
 
-	if updated.Metadata.Description != "Updated description" {
-		t.Errorf("Expected description 'Updated description', got %s", updated.Metadata.Description)
-	}
-
-	if !updated.Metadata.Updated.After(originalUpdated) {
-		t.Error("Expected Updated timestamp to be newer")
-	}
+	assert.Equal(t, "Updated description", updated.Metadata.Description)
+	assert.True(t, updated.Metadata.Updated.After(originalUpdated), "Expected Updated timestamp to be newer")
 }
 
 func TestDeleteWorkflow(t *testing.T) {
-	manager, _, cleanup := setupTestEnvironment(t)
-	defer cleanup()
+	manager, _ := setupTestEnvironment(t)
 
-	// Create workflow
 	workflow := &Workflow{
-		Metadata: WorkflowMetadata{
-			Name: "delete-test-workflow",
-		},
+		Metadata: WorkflowMetadata{Name: "delete-test-workflow"},
 		Spec: WorkflowSpec{
 			Jobs: []WorkflowJob{
 				{
 					Name: "test-job",
 					Steps: []WorkflowStep{
-						{
-							Name:    "test-step",
-							Command: "echo 'test'",
-						},
+						{Name: "test-step", Command: "echo 'test'"},
 					},
 				},
 			},
 		},
 	}
 
-	if err := manager.CreateWorkflow(workflow); err != nil {
-		t.Fatalf("Failed to create workflow: %v", err)
-	}
+	err := manager.CreateWorkflow(workflow)
+	require.NoError(t, err)
 
-	// Delete workflow
-	if err := manager.DeleteWorkflow("delete-test-workflow"); err != nil {
-		t.Fatalf("Failed to delete workflow: %v", err)
-	}
+	err = manager.DeleteWorkflow("delete-test-workflow")
+	require.NoError(t, err)
 
-	// Verify deletion
-	_, err := manager.GetWorkflow("delete-test-workflow")
-	if err == nil {
-		t.Error("Expected error when getting deleted workflow, got nil")
-	}
+	_, err = manager.GetWorkflow("delete-test-workflow")
+	assert.Error(t, err)
 }
 
 func TestListWorkflows(t *testing.T) {
-	manager, _, cleanup := setupTestEnvironment(t)
-	defer cleanup()
+	manager, _ := setupTestEnvironment(t)
 
-	// Create multiple workflows
-	workflows := []*Workflow{
-		{
-			Metadata: WorkflowMetadata{Name: "workflow-1"},
+	for _, name := range []string{"workflow-1", "workflow-2", "workflow-3"} {
+		wf := &Workflow{
+			Metadata: WorkflowMetadata{Name: name},
 			Spec: WorkflowSpec{
 				Jobs: []WorkflowJob{
 					{
@@ -316,60 +194,21 @@ func TestListWorkflows(t *testing.T) {
 					},
 				},
 			},
-		},
-		{
-			Metadata: WorkflowMetadata{Name: "workflow-2"},
-			Spec: WorkflowSpec{
-				Jobs: []WorkflowJob{
-					{
-						Name: "job-1",
-						Steps: []WorkflowStep{
-							{Name: "step-1", Command: "echo 'test'"},
-						},
-					},
-				},
-			},
-		},
-		{
-			Metadata: WorkflowMetadata{Name: "workflow-3"},
-			Spec: WorkflowSpec{
-				Jobs: []WorkflowJob{
-					{
-						Name: "job-1",
-						Steps: []WorkflowStep{
-							{Name: "step-1", Command: "echo 'test'"},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	for _, wf := range workflows {
-		if err := manager.CreateWorkflow(wf); err != nil {
-			t.Fatalf("Failed to create workflow %s: %v", wf.Metadata.Name, err)
 		}
+		err := manager.CreateWorkflow(wf)
+		require.NoError(t, err)
 	}
 
-	// List workflows
 	list, err := manager.ListWorkflows()
-	if err != nil {
-		t.Fatalf("Failed to list workflows: %v", err)
-	}
-
-	if len(list) != 3 {
-		t.Errorf("Expected 3 workflows, got %d", len(list))
-	}
+	require.NoError(t, err)
+	assert.Len(t, list, 3)
 }
 
 func TestValidateWorkflow_NoName(t *testing.T) {
-	manager, _, cleanup := setupTestEnvironment(t)
-	defer cleanup()
+	manager, _ := setupTestEnvironment(t)
 
 	workflow := &Workflow{
-		Metadata: WorkflowMetadata{
-			Name: "", // Empty name
-		},
+		Metadata: WorkflowMetadata{Name: ""},
 		Spec: WorkflowSpec{
 			Jobs: []WorkflowJob{
 				{
@@ -383,38 +222,26 @@ func TestValidateWorkflow_NoName(t *testing.T) {
 	}
 
 	err := manager.CreateWorkflow(workflow)
-	if err == nil {
-		t.Error("Expected error for workflow without name, got nil")
-	}
+	assert.Error(t, err)
 }
 
 func TestValidateWorkflow_NoJobs(t *testing.T) {
-	manager, _, cleanup := setupTestEnvironment(t)
-	defer cleanup()
+	manager, _ := setupTestEnvironment(t)
 
 	workflow := &Workflow{
-		Metadata: WorkflowMetadata{
-			Name: "no-jobs-workflow",
-		},
-		Spec: WorkflowSpec{
-			Jobs: []WorkflowJob{}, // No jobs
-		},
+		Metadata: WorkflowMetadata{Name: "no-jobs-workflow"},
+		Spec:     WorkflowSpec{Jobs: []WorkflowJob{}},
 	}
 
 	err := manager.CreateWorkflow(workflow)
-	if err == nil {
-		t.Error("Expected error for workflow without jobs, got nil")
-	}
+	assert.Error(t, err)
 }
 
 func TestValidateWorkflow_InvalidName(t *testing.T) {
-	manager, _, cleanup := setupTestEnvironment(t)
-	defer cleanup()
+	manager, _ := setupTestEnvironment(t)
 
 	workflow := &Workflow{
-		Metadata: WorkflowMetadata{
-			Name: "invalid@name!", // Invalid characters
-		},
+		Metadata: WorkflowMetadata{Name: "invalid@name!"},
 		Spec: WorkflowSpec{
 			Jobs: []WorkflowJob{
 				{
@@ -428,78 +255,57 @@ func TestValidateWorkflow_InvalidName(t *testing.T) {
 	}
 
 	err := manager.CreateWorkflow(workflow)
-	if err == nil {
-		t.Error("Expected error for workflow with invalid name, got nil")
-	}
+	assert.Error(t, err)
 }
 
 func TestValidateWorkflow_DuplicateJobNames(t *testing.T) {
-	manager, _, cleanup := setupTestEnvironment(t)
-	defer cleanup()
+	manager, _ := setupTestEnvironment(t)
 
 	workflow := &Workflow{
-		Metadata: WorkflowMetadata{
-			Name: "duplicate-jobs",
-		},
+		Metadata: WorkflowMetadata{Name: "duplicate-jobs"},
 		Spec: WorkflowSpec{
 			Jobs: []WorkflowJob{
 				{
-					Name: "duplicate-job",
-					Steps: []WorkflowStep{
-						{Name: "step-1", Command: "echo 'test'"},
-					},
+					Name:  "duplicate-job",
+					Steps: []WorkflowStep{{Name: "step-1", Command: "echo 'test'"}},
 				},
 				{
-					Name: "duplicate-job", // Duplicate name
-					Steps: []WorkflowStep{
-						{Name: "step-2", Command: "echo 'test'"},
-					},
+					Name:  "duplicate-job",
+					Steps: []WorkflowStep{{Name: "step-2", Command: "echo 'test'"}},
 				},
 			},
 		},
 	}
 
 	err := manager.CreateWorkflow(workflow)
-	if err == nil {
-		t.Error("Expected error for workflow with duplicate job names, got nil")
-	}
+	assert.Error(t, err)
 }
 
 func TestValidateWorkflow_InvalidDependency(t *testing.T) {
-	manager, _, cleanup := setupTestEnvironment(t)
-	defer cleanup()
+	manager, _ := setupTestEnvironment(t)
 
 	workflow := &Workflow{
-		Metadata: WorkflowMetadata{
-			Name: "invalid-dependency",
-		},
+		Metadata: WorkflowMetadata{Name: "invalid-dependency"},
 		Spec: WorkflowSpec{
 			Jobs: []WorkflowJob{
 				{
 					Name:      "job-1",
-					DependsOn: []string{"nonexistent-job"}, // Invalid dependency
-					Steps: []WorkflowStep{
-						{Name: "step-1", Command: "echo 'test'"},
-					},
+					DependsOn: []string{"nonexistent-job"},
+					Steps:     []WorkflowStep{{Name: "step-1", Command: "echo 'test'"}},
 				},
 			},
 		},
 	}
 
 	err := manager.CreateWorkflow(workflow)
-	if err == nil {
-		t.Error("Expected error for workflow with invalid dependency, got nil")
-	}
+	assert.Error(t, err)
 }
 
 func TestValidateWorkflow_StepWithMultipleExecutionMethods(t *testing.T) {
-	manager, _, cleanup := setupTestEnvironment(t)
-	defer cleanup()
+	manager, _ := setupTestEnvironment(t)
 
 	workflow := &Workflow{
-		Metadata: WorkflowMetadata{
-			Name: "multiple-execution",
-		},
+		Metadata: WorkflowMetadata{Name: "multiple-execution"},
 		Spec: WorkflowSpec{
 			Jobs: []WorkflowJob{
 				{
@@ -517,28 +323,20 @@ func TestValidateWorkflow_StepWithMultipleExecutionMethods(t *testing.T) {
 	}
 
 	err := manager.CreateWorkflow(workflow)
-	if err == nil {
-		t.Error("Expected error for step with multiple execution methods, got nil")
-	}
+	assert.Error(t, err)
 }
 
 func TestValidateWorkflow_StepWithNoExecutionMethod(t *testing.T) {
-	manager, _, cleanup := setupTestEnvironment(t)
-	defer cleanup()
+	manager, _ := setupTestEnvironment(t)
 
 	workflow := &Workflow{
-		Metadata: WorkflowMetadata{
-			Name: "no-execution",
-		},
+		Metadata: WorkflowMetadata{Name: "no-execution"},
 		Spec: WorkflowSpec{
 			Jobs: []WorkflowJob{
 				{
 					Name: "test-job",
 					Steps: []WorkflowStep{
-						{
-							Name: "invalid-step",
-							// No command, script, or action
-						},
+						{Name: "invalid-step"},
 					},
 				},
 			},
@@ -546,9 +344,7 @@ func TestValidateWorkflow_StepWithNoExecutionMethod(t *testing.T) {
 	}
 
 	err := manager.CreateWorkflow(workflow)
-	if err == nil {
-		t.Error("Expected error for step with no execution method, got nil")
-	}
+	assert.Error(t, err)
 }
 
 func TestIsValidWorkflowName(t *testing.T) {
@@ -570,50 +366,24 @@ func TestIsValidWorkflowName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := isValidWorkflowName(tt.input)
-			if result != tt.expected {
-				t.Errorf("isValidWorkflowName(%q) = %v, want %v", tt.input, result, tt.expected)
-			}
+			assert.Equal(t, tt.expected, isValidWorkflowName(tt.input))
 		})
 	}
 }
 
 func TestCreateWorkflowTemplate(t *testing.T) {
 	workflow := CreateWorkflowTemplate("test-template", "Test template description")
+	require.NotNil(t, workflow)
 
-	if workflow == nil {
-		t.Fatal("Expected workflow template to be created, got nil")
-	}
-
-	if workflow.Metadata.Name != "test-template" {
-		t.Errorf("Expected name 'test-template', got %s", workflow.Metadata.Name)
-	}
-
-	if workflow.Metadata.Description != "Test template description" {
-		t.Errorf("Expected description 'Test template description', got %s", workflow.Metadata.Description)
-	}
-
-	if workflow.APIVersion != WorkflowAPIVersion {
-		t.Errorf("Expected APIVersion %s, got %s", WorkflowAPIVersion, workflow.APIVersion)
-	}
-
-	if workflow.Kind != WorkflowKind {
-		t.Errorf("Expected Kind %s, got %s", WorkflowKind, workflow.Kind)
-	}
-
-	if len(workflow.Spec.Jobs) == 0 {
-		t.Error("Expected template to have jobs")
-	}
+	assert.Equal(t, "test-template", workflow.Metadata.Name)
+	assert.Equal(t, "Test template description", workflow.Metadata.Description)
+	assert.Equal(t, WorkflowAPIVersion, workflow.APIVersion)
+	assert.Equal(t, WorkflowKind, workflow.Kind)
+	assert.NotEmpty(t, workflow.Spec.Jobs)
 }
 
 func TestGetWorkflowsPath(t *testing.T) {
-	manager, tmpDir, cleanup := setupTestEnvironment(t)
-	defer cleanup()
+	manager, tmpDir := setupTestEnvironment(t)
 
-	expectedPath := filepath.Join(tmpDir, WorkflowsDir)
-	actualPath := manager.GetWorkflowsPath()
-
-	if actualPath != expectedPath {
-		t.Errorf("Expected workflows path %s, got %s", expectedPath, actualPath)
-	}
+	assert.Equal(t, filepath.Join(tmpDir, WorkflowsDir), manager.GetWorkflowsPath())
 }
