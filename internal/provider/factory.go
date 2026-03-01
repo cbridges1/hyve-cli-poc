@@ -51,14 +51,9 @@ func accountEnvVar(accountName, providerName, credential string) string {
 func (f *Factory) CreateProvider(providerName, apiKey, region string) (Provider, error) {
 	switch strings.ToLower(providerName) {
 	case "civo":
-		// For Civo, use provided apiKey or load from credentials store
 		token := apiKey
 		if token == "" {
-			// Try environment variable first
-			token = os.Getenv("CIVO_TOKEN")
-		}
-		if token == "" {
-			// Load token from secrets store using the current civo organization name
+			// Load token from the local database using the current civo organization from context
 			credsMgr, err := credentials.NewManager()
 			if err == nil {
 				defer credsMgr.Close()
@@ -69,7 +64,7 @@ func (f *Factory) CreateProvider(providerName, apiKey, region string) (Provider,
 			}
 		}
 		if token == "" {
-			return nil, fmt.Errorf("Civo API token not found. Please run 'hyve config use civo <org-name>' then 'hyve config civo set-token', or set CIVO_TOKEN environment variable")
+			return nil, fmt.Errorf("Civo API token not found. Run 'hyve config use civo <org-name>' then 'hyve config civo set-token' to store the token locally")
 		}
 		civoProvider, err := civo.NewProvider(token, region)
 		if err != nil {
@@ -147,15 +142,14 @@ func (f *Factory) CreateProvider(providerName, apiKey, region string) (Provider,
 func (f *Factory) CreateProviderWithOptions(providerName string, opts ProviderOptions) (Provider, error) {
 	switch strings.ToLower(providerName) {
 	case "civo":
-		token := opts.APIKey
+		// CI/CD path: named env var (e.g. MY_ORG_CIVO_TOKEN for civoOrganization: my-org)
+		token := accountEnvVar(opts.AccountName, "civo", "token")
 
-		// Check named env var first (e.g. MY_ORG_CIVO_TOKEN)
+		// Local path: token pre-loaded from DB by caller, or load from DB directly
 		if token == "" {
-			token = accountEnvVar(opts.AccountName, "civo", "token")
+			token = opts.APIKey
 		}
-
 		if token == "" {
-			// Load token from secrets store using the current civo organization name
 			credsMgr, err := credentials.NewManager()
 			if err == nil {
 				defer credsMgr.Close()
@@ -166,10 +160,8 @@ func (f *Factory) CreateProviderWithOptions(providerName string, opts ProviderOp
 			}
 		}
 		if token == "" {
-			token = os.Getenv("CIVO_TOKEN")
-		}
-		if token == "" {
-			return nil, fmt.Errorf("Civo API token not found")
+			return nil, fmt.Errorf("Civo API token not found. In CI/CD set %s_CIVO_TOKEN; locally run 'hyve config civo set-token'",
+				strings.ToUpper(strings.NewReplacer("-", "_", " ", "_").Replace(opts.AccountName)))
 		}
 		civoProvider, err := civo.NewProvider(token, opts.Region)
 		if err != nil {
