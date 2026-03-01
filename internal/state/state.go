@@ -136,6 +136,11 @@ func (m *Manager) LoadClusterDefinitions() ([]types.ClusterDefinition, error) {
 	})
 
 	if err != nil {
+		if os.IsNotExist(err) {
+			// clusters/ directory doesn't exist — treat as empty desired state.
+			// ReconcileAll will still run strictDelete if enabled.
+			return nil, nil
+		}
 		return nil, err
 	}
 
