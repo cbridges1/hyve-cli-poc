@@ -104,20 +104,10 @@ func runLocalReconciliation(ctx context.Context, stateMgr *state.Manager) {
 
 	clusterDefs = stateMgr.OrderClusters(clusterDefs)
 
-	configMgr := config.NewManager()
-	apiKey := configMgr.GetCivoToken()
-
-	hasCivoClusters := false
-	for _, clusterDef := range clusterDefs {
-		if clusterDef.Spec.Provider == "" || clusterDef.Spec.Provider == "civo" {
-			hasCivoClusters = true
-			break
-		}
-	}
-
-	if hasCivoClusters && apiKey == "" {
-		log.Fatal("CIVO API token not found. Please run 'hyve config set-token civo' or set CIVO_TOKEN environment variable")
-	}
+	// Load the Civo token from the local DB for the local execution path.
+	// In CI/CD this will be empty — the reconciler resolves credentials via
+	// named environment variables (e.g. DEFAULT_CIVO_TOKEN) per cluster.
+	apiKey := config.NewManager().GetCivoToken()
 
 	reconciler := reconcile.NewReconciler(apiKey, stateMgr)
 	if err = reconciler.ReconcileAll(ctx, clusterDefs); err != nil {
