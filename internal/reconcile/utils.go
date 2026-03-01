@@ -34,7 +34,8 @@ func exportClusterInfoToEnv(ctx context.Context, clusterMgr *cluster.Manager, cl
 			fmt.Fprintf(file, "HYVE_CLUSTER_ACCESS_PORT=%s\n", clusterInfo.AccessPort)
 			fmt.Fprintf(file, "HYVE_CLUSTER_ID=%s\n", clusterInfo.ID)
 			fmt.Fprintf(file, "HYVE_CLUSTER_STATUS=%s\n", clusterInfo.Status)
-			fmt.Fprintf(file, "HYVE_CLUSTER_KUBECONFIG=%s\n", clusterInfo.Kubeconfig)
+			// Kubeconfig is multi-line YAML; use the heredoc syntax required by GITHUB_ENV
+			fmt.Fprintf(file, "HYVE_CLUSTER_KUBECONFIG<<HYVE_EOF\n%s\nHYVE_EOF\n", clusterInfo.Kubeconfig)
 
 			log.Printf("✅ Exported cluster information to GitHub Actions environment:")
 			log.Printf("  HYVE_CLUSTER_NAME=%s", clusterInfo.Name)
