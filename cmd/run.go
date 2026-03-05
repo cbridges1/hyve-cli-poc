@@ -116,7 +116,7 @@ func runCommandWithKubeconfig(clusterName string, cmdArgs []string) {
 	}
 
 	// Create temporary kubeconfig file
-	tempDir := filepath.Join(os.Getenv("HOME"), ".hyve", "temp")
+	tempDir := filepath.Join(HyveHome(), "temp")
 	if err := os.MkdirAll(tempDir, 0755); err != nil {
 		log.Fatalf("Failed to create temp directory: %v", err)
 	}
@@ -219,7 +219,7 @@ func runCommandString(clusterName, commandString string) {
 	}
 
 	// Create temporary kubeconfig file
-	tempDir := filepath.Join(os.Getenv("HOME"), ".hyve", "temp")
+	tempDir := filepath.Join(HyveHome(), "temp")
 	if err := os.MkdirAll(tempDir, 0755); err != nil {
 		log.Fatalf("Failed to create temp directory: %v", err)
 	}

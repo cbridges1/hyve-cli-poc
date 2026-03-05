@@ -414,12 +414,7 @@ func useKubeconfig(clusterName string, evalMode bool) {
 	}
 
 	// Create temporary kubeconfig file in ~/.hyve/temp/
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		log.Fatalf("Failed to get user home directory: %v", err)
-	}
-
-	tempDir := fmt.Sprintf("%s/.hyve/temp", homeDir)
+	tempDir := fmt.Sprintf("%s/temp", HyveHome())
 	if err := os.MkdirAll(tempDir, 0755); err != nil {
 		log.Fatalf("Failed to create temp directory: %v", err)
 	}

@@ -15,10 +15,17 @@ const (
 )
 
 var (
-	instance *DB
-	once     sync.Once
-	initErr  error
+	instance          *DB
+	once              sync.Once
+	initErr           error
+	configDirOverride string
 )
+
+// SetConfigDir overrides the config directory used by the singleton database.
+// Must be called before the first GetDB() call (e.g. from a PersistentPreRun hook).
+func SetConfigDir(dir string) {
+	configDirOverride = dir
+}
 
 // DB represents the unified database connection
 type DB struct {
@@ -30,7 +37,7 @@ type DB struct {
 // GetDB returns the singleton database instance
 func GetDB() (*DB, error) {
 	once.Do(func() {
-		instance, initErr = newDB("")
+		instance, initErr = newDB(configDirOverride)
 	})
 	return instance, initErr
 }

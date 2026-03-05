@@ -27,14 +27,26 @@ type Manager struct {
 	context     *Context
 }
 
+var hyveHomeOverride string
+
+// SetHyveHome overrides the Hyve home directory used by context managers.
+// Must be called before any NewManager() call (e.g. from a PersistentPreRun hook).
+func SetHyveHome(dir string) {
+	hyveHomeOverride = dir
+}
+
 // NewManager creates a new context manager
 func NewManager() (*Manager, error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		homeDir = "."
+	var contextPath string
+	if hyveHomeOverride != "" {
+		contextPath = filepath.Join(hyveHomeOverride, "context.yaml")
+	} else {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			homeDir = "."
+		}
+		contextPath = filepath.Join(homeDir, ".hyve", "context.yaml")
 	}
-
-	contextPath := filepath.Join(homeDir, ".hyve", "context.yaml")
 
 	mgr := &Manager{
 		contextPath: contextPath,

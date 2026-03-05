@@ -220,12 +220,7 @@ func init() {
 
 func addGitRepository(name, repoURL, username string, setCurrent bool) {
 	// Generate local path in centralized repositories directory
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		homeDir = "."
-	}
-
-	repositoriesDir := filepath.Join(homeDir, ".hyve", "repositories")
+	repositoriesDir := filepath.Join(HyveHome(), "repositories")
 	localPath := filepath.Join(repositoriesDir, strings.ToLower(name))
 
 	// Ensure repositories directory exists
