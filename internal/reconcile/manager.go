@@ -123,9 +123,9 @@ func (r *Reconciler) reconcileRegion(ctx context.Context, region string, cluster
 	return nil
 }
 
-// createProviderForCluster creates a provider with the appropriate options for a cluster.
-// opts.AccountName is populated from the cluster spec's account/project/subscription alias so
-// that the factory can look up named environment variables (e.g. MY_ACCOUNT_AWS_ACCESS_KEY_ID).
+// createProviderForCluster creates a provider with credentials resolved from the provider
+// config YAML files (provider-configs/*.yaml). Values may be literal strings or
+// ${ENV_VAR} references that are expanded at resolution time.
 func (r *Reconciler) createProviderForCluster(clusterDef types.ClusterDefinition) (provider.Provider, error) {
 	providerName := clusterDef.Spec.Provider
 	if providerName == "" {
@@ -133,92 +133,71 @@ func (r *Reconciler) createProviderForCluster(clusterDef types.ClusterDefinition
 	}
 
 	opts := provider.ProviderOptions{
-		Region: clusterDef.Metadata.Region,
-		APIKey: r.apiKey,
+		Region:      clusterDef.Metadata.Region,
+		APIKey:      r.apiKey,
+		AccountName: clusterDef.Spec.CivoOrganization, // overridden below per-provider
 	}
 
-	// Populate AccountName from the cluster spec so named env vars can be resolved.
+	pcMgr := providerconfig.NewManager(r.stateMgr.GetStateRoot())
+
 	switch strings.ToLower(providerName) {
 	case "civo":
 		opts.AccountName = clusterDef.Spec.CivoOrganization
+		if opts.AccountName != "" {
+			if token, err := pcMgr.GetCivoToken(opts.AccountName); err == nil && token != "" {
+				opts.APIKey = token
+			}
+		}
+
 	case "aws":
 		opts.AccountName = clusterDef.Spec.AWSAccount
+		if opts.AccountName != "" {
+			keyID, secret, session, _ := pcMgr.GetAWSCredentials(opts.AccountName)
+			opts.AccessKeyID = keyID
+			opts.SecretAccessKey = secret
+			opts.SessionToken = session
+		}
+
 	case "gcp":
 		opts.AccountName = clusterDef.Spec.GCPProject
-	case "azure":
-		opts.AccountName = clusterDef.Spec.AzureSubscription
-	}
-
-	// Handle GCP-specific configuration
-	if providerName == "gcp" {
-		// Use stored project ID if available, otherwise resolve from alias
 		if clusterDef.Spec.GCPProjectID != "" {
 			opts.ProjectID = clusterDef.Spec.GCPProjectID
-			log.Printf("Using GCP project ID '%s' for cluster %s",
-				clusterDef.Spec.GCPProjectID, clusterDef.Metadata.Name)
-		} else if clusterDef.Spec.GCPProject != "" {
-			projectID, err := r.resolveGCPProjectID(clusterDef.Spec.GCPProject)
+			log.Printf("Using GCP project ID '%s' for cluster %s", clusterDef.Spec.GCPProjectID, clusterDef.Metadata.Name)
+		} else if opts.AccountName != "" {
+			projectID, err := pcMgr.GetGCPProjectID(opts.AccountName)
 			if err != nil {
-				return nil, fmt.Errorf("failed to resolve GCP project '%s': %w", clusterDef.Spec.GCPProject, err)
+				return nil, fmt.Errorf("failed to resolve GCP project '%s': %w", opts.AccountName, err)
 			}
 			opts.ProjectID = projectID
-			log.Printf("Using GCP project '%s' (ID: %s) for cluster %s",
-				clusterDef.Spec.GCPProject, projectID, clusterDef.Metadata.Name)
+			log.Printf("Using GCP project '%s' (ID: %s) for cluster %s", opts.AccountName, projectID, clusterDef.Metadata.Name)
 		}
-	}
+		if opts.AccountName != "" {
+			credJSON, _ := pcMgr.GetGCPCredentialsJSON(opts.AccountName)
+			opts.GCPCredentialsJSON = credJSON
+		}
 
-	// Handle Azure-specific configuration
-	if providerName == "azure" {
+	case "azure":
+		opts.AccountName = clusterDef.Spec.AzureSubscription
 		if clusterDef.Spec.AzureSubscriptionID != "" {
 			opts.AzureSubscriptionID = clusterDef.Spec.AzureSubscriptionID
-			log.Printf("Using Azure subscription ID '%s' for cluster %s",
-				clusterDef.Spec.AzureSubscriptionID, clusterDef.Metadata.Name)
-		} else if clusterDef.Spec.AzureSubscription != "" {
-			subscriptionID, err := r.resolveAzureSubscriptionID(clusterDef.Spec.AzureSubscription)
+			log.Printf("Using Azure subscription ID '%s' for cluster %s", clusterDef.Spec.AzureSubscriptionID, clusterDef.Metadata.Name)
+		} else if opts.AccountName != "" {
+			subID, err := pcMgr.GetAzureSubscriptionID(opts.AccountName)
 			if err != nil {
-				return nil, fmt.Errorf("failed to resolve Azure subscription '%s': %w", clusterDef.Spec.AzureSubscription, err)
+				return nil, fmt.Errorf("failed to resolve Azure subscription '%s': %w", opts.AccountName, err)
 			}
-			opts.AzureSubscriptionID = subscriptionID
-			log.Printf("Using Azure subscription '%s' (ID: %s) for cluster %s",
-				clusterDef.Spec.AzureSubscription, subscriptionID, clusterDef.Metadata.Name)
+			opts.AzureSubscriptionID = subID
+			log.Printf("Using Azure subscription '%s' (ID: %s) for cluster %s", opts.AccountName, subID, clusterDef.Metadata.Name)
+		}
+		if opts.AccountName != "" {
+			tenantID, clientID, clientSecret, _ := pcMgr.GetAzureCredentials(opts.AccountName)
+			opts.AzureTenantID = tenantID
+			opts.AzureClientID = clientID
+			opts.AzureClientSecret = clientSecret
 		}
 	}
 
 	return r.providerFactory.CreateProviderWithOptions(providerName, opts)
-}
-
-// resolveGCPProjectID resolves a GCP project alias to its project ID
-func (r *Reconciler) resolveGCPProjectID(projectAlias string) (string, error) {
-	repoMgr, err := repository.NewManager()
-	if err != nil {
-		return "", fmt.Errorf("failed to create repository manager: %w", err)
-	}
-	defer repoMgr.Close()
-
-	currentRepo, err := repoMgr.GetCurrentRepository()
-	if err != nil {
-		return "", fmt.Errorf("failed to get current repository: %w", err)
-	}
-
-	pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
-	return pcMgr.GetGCPProjectID(projectAlias)
-}
-
-// resolveAzureSubscriptionID resolves an Azure subscription alias to its subscription ID
-func (r *Reconciler) resolveAzureSubscriptionID(subscriptionAlias string) (string, error) {
-	repoMgr, err := repository.NewManager()
-	if err != nil {
-		return "", fmt.Errorf("failed to create repository manager: %w", err)
-	}
-	defer repoMgr.Close()
-
-	currentRepo, err := repoMgr.GetCurrentRepository()
-	if err != nil {
-		return "", fmt.Errorf("failed to get current repository: %w", err)
-	}
-
-	pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
-	return pcMgr.GetAzureSubscriptionID(subscriptionAlias)
 }
 
 // reconcileCluster handles the reconciliation of a single cluster
@@ -369,9 +348,15 @@ func (r *Reconciler) strictDeleteSweep(ctx context.Context) {
 		if len(regions) == 0 {
 			regions = []string{"PHX1", "NYC1", "FRA1", "LON1"}
 		}
+		token := r.apiKey
+		if org.Name != "" {
+			if t, err := pcMgr.GetCivoToken(org.Name); err == nil && t != "" {
+				token = t
+			}
+		}
 		for _, region := range dedupRegions(regions) {
 			prov, err := r.providerFactory.CreateProviderWithOptions("civo", provider.ProviderOptions{
-				APIKey:      r.apiKey,
+				APIKey:      token,
 				Region:      region,
 				AccountName: org.Name,
 			})
@@ -402,10 +387,14 @@ func (r *Reconciler) strictDeleteSweep(ctx context.Context) {
 		if len(regions) == 0 {
 			regions = []string{"us-east-1", "us-west-2", "eu-west-1", "eu-central-1", "ap-southeast-1"}
 		}
+		keyID, secret, session, _ := pcMgr.GetAWSCredentials(account.Name)
 		for _, region := range dedupRegions(regions) {
 			prov, err := r.providerFactory.CreateProviderWithOptions("aws", provider.ProviderOptions{
-				Region:      region,
-				AccountName: account.Name,
+				Region:          region,
+				AccountName:     account.Name,
+				AccessKeyID:     keyID,
+				SecretAccessKey: secret,
+				SessionToken:    session,
 			})
 			if err != nil {
 				log.Printf("strict-delete: AWS account=%q region=%s: failed to create provider: %v", account.Name, region, err)
@@ -426,11 +415,13 @@ func (r *Reconciler) strictDeleteSweep(ctx context.Context) {
 		log.Printf("strict-delete: failed to list GCP projects: %v", err)
 	}
 	for _, project := range gcpProjects {
+		credJSON, _ := pcMgr.GetGCPCredentialsJSON(project.Name)
 		for _, region := range gcpRegionsForProject(project.Name, desiredClusters) {
 			prov, err := r.providerFactory.CreateProviderWithOptions("gcp", provider.ProviderOptions{
-				Region:      region,
-				ProjectID:   project.ProjectID,
-				AccountName: project.Name,
+				Region:             region,
+				ProjectID:          project.ProjectID,
+				AccountName:        project.Name,
+				GCPCredentialsJSON: credJSON,
 			})
 			if err != nil {
 				log.Printf("strict-delete: GCP project=%q region=%s: failed to create provider: %v", project.Name, region, err)
@@ -454,6 +445,7 @@ func (r *Reconciler) strictDeleteSweep(ctx context.Context) {
 			log.Printf("strict-delete: Azure subscription=%q has no resource groups configured, skipping", sub.Name)
 			continue
 		}
+		tenantID, clientID, clientSecret, _ := pcMgr.GetAzureCredentials(sub.Name)
 		for _, rg := range sub.ResourceGroups {
 			location := rg.Location
 			if location == "" {
@@ -464,6 +456,9 @@ func (r *Reconciler) strictDeleteSweep(ctx context.Context) {
 				AzureSubscriptionID: sub.SubscriptionID,
 				AzureResourceGroup:  rg.Name,
 				AccountName:         sub.Name,
+				AzureTenantID:       tenantID,
+				AzureClientID:       clientID,
+				AzureClientSecret:   clientSecret,
 			})
 			if err != nil {
 				log.Printf("strict-delete: Azure sub=%q rg=%q: failed to create provider: %v", sub.Name, rg.Name, err)

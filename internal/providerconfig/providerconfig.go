@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -15,8 +16,9 @@ const ProviderConfigDir = "provider-configs"
 
 // GCPProject represents a named GCP project
 type GCPProject struct {
-	Name      string `yaml:"name"`
-	ProjectID string `yaml:"project_id"`
+	Name            string `yaml:"name"`
+	ProjectID       string `yaml:"project_id"`
+	CredentialsJSON string `yaml:"credentials_json,omitempty"`
 }
 
 // GCPConfig represents GCP-specific configuration
@@ -46,12 +48,15 @@ type AWSVPC struct {
 
 // AWSAccount represents a named AWS account with all its resources
 type AWSAccount struct {
-	Name      string        `yaml:"name"`
-	AccountID string        `yaml:"account_id"`
-	Regions   []string      `yaml:"regions,omitempty"`
-	VPCs      []AWSVPC      `yaml:"vpcs,omitempty"`
-	EKSRoles  []AWSEKSRole  `yaml:"eks_roles,omitempty"`
-	NodeRoles []AWSNodeRole `yaml:"node_roles,omitempty"`
+	Name            string        `yaml:"name"`
+	AccountID       string        `yaml:"account_id"`
+	AccessKeyID     string        `yaml:"access_key_id,omitempty"`
+	SecretAccessKey string        `yaml:"secret_access_key,omitempty"`
+	SessionToken    string        `yaml:"session_token,omitempty"`
+	Regions         []string      `yaml:"regions,omitempty"`
+	VPCs            []AWSVPC      `yaml:"vpcs,omitempty"`
+	EKSRoles        []AWSEKSRole  `yaml:"eks_roles,omitempty"`
+	NodeRoles       []AWSNodeRole `yaml:"node_roles,omitempty"`
 }
 
 // AWSConfig represents AWS-specific configuration
@@ -71,6 +76,9 @@ type AzureResourceGroup struct {
 type AzureSubscription struct {
 	Name           string               `yaml:"name"`
 	SubscriptionID string               `yaml:"subscription_id"`
+	TenantID       string               `yaml:"tenant_id,omitempty"`
+	ClientID       string               `yaml:"client_id,omitempty"`
+	ClientSecret   string               `yaml:"client_secret,omitempty"`
 	ResourceGroups []AzureResourceGroup `yaml:"resource_groups,omitempty"`
 }
 
@@ -91,6 +99,7 @@ type CivoNetwork struct {
 type CivoOrganization struct {
 	Name     string        `yaml:"name"`
 	OrgID    string        `yaml:"org_id"`
+	Token    string        `yaml:"token,omitempty"`
 	Regions  []string      `yaml:"regions,omitempty"`
 	Networks []CivoNetwork `yaml:"networks,omitempty"`
 }
@@ -138,6 +147,74 @@ func (m *Manager) ConfigExists(provider string) bool {
 	configPath := m.getConfigPath(provider)
 	_, err := os.Stat(configPath)
 	return err == nil
+}
+
+// resolveValue resolves a config value that may contain an environment variable reference.
+// Values of the form "${VAR_NAME}" are substituted with the corresponding env var value.
+// Literal values (including empty strings) are returned as-is.
+func resolveValue(v string) string {
+	if strings.HasPrefix(v, "${") && strings.HasSuffix(v, "}") {
+		return os.Getenv(v[2 : len(v)-1])
+	}
+	return v
+}
+
+// GetCivoToken returns the resolved API token for a Civo organization.
+func (m *Manager) GetCivoToken(orgName string) (string, error) {
+	config, err := m.LoadCivoConfig()
+	if err != nil {
+		return "", err
+	}
+	for _, o := range config.Organizations {
+		if o.Name == orgName {
+			return resolveValue(o.Token), nil
+		}
+	}
+	return "", fmt.Errorf("Civo organization '%s' not found", orgName)
+}
+
+// GetGCPCredentialsJSON returns the resolved service account credentials JSON for a GCP project.
+func (m *Manager) GetGCPCredentialsJSON(projectName string) (string, error) {
+	config, err := m.LoadGCPConfig()
+	if err != nil {
+		return "", err
+	}
+	for _, p := range config.Projects {
+		if p.Name == projectName {
+			return resolveValue(p.CredentialsJSON), nil
+		}
+	}
+	return "", fmt.Errorf("GCP project '%s' not found", projectName)
+}
+
+// GetAWSCredentials returns the resolved credentials for an AWS account.
+func (m *Manager) GetAWSCredentials(accountName string) (accessKeyID, secretAccessKey, sessionToken string, err error) {
+	config, err := m.LoadAWSConfig()
+	if err != nil {
+		return
+	}
+	for _, a := range config.Accounts {
+		if a.Name == accountName {
+			return resolveValue(a.AccessKeyID), resolveValue(a.SecretAccessKey), resolveValue(a.SessionToken), nil
+		}
+	}
+	err = fmt.Errorf("AWS account '%s' not found", accountName)
+	return
+}
+
+// GetAzureCredentials returns the resolved service principal credentials for an Azure subscription.
+func (m *Manager) GetAzureCredentials(subscriptionName string) (tenantID, clientID, clientSecret string, err error) {
+	config, err := m.LoadAzureConfig()
+	if err != nil {
+		return
+	}
+	for _, s := range config.Subscriptions {
+		if s.Name == subscriptionName {
+			return resolveValue(s.TenantID), resolveValue(s.ClientID), resolveValue(s.ClientSecret), nil
+		}
+	}
+	err = fmt.Errorf("Azure subscription '%s' not found", subscriptionName)
+	return
 }
 
 // ========== GCP Functions ==========

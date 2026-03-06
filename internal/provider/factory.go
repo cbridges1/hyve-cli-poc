@@ -21,27 +21,6 @@ func NewFactory() *Factory {
 	return &Factory{}
 }
 
-// accountEnvVar looks up an environment variable using the naming pattern
-// {accountName}-{provider}-{credential}, normalised to uppercase with underscores.
-//
-// Examples:
-//   - ("main-account", "aws",   "access-key-id")    → MAIN_ACCOUNT_AWS_ACCESS_KEY_ID
-//   - ("my-project",  "gcp",   "credentials-json")  → MY_PROJECT_GCP_CREDENTIALS_JSON
-//   - ("prod",        "azure", "client-secret")      → PROD_AZURE_CLIENT_SECRET
-//   - ("my-org",      "civo",  "token")              → MY_ORG_CIVO_TOKEN
-//
-// Returns an empty string when accountName is empty or the variable is not set.
-func accountEnvVar(accountName, providerName, credential string) string {
-	if accountName == "" {
-		return ""
-	}
-	replacer := strings.NewReplacer("-", "_", " ", "_", ".", "_")
-	key := strings.ToUpper(replacer.Replace(accountName)) +
-		"_" + strings.ToUpper(replacer.Replace(providerName)) +
-		"_" + strings.ToUpper(replacer.Replace(credential))
-	return os.Getenv(key)
-}
-
 // CreateProvider creates a provider based on the provider name
 // For Civo, the apiKey parameter is used directly (or loaded from credentials store).
 // For AWS, GCP, and Azure, authentication uses the native CLI credentials:
@@ -122,33 +101,15 @@ func (f *Factory) CreateProvider(providerName, apiKey, region string) (Provider,
 	}
 }
 
-// CreateProviderWithOptions creates a provider with additional options.
-//
-// When opts.AccountName is set, named environment variables are checked first using the
-// pattern {ACCOUNT_NAME}_{PROVIDER}_{CREDENTIAL} (hyphens replaced with underscores, uppercase).
-// This allows CI/CD pipelines to supply per-account credentials without changing code.
-//
-// GCP project IDs and Azure subscription IDs are resolved from the provider YAML config files
-// (provider-configs/gcp.yaml, provider-configs/azure.yaml) by the caller before this function
-// is invoked, so those values should already be present in opts.ProjectID / opts.AzureSubscriptionID.
-//
-// Examples with AccountName = "main-account":
-//   - AWS:   MAIN_ACCOUNT_AWS_ACCESS_KEY_ID, MAIN_ACCOUNT_AWS_SECRET_ACCESS_KEY, MAIN_ACCOUNT_AWS_SESSION_TOKEN
-//   - GCP:   MAIN_ACCOUNT_GCP_CREDENTIALS_JSON  (project ID comes from provider-configs/gcp.yaml)
-//   - Azure: MAIN_ACCOUNT_AZURE_TENANT_ID, MAIN_ACCOUNT_AZURE_CLIENT_ID,
-//     MAIN_ACCOUNT_AZURE_CLIENT_SECRET, MAIN_ACCOUNT_AZURE_RESOURCE_GROUP
-//     (subscription ID comes from provider-configs/azure.yaml)
-//   - Civo:  MAIN_ACCOUNT_CIVO_TOKEN
+// CreateProviderWithOptions creates a provider using credentials supplied directly in opts.
+// Credential values are resolved from the provider config YAML files by the caller
+// (via providerconfig.Manager) before this function is invoked. Values may be literal
+// strings or the result of ${ENV_VAR} resolution performed by the config manager.
 func (f *Factory) CreateProviderWithOptions(providerName string, opts ProviderOptions) (Provider, error) {
 	switch strings.ToLower(providerName) {
 	case "civo":
-		// CI/CD path: named env var (e.g. MY_ORG_CIVO_TOKEN for civoOrganization: my-org)
-		token := accountEnvVar(opts.AccountName, "civo", "token")
-
-		// Local path: token pre-loaded from DB by caller, or load from DB directly
-		if token == "" {
-			token = opts.APIKey
-		}
+		// Token is pre-resolved from provider-configs/civo.yaml (or local DB for local mode).
+		token := opts.APIKey
 		if token == "" {
 			credsMgr, err := credentials.NewManager()
 			if err == nil {
@@ -160,8 +121,7 @@ func (f *Factory) CreateProviderWithOptions(providerName string, opts ProviderOp
 			}
 		}
 		if token == "" {
-			return nil, fmt.Errorf("Civo API token not found. In CI/CD set %s_CIVO_TOKEN; locally run 'hyve config civo set-token'",
-				strings.ToUpper(strings.NewReplacer("-", "_", " ", "_").Replace(opts.AccountName)))
+			return nil, fmt.Errorf("Civo API token not found. Set token in provider-configs/civo.yaml or run 'hyve config civo set-token'")
 		}
 		civoProvider, err := civo.NewProvider(token, opts.Region)
 		if err != nil {
@@ -170,10 +130,7 @@ func (f *Factory) CreateProviderWithOptions(providerName string, opts ProviderOp
 		return &ProviderAdapter{civo: civoProvider}, nil
 
 	case "gcp":
-		// Named env var for credentials JSON; project ID is resolved from provider-configs/gcp.yaml
-		// by the caller before reaching here and passed via opts.ProjectID.
-		credentialsJSON := accountEnvVar(opts.AccountName, "gcp", "credentials-json")
-
+		// CredentialsJSON and ProjectID are pre-resolved from provider-configs/gcp.yaml.
 		projectID := opts.ProjectID
 		if projectID == "" {
 			projectID = os.Getenv("GCP_PROJECT_ID")
@@ -181,47 +138,32 @@ func (f *Factory) CreateProviderWithOptions(providerName string, opts ProviderOp
 		if projectID == "" {
 			projectID = os.Getenv("GOOGLE_CLOUD_PROJECT")
 		}
-
-		gcpProvider, err := gcp.NewProvider(credentialsJSON, projectID, opts.Region)
+		gcpProvider, err := gcp.NewProvider(opts.GCPCredentialsJSON, projectID, opts.Region)
 		if err != nil {
 			return nil, err
 		}
 		return &ProviderAdapter{gcp: gcpProvider}, nil
 
 	case "aws":
-		// Named env vars take priority; fall back to AWS SDK default credential chain.
-		accessKeyID := accountEnvVar(opts.AccountName, "aws", "access-key-id")
-		secretAccessKey := accountEnvVar(opts.AccountName, "aws", "secret-access-key")
-		sessionToken := accountEnvVar(opts.AccountName, "aws", "session-token")
-
-		awsProvider, err := aws.NewProvider(accessKeyID, secretAccessKey, sessionToken, opts.Region)
+		// Credentials are pre-resolved from provider-configs/aws.yaml.
+		// Falls back to AWS SDK default credential chain when fields are empty.
+		awsProvider, err := aws.NewProvider(opts.AccessKeyID, opts.SecretAccessKey, opts.SessionToken, opts.Region)
 		if err != nil {
 			return nil, err
 		}
 		return &ProviderAdapter{aws: awsProvider}, nil
 
 	case "azure":
-		// Subscription ID is resolved from provider-configs/azure.yaml by the caller before
-		// reaching here and passed via opts.AzureSubscriptionID. Named env vars supply
-		// credentials (tenant/client/secret) and the resource group.
+		// SubscriptionID and credentials are pre-resolved from provider-configs/azure.yaml.
 		subscriptionID := opts.AzureSubscriptionID
 		if subscriptionID == "" {
 			subscriptionID = os.Getenv("AZURE_SUBSCRIPTION_ID")
 		}
-
 		resourceGroup := opts.AzureResourceGroup
-		if resourceGroup == "" {
-			resourceGroup = accountEnvVar(opts.AccountName, "azure", "resource-group")
-		}
 		if resourceGroup == "" {
 			resourceGroup = os.Getenv("AZURE_RESOURCE_GROUP")
 		}
-
-		tenantID := accountEnvVar(opts.AccountName, "azure", "tenant-id")
-		clientID := accountEnvVar(opts.AccountName, "azure", "client-id")
-		clientSecret := accountEnvVar(opts.AccountName, "azure", "client-secret")
-
-		azureProvider, err := azure.NewProvider(subscriptionID, resourceGroup, opts.Region, tenantID, clientID, clientSecret)
+		azureProvider, err := azure.NewProvider(subscriptionID, resourceGroup, opts.Region, opts.AzureTenantID, opts.AzureClientID, opts.AzureClientSecret)
 		if err != nil {
 			return nil, err
 		}
@@ -233,26 +175,33 @@ func (f *Factory) CreateProviderWithOptions(providerName string, opts ProviderOp
 }
 
 // ProviderOptions contains configuration options for creating providers.
+// Credential fields are resolved from provider-configs YAML by the caller
+// (via providerconfig.Manager.resolveValue) before being passed here.
 type ProviderOptions struct {
-	// AccountName is the alias used for named environment variable lookups.
-	// When set, the factory checks {ACCOUNT_NAME}_{PROVIDER}_{CREDENTIAL} env vars before
-	// falling back to the standard credential chain.
+	// AccountName is the account/project/org alias (used for logging only).
 	AccountName string
 
 	// Common
-	Region string // For all providers
+	Region string
 
-	// Civo - requires API token stored in Hyve or environment
-	APIKey string // Direct API key (optional, can load from credentials store)
+	// Civo
+	APIKey string // API token (resolved from civo.yaml or local DB)
 
-	// GCP - uses gcloud CLI authentication (Application Default Credentials)
-	ProjectID string // GCP project ID (can also be set via GCP_PROJECT_ID env var)
+	// GCP
+	ProjectID          string // GCP project ID (resolved from gcp.yaml or env)
+	GCPCredentialsJSON string // Service account credentials JSON (resolved from gcp.yaml)
 
-	// Azure - uses Azure CLI authentication (az login)
-	AzureSubscriptionID string // Azure subscription ID (can also be set via AZURE_SUBSCRIPTION_ID env var)
-	AzureResourceGroup  string // Azure resource group (can also be set via AZURE_RESOURCE_GROUP env var)
+	// AWS
+	AccessKeyID     string // Resolved from aws.yaml; falls back to SDK default chain if empty
+	SecretAccessKey string
+	SessionToken    string
 
-	// Note: AWS uses AWS CLI authentication automatically when no named env vars are found
+	// Azure
+	AzureSubscriptionID string // Resolved from azure.yaml or AZURE_SUBSCRIPTION_ID env
+	AzureResourceGroup  string // Resource group for this operation
+	AzureTenantID       string // Resolved from azure.yaml
+	AzureClientID       string
+	AzureClientSecret   string
 }
 
 // GetSupportedProviders returns list of supported providers
