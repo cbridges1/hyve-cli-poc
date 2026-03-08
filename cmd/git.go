@@ -174,17 +174,13 @@ If no commit message is provided, a default message based on the changes will be
 var gitSyncCmd = &cobra.Command{
 	Use:   "sync",
 	Short: "Sync with remote (pull and push)",
-	Long: `Pull latest changes from remote and push any local changes.
+	Long: `Pull latest changes from remote and optionally commit and push local changes.
 
 This command:
   1. Pulls latest changes from remote
-  2. If there are local changes, prompts for commit message
-  3. Commits and pushes local changes`,
+  2. If --message is provided, commits local changes and pushes to remote`,
 	Run: func(cmd *cobra.Command, args []string) {
-		var message string
-		if len(args) > 0 {
-			message = args[0]
-		}
+		message, _ := cmd.Flags().GetString("message")
 		syncGitChanges(message)
 	},
 }
@@ -193,6 +189,8 @@ func init() {
 	gitAddCmd.Flags().StringP("repo-url", "r", "", "Git repository URL (required)")
 	gitAddCmd.Flags().StringP("username", "u", "", "Git username for authentication (stored in repository config)")
 	gitAddCmd.Flags().BoolP("set-current", "c", false, "Set this repository as current after adding")
+
+	gitSyncCmd.Flags().StringP("message", "m", "", "Commit message for local changes before pushing")
 
 	gitBranchCreateCmd.Flags().BoolP("switch", "s", false, "Switch to the new branch after creating it")
 	gitBranchCreateCmd.Flags().BoolP("push", "p", false, "Push the branch to remote after creating it")
@@ -939,16 +937,8 @@ func syncGitChanges(message string) {
 
 	log.Printf("\n2. Local changes detected: %s", statusSummary)
 
-	// Prompt for commit message if not provided
 	if message == "" {
-		log.Print("Enter commit message (or press Enter to skip push): ")
-		var input string
-		fmt.Scanln(&input)
-		if input == "" {
-			log.Println("⏭️  Skipping commit and push")
-			return
-		}
-		message = input
+		message = "Update repository state"
 	}
 
 	// Commit changes
