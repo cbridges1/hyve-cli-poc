@@ -9,7 +9,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"hyve/internal/config"
 	"hyve/internal/credentials"
 	"hyve/internal/reconcile"
 	"hyve/internal/repository"
@@ -104,30 +103,26 @@ func runLocalReconciliation(ctx context.Context, stateMgr *state.Manager) {
 
 	clusterDefs = stateMgr.OrderClusters(clusterDefs)
 
-	// Load the Civo token from the local DB for the local execution path.
-	// In CI/CD this will be empty — the reconciler resolves credentials via
-	// named environment variables (e.g. DEFAULT_CIVO_TOKEN) per cluster.
-	apiKey := config.NewManager().GetCivoToken()
-
-	reconciler := reconcile.NewReconciler(apiKey, stateMgr)
+	reconciler := reconcile.NewReconciler(stateMgr)
 	if err = reconciler.ReconcileAll(ctx, clusterDefs); err != nil {
 		log.Fatalf("Reconciliation failed: %v", err)
 	}
 
-	log.Println("📝 Committing and pushing reconciliation changes to Git repository...")
-	if err := stateMgr.CommitAndPush(ctx, "Update cluster state after reconciliation"); err != nil {
-		log.Printf("❌ Failed to commit and push: %v", err)
-
-		if strings.Contains(err.Error(), "failed to push") {
-			log.Println("💡 Changes were committed locally but push failed")
-			log.Println("💡 Check your Git credentials and network connection")
-			log.Println("💡 You can manually push with: cd <repo-path> && git push")
-		} else if strings.Contains(err.Error(), "failed to commit") {
-			log.Println("💡 Commit operation failed - changes may still be in working directory")
-		}
-	} else {
-		log.Println("✅ Changes committed and pushed to remote repository successfully")
-	}
+	//TODO: Consider removing
+	//log.Println("📝 Committing and pushing reconciliation changes to Git repository...")
+	//if err := stateMgr.CommitAndPush(ctx, "Update cluster state after reconciliation"); err != nil {
+	//	log.Printf("❌ Failed to commit and push: %v", err)
+	//
+	//	if strings.Contains(err.Error(), "failed to push") {
+	//		log.Println("💡 Changes were committed locally but push failed")
+	//		log.Println("💡 Check your Git credentials and network connection")
+	//		log.Println("💡 You can manually push with: cd <repo-path> && git push")
+	//	} else if strings.Contains(err.Error(), "failed to commit") {
+	//		log.Println("💡 Commit operation failed - changes may still be in working directory")
+	//	}
+	//} else {
+	//	log.Println("✅ Changes committed and pushed to remote repository successfully")
+	//}
 
 	log.Println("Cluster reconciliation completed")
 }

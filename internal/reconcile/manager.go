@@ -21,15 +21,13 @@ import (
 type Reconciler struct {
 	providerFactory *provider.Factory
 	stateMgr        *state.Manager
-	apiKey          string
 }
 
 // NewReconciler creates a new reconciler
-func NewReconciler(apiKey string, stateMgr *state.Manager) *Reconciler {
+func NewReconciler(stateMgr *state.Manager) *Reconciler {
 	return &Reconciler{
 		providerFactory: provider.NewFactory(),
 		stateMgr:        stateMgr,
-		apiKey:          apiKey,
 	}
 }
 
@@ -134,7 +132,6 @@ func (r *Reconciler) createProviderForCluster(clusterDef types.ClusterDefinition
 
 	opts := provider.ProviderOptions{
 		Region:      clusterDef.Metadata.Region,
-		APIKey:      r.apiKey,
 		AccountName: clusterDef.Spec.CivoOrganization, // overridden below per-provider
 	}
 
@@ -142,7 +139,6 @@ func (r *Reconciler) createProviderForCluster(clusterDef types.ClusterDefinition
 
 	switch strings.ToLower(providerName) {
 	case "civo":
-		log.Printf(clusterDef.Spec.CivoOrganization + " igloo ")
 		opts.AccountName = clusterDef.Spec.CivoOrganization
 		if opts.AccountName != "" {
 			if token, err := pcMgr.GetCivoToken(opts.AccountName); err == nil && token != "" {
@@ -340,8 +336,8 @@ func (r *Reconciler) strictDeleteSweep(ctx context.Context) {
 	if err != nil {
 		log.Printf("strict-delete: failed to list Civo organizations: %v", err)
 	}
-	// When no named organizations are configured, fall back to global credentials
-	// (r.apiKey / CIVO_TOKEN) so clusters in unregistered accounts are still found.
+	// When no named organizations are configured, sweep with empty credentials
+	// so clusters in unregistered accounts are still found.
 	if len(civoOrgs) == 0 {
 		civoOrgs = []providerconfig.CivoOrganization{{Name: "", Regions: nil}}
 	}
