@@ -38,6 +38,7 @@ type ClusterSpec struct {
 	// Azure-specific configuration
 	AzureSubscription   string `yaml:"azureSubscription,omitempty"`   // Azure subscription name alias
 	AzureSubscriptionID string `yaml:"azureSubscriptionId,omitempty"` // Azure subscription ID (resolved from alias)
+	AzureResourceGroup  string `yaml:"azureResourceGroup,omitempty"`  // Azure resource group name
 
 	// Civo-specific configuration
 	CivoOrganization string `yaml:"civoOrganization,omitempty"` // Civo organization name alias

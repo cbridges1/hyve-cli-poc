@@ -195,6 +195,7 @@ func (r *Reconciler) createProviderForCluster(clusterDef types.ClusterDefinition
 			opts.AzureClientID = clientID
 			opts.AzureClientSecret = clientSecret
 		}
+		opts.AzureResourceGroup = clusterDef.Spec.AzureResourceGroup
 	}
 
 	return r.providerFactory.CreateProviderWithOptions(providerName, opts)
@@ -431,20 +432,18 @@ func (r *Reconciler) strictDeleteSweep(ctx context.Context) {
 			log.Printf("strict-delete: Azure subscription=%q has no resource groups configured, skipping", sub.Name)
 			continue
 		}
-		tenantID, clientID, clientSecret, _ := pcMgr.GetAzureCredentials(sub.Name)
 		for _, rg := range sub.ResourceGroups {
 			location := rg.Location
 			if location == "" {
 				location = "eastus"
 			}
-			prov, err := r.providerFactory.CreateProviderWithOptions("azure", provider.ProviderOptions{
-				Region:              location,
-				AzureSubscriptionID: sub.SubscriptionID,
-				AzureResourceGroup:  rg.Name,
-				AccountName:         sub.Name,
-				AzureTenantID:       tenantID,
-				AzureClientID:       clientID,
-				AzureClientSecret:   clientSecret,
+			prov, err := r.createProviderForCluster(types.ClusterDefinition{
+				Metadata: types.ClusterMetadata{Region: location},
+				Spec: types.ClusterSpec{
+					Provider:           "azure",
+					AzureSubscription:  sub.Name,
+					AzureResourceGroup: rg.Name,
+				},
 			})
 			if err != nil {
 				log.Printf("strict-delete: Azure sub=%q rg=%q: failed to create provider: %v", sub.Name, rg.Name, err)
