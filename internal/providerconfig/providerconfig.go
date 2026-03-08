@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -149,17 +148,8 @@ func (m *Manager) ConfigExists(provider string) bool {
 	return err == nil
 }
 
-// resolveValue resolves a config value that may contain an environment variable reference.
-// Values of the form "${VAR_NAME}" are substituted with the corresponding env var value.
-// Literal values (including empty strings) are returned as-is.
-func resolveValue(v string) string {
-	if strings.HasPrefix(v, "${") && strings.HasSuffix(v, "}") {
-		return os.Getenv(v[2 : len(v)-1])
-	}
-	return v
-}
-
-// GetCivoToken returns the resolved API token for a Civo organization.
+// GetCivoToken returns the API token for a Civo organization.
+// The token field holds the name of an environment variable to look up.
 func (m *Manager) GetCivoToken(orgName string) (string, error) {
 	config, err := m.LoadCivoConfig()
 	if err != nil {
@@ -167,13 +157,14 @@ func (m *Manager) GetCivoToken(orgName string) (string, error) {
 	}
 	for _, o := range config.Organizations {
 		if o.Name == orgName {
-			return resolveValue(o.Token), nil
+			return os.Getenv(o.Token), nil
 		}
 	}
 	return "", fmt.Errorf("Civo organization '%s' not found", orgName)
 }
 
-// GetGCPCredentialsJSON returns the resolved service account credentials JSON for a GCP project.
+// GetGCPCredentialsJSON returns the service account credentials JSON for a GCP project.
+// The credentials_json field holds the name of an environment variable to look up.
 func (m *Manager) GetGCPCredentialsJSON(projectName string) (string, error) {
 	config, err := m.LoadGCPConfig()
 	if err != nil {
@@ -181,13 +172,14 @@ func (m *Manager) GetGCPCredentialsJSON(projectName string) (string, error) {
 	}
 	for _, p := range config.Projects {
 		if p.Name == projectName {
-			return resolveValue(p.CredentialsJSON), nil
+			return os.Getenv(p.CredentialsJSON), nil
 		}
 	}
 	return "", fmt.Errorf("GCP project '%s' not found", projectName)
 }
 
-// GetAWSCredentials returns the resolved credentials for an AWS account.
+// GetAWSCredentials returns the credentials for an AWS account.
+// Each credential field holds the name of an environment variable to look up.
 func (m *Manager) GetAWSCredentials(accountName string) (accessKeyID, secretAccessKey, sessionToken string, err error) {
 	config, err := m.LoadAWSConfig()
 	if err != nil {
@@ -195,14 +187,15 @@ func (m *Manager) GetAWSCredentials(accountName string) (accessKeyID, secretAcce
 	}
 	for _, a := range config.Accounts {
 		if a.Name == accountName {
-			return resolveValue(a.AccessKeyID), resolveValue(a.SecretAccessKey), resolveValue(a.SessionToken), nil
+			return os.Getenv(a.AccessKeyID), os.Getenv(a.SecretAccessKey), os.Getenv(a.SessionToken), nil
 		}
 	}
 	err = fmt.Errorf("AWS account '%s' not found", accountName)
 	return
 }
 
-// GetAzureCredentials returns the resolved service principal credentials for an Azure subscription.
+// GetAzureCredentials returns the service principal credentials for an Azure subscription.
+// Each credential field holds the name of an environment variable to look up.
 func (m *Manager) GetAzureCredentials(subscriptionName string) (tenantID, clientID, clientSecret string, err error) {
 	config, err := m.LoadAzureConfig()
 	if err != nil {
@@ -210,7 +203,7 @@ func (m *Manager) GetAzureCredentials(subscriptionName string) (tenantID, client
 	}
 	for _, s := range config.Subscriptions {
 		if s.Name == subscriptionName {
-			return resolveValue(s.TenantID), resolveValue(s.ClientID), resolveValue(s.ClientSecret), nil
+			return os.Getenv(s.TenantID), os.Getenv(s.ClientID), os.Getenv(s.ClientSecret), nil
 		}
 	}
 	err = fmt.Errorf("Azure subscription '%s' not found", subscriptionName)
