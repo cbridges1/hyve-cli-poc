@@ -38,7 +38,7 @@ type RepoConfig struct {
 // Manager handles state file operations using Git repositories
 type Manager struct {
 	stateDir   string
-	gitManager git.GitBackend
+	gitManager *git.SystemBackend
 }
 
 // NewManager creates a new state manager with Git repository support

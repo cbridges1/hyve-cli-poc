@@ -9,6 +9,13 @@ import (
 	"strings"
 )
 
+// BranchInfo holds information about a Git branch
+type BranchInfo struct {
+	Name      string
+	IsCurrent bool
+	Hash      string
+}
+
 // SystemBackend handles Git repository operations using system git command
 type SystemBackend struct {
 	repoURL   string

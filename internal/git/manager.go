@@ -6,7 +6,7 @@ import (
 )
 
 // NewBackend creates a new Git backend using system git
-func NewBackend(repoURL, localPath, username, token string) (GitBackend, error) {
+func NewBackend(repoURL, localPath, username, token string) (*SystemBackend, error) {
 	if err := checkSystemGit(); err != nil {
 		return nil, fmt.Errorf("system git not available: %w", err)
 	}
