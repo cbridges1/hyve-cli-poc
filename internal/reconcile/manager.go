@@ -395,26 +395,24 @@ func (r *Reconciler) strictDeleteSweep(ctx context.Context) {
 	}
 
 	// --- GCP projects ---
-	// GCPProject has no region list; derive regions from cluster definitions for that
-	// project, supplemented by common GCP regions.
+	// Use "-" as the location to list all clusters across all zones and regions
+	// in a single API call per project (GCP wildcard location).
 	gcpProjects, err := pcMgr.ListGCPProjects()
 	if err != nil {
 		log.Printf("strict-delete: failed to list GCP projects: %v", err)
 	}
 	for _, project := range gcpProjects {
-		for _, region := range gcpRegionsForProject(project.Name, desiredClusters) {
-			prov, err := r.createProviderForCluster(types.ClusterDefinition{
-				Metadata: types.ClusterMetadata{Region: region},
-				Spec:     types.ClusterSpec{Provider: "gcp", GCPProject: project.Name},
-			})
-			if err != nil {
-				log.Printf("strict-delete: GCP project=%q region=%s: failed to create provider: %v", project.Name, region, err)
-				continue
-			}
-			log.Printf("strict-delete: sweeping GCP project=%q region=%s", project.Name, region)
-			if err := cluster.NewManager(prov).StrictDeleteOrphans(ctx, desiredClusters); err != nil {
-				log.Printf("strict-delete: GCP project=%q region=%s: %v", project.Name, region, err)
-			}
+		prov, err := r.createProviderForCluster(types.ClusterDefinition{
+			Metadata: types.ClusterMetadata{Region: "-"},
+			Spec:     types.ClusterSpec{Provider: "gcp", GCPProject: project.Name},
+		})
+		if err != nil {
+			log.Printf("strict-delete: GCP project=%q: failed to create provider: %v", project.Name, err)
+			continue
+		}
+		log.Printf("strict-delete: sweeping GCP project=%q (all regions)", project.Name)
+		if err := cluster.NewManager(prov).StrictDeleteOrphans(ctx, desiredClusters); err != nil {
+			log.Printf("strict-delete: GCP project=%q: %v", project.Name, err)
 		}
 	}
 
@@ -452,27 +450,6 @@ func (r *Reconciler) strictDeleteSweep(ctx context.Context) {
 			}
 		}
 	}
-}
-
-// gcpRegionsForProject returns the regions used by the given GCP project in the desired
-// cluster definitions, supplemented by common GCP regions not already covered.
-func gcpRegionsForProject(projectName string, desired []types.ClusterDefinition) []string {
-	seen := make(map[string]bool)
-	var regions []string
-	for _, c := range desired {
-		if strings.ToLower(c.Spec.Provider) == "gcp" && c.Spec.GCPProject == projectName && c.Metadata.Region != "" {
-			if !seen[c.Metadata.Region] {
-				seen[c.Metadata.Region] = true
-				regions = append(regions, c.Metadata.Region)
-			}
-		}
-	}
-	for _, r := range []string{"us-central1", "us-east1", "us-west1", "europe-west1", "asia-east1"} {
-		if !seen[r] {
-			regions = append(regions, r)
-		}
-	}
-	return regions
 }
 
 // dedupRegions returns the input slice with duplicates removed, preserving order.

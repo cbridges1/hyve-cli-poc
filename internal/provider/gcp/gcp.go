@@ -170,29 +170,30 @@ func (p *Provider) GetCluster(ctx context.Context, clusterID string) (*Cluster, 
 
 // FindClusterByName finds a cluster by name
 func (p *Provider) FindClusterByName(ctx context.Context, name string) (*Cluster, error) {
-	// First try to find in the default zone (for clusters we created)
-	cluster, err := p.containerService.Projects.Locations.Clusters.Get(p.clusterPath(name)).Context(ctx).Do()
-	if err == nil {
-		return p.convertCluster(cluster), nil
+	// When using the wildcard location "-", skip the zone-specific GET (which would
+	// produce an invalid zone like "--b") and go straight to listing all clusters.
+	if p.region != "-" {
+		cluster, err := p.containerService.Projects.Locations.Clusters.Get(p.clusterPath(name)).Context(ctx).Do()
+		if err == nil {
+			return p.convertCluster(cluster), nil
+		}
+		if !strings.Contains(err.Error(), "notFound") && !strings.Contains(err.Error(), "404") {
+			return nil, fmt.Errorf("failed to find GKE cluster: %w", err)
+		}
 	}
 
-	// If not found in default zone, list all clusters in region and find by name
-	if strings.Contains(err.Error(), "notFound") || strings.Contains(err.Error(), "404") {
-		// List all clusters in the region
-		resp, listErr := p.containerService.Projects.Locations.Clusters.List(p.parentPath()).Context(ctx).Do()
-		if listErr != nil {
-			return nil, nil // Cluster not found
-		}
-
-		for _, c := range resp.Clusters {
-			if c.Name == name {
-				return p.convertClusterWithLocation(c), nil
-			}
-		}
+	// List all clusters in the location (or all locations when region == "-") and find by name
+	resp, listErr := p.containerService.Projects.Locations.Clusters.List(p.parentPath()).Context(ctx).Do()
+	if listErr != nil {
 		return nil, nil // Cluster not found
 	}
 
-	return nil, fmt.Errorf("failed to find GKE cluster: %w", err)
+	for _, c := range resp.Clusters {
+		if c.Name == name {
+			return p.convertClusterWithLocation(c), nil
+		}
+	}
+	return nil, nil // Cluster not found
 }
 
 // CreateCluster creates a new cluster
