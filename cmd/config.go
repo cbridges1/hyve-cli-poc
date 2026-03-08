@@ -1139,7 +1139,7 @@ func getGCPProject(name string) {
 		log.Fatalf("❌ GCP project '%s' not found", name)
 	}
 
-	fmt.Printf("%s\n", projectID)
+	log.Printf("%s\n", projectID)
 }
 
 // AWS Account helper functions
@@ -1229,7 +1229,7 @@ func getAWSAccount(name string) {
 		log.Fatalf("❌ AWS account '%s' not found", name)
 	}
 
-	fmt.Printf("%s\n", accountID)
+	log.Printf("%s\n", accountID)
 }
 
 // AWS EKS Role helper functions
@@ -1323,7 +1323,7 @@ func getAWSEKSRole(name string) {
 		log.Fatalf("❌ EKS role '%s' not found in account '%s'", name, accountName)
 	}
 
-	fmt.Printf("%s\n", roleARN)
+	log.Printf("%s\n", roleARN)
 }
 
 // AWS Node Role helper functions
@@ -1417,7 +1417,7 @@ func getAWSNodeRole(name string) {
 		log.Fatalf("❌ Node role '%s' not found in account '%s'", name, accountName)
 	}
 
-	fmt.Printf("%s\n", roleARN)
+	log.Printf("%s\n", roleARN)
 }
 
 // AWS Node Role create/delete helper functions (actual AWS operations)
@@ -1625,7 +1625,7 @@ func getAWSVPC(name string) {
 		log.Fatalf("❌ VPC '%s' not found in account '%s'", name, accountName)
 	}
 
-	fmt.Printf("%s\n", vpcID)
+	log.Printf("%s\n", vpcID)
 }
 
 // AWS EKS Role create/delete helper functions (actual AWS operations)
@@ -2066,5 +2066,5 @@ func getCivoOrganization(name string) {
 		log.Fatalf("❌ Civo organization '%s' not found", name)
 	}
 
-	fmt.Printf("%s\n", orgID)
+	log.Printf("%s\n", orgID)
 }

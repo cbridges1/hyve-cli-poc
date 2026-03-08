@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -83,7 +84,7 @@ func newDB(configDir string) (*DB, error) {
 	// Run migrations from old databases
 	if err := d.migrateFromOldDatabases(); err != nil {
 		// Log but don't fail - migration is best-effort
-		fmt.Printf("Note: Could not migrate from old databases: %v\n", err)
+		log.Printf("Note: Could not migrate from old databases: %v\n", err)
 	}
 
 	return d, nil

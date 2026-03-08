@@ -341,7 +341,7 @@ func runWorkflow(name, cluster string, showLogs, showOutput bool) {
 
 func deleteWorkflow(name string, force bool) {
 	if !force {
-		fmt.Printf("Are you sure you want to delete workflow '%s'? (y/N): ", name)
+		log.Printf("Are you sure you want to delete workflow '%s'? (y/N): ", name)
 		var response string
 		fmt.Scanln(&response)
 		if strings.ToLower(response) != "y" && strings.ToLower(response) != "yes" {

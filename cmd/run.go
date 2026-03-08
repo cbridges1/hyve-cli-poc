@@ -93,11 +93,11 @@ func runCommandWithKubeconfig(clusterName string, cmdArgs []string) {
 
 		if len(kubeconfigs) == 1 {
 			clusterName = kubeconfigs[0].ClusterName
-			fmt.Printf("Using cluster: %s\n", clusterName)
+			log.Printf("Using cluster: %s\n", clusterName)
 		} else {
 			fmt.Println("Available clusters:")
 			for i, kc := range kubeconfigs {
-				fmt.Printf("  %d. %s\n", i+1, kc.ClusterName)
+				log.Printf("  %d. %s\n", i+1, kc.ClusterName)
 			}
 			log.Fatal("Please specify a cluster with --cluster flag")
 		}
@@ -148,8 +148,8 @@ func runCommandWithKubeconfig(clusterName string, cmdArgs []string) {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	fmt.Printf("🚀 Running command with cluster '%s' kubeconfig...\n", kc.ClusterName)
-	fmt.Printf("💡 Command: %s %v\n", command, args)
+	log.Printf("🚀 Running command with cluster '%s' kubeconfig...\n", kc.ClusterName)
+	log.Printf("💡 Command: %s %v\n", command, args)
 	fmt.Println()
 
 	// Execute the command
@@ -196,11 +196,11 @@ func runCommandString(clusterName, commandString string) {
 
 		if len(kubeconfigs) == 1 {
 			clusterName = kubeconfigs[0].ClusterName
-			fmt.Printf("Using cluster: %s\n", clusterName)
+			log.Printf("Using cluster: %s\n", clusterName)
 		} else {
 			fmt.Println("Available clusters:")
 			for i, kc := range kubeconfigs {
-				fmt.Printf("  %d. %s\n", i+1, kc.ClusterName)
+				log.Printf("  %d. %s\n", i+1, kc.ClusterName)
 			}
 			log.Fatal("Please specify a cluster with --cluster flag")
 		}
@@ -257,8 +257,8 @@ func runCommandString(clusterName, commandString string) {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	fmt.Printf("🚀 Running command with cluster '%s' kubeconfig...\n", kc.ClusterName)
-	fmt.Printf("💡 Command: %s\n", commandString)
+	log.Printf("🚀 Running command with cluster '%s' kubeconfig...\n", kc.ClusterName)
+	log.Printf("💡 Command: %s\n", commandString)
 	fmt.Println()
 
 	// Execute the command

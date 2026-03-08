@@ -142,7 +142,7 @@ func (r *Reconciler) createProviderForCluster(clusterDef types.ClusterDefinition
 
 	switch strings.ToLower(providerName) {
 	case "civo":
-		fmt.Printf(clusterDef.Spec.CivoOrganization + " igloo ")
+		log.Printf(clusterDef.Spec.CivoOrganization + " igloo ")
 		opts.AccountName = clusterDef.Spec.CivoOrganization
 		if opts.AccountName != "" {
 			if token, err := pcMgr.GetCivoToken(opts.AccountName); err == nil && token != "" {

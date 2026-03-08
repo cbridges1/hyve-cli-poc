@@ -428,9 +428,9 @@ func useKubeconfig(clusterName string, evalMode bool) {
 
 	if evalMode {
 		// Output only the shell commands for evaluation
-		fmt.Printf("export KUBECONFIG='%s'", tempFile)
-		fmt.Printf("; echo '✅ Kubeconfig set for cluster %s (repository: %s)'", clusterName, repoName)
-		fmt.Printf("; echo '💡 Use \"unset KUBECONFIG\" to revert'")
+		log.Printf("export KUBECONFIG='%s'", tempFile)
+		log.Printf("; echo '✅ Kubeconfig set for cluster %s (repository: %s)'", clusterName, repoName)
+		log.Printf("; echo '💡 Use \"unset KUBECONFIG\" to revert'")
 	} else {
 		// Regular informational output
 		log.Printf("✅ Temporary kubeconfig created for cluster '%s' (repository: %s)", clusterName, repoName)
