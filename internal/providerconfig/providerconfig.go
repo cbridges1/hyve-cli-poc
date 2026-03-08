@@ -154,7 +154,7 @@ func (m *Manager) ConfigExists(provider string) bool {
 // and the named variable's value is returned. Otherwise the literal value is returned as-is.
 func resolveCredential(v string) string {
 	if strings.HasPrefix(v, "${") && strings.HasSuffix(v, "}") {
-		fmt.Printf("igloo " + v)
+		fmt.Printf("igloo " + strings.TrimSpace(v[2:len(v)-1]))
 		return os.Getenv(strings.TrimSpace(v[2 : len(v)-1]))
 	}
 	return v
