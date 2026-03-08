@@ -348,17 +348,10 @@ func (r *Reconciler) strictDeleteSweep(ctx context.Context) {
 		if len(regions) == 0 {
 			regions = []string{"PHX1", "NYC1", "FRA1", "LON1"}
 		}
-		token := r.apiKey
-		if org.Name != "" {
-			if t, err := pcMgr.GetCivoToken(org.Name); err == nil && t != "" {
-				token = t
-			}
-		}
 		for _, region := range dedupRegions(regions) {
-			prov, err := r.providerFactory.CreateProviderWithOptions("civo", provider.ProviderOptions{
-				APIKey:      token,
-				Region:      region,
-				AccountName: org.Name,
+			prov, err := r.createProviderForCluster(types.ClusterDefinition{
+				Metadata: types.ClusterMetadata{Region: region},
+				Spec:     types.ClusterSpec{Provider: "civo", CivoOrganization: org.Name},
 			})
 			if err != nil {
 				log.Printf("strict-delete: Civo org=%q region=%s: failed to create provider: %v", org.Name, region, err)
@@ -387,14 +380,10 @@ func (r *Reconciler) strictDeleteSweep(ctx context.Context) {
 		if len(regions) == 0 {
 			regions = []string{"us-east-1", "us-west-2", "eu-west-1", "eu-central-1", "ap-southeast-1"}
 		}
-		keyID, secret, session, _ := pcMgr.GetAWSCredentials(account.Name)
 		for _, region := range dedupRegions(regions) {
-			prov, err := r.providerFactory.CreateProviderWithOptions("aws", provider.ProviderOptions{
-				Region:          region,
-				AccountName:     account.Name,
-				AccessKeyID:     keyID,
-				SecretAccessKey: secret,
-				SessionToken:    session,
+			prov, err := r.createProviderForCluster(types.ClusterDefinition{
+				Metadata: types.ClusterMetadata{Region: region},
+				Spec:     types.ClusterSpec{Provider: "aws", AWSAccount: account.Name},
 			})
 			if err != nil {
 				log.Printf("strict-delete: AWS account=%q region=%s: failed to create provider: %v", account.Name, region, err)
@@ -415,13 +404,10 @@ func (r *Reconciler) strictDeleteSweep(ctx context.Context) {
 		log.Printf("strict-delete: failed to list GCP projects: %v", err)
 	}
 	for _, project := range gcpProjects {
-		credJSON, _ := pcMgr.GetGCPCredentialsJSON(project.Name)
 		for _, region := range gcpRegionsForProject(project.Name, desiredClusters) {
-			prov, err := r.providerFactory.CreateProviderWithOptions("gcp", provider.ProviderOptions{
-				Region:             region,
-				ProjectID:          project.ProjectID,
-				AccountName:        project.Name,
-				GCPCredentialsJSON: credJSON,
+			prov, err := r.createProviderForCluster(types.ClusterDefinition{
+				Metadata: types.ClusterMetadata{Region: region},
+				Spec:     types.ClusterSpec{Provider: "gcp", GCPProject: project.Name},
 			})
 			if err != nil {
 				log.Printf("strict-delete: GCP project=%q region=%s: failed to create provider: %v", project.Name, region, err)
