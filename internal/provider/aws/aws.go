@@ -341,22 +341,29 @@ func (p *Provider) CreateCluster(ctx context.Context, clusterConfig *ClusterConf
 		return nil, fmt.Errorf("failed waiting for cluster to be ready: %w", err)
 	}
 
-	// Create node group(s)
+	// Create node group(s) and wait for each to become ready
 	log.Printf("Creating node group(s) for cluster %s...", clusterConfig.Name)
 	if len(clusterConfig.NodeGroups) > 0 {
 		for _, ng := range clusterConfig.NodeGroups {
 			if err := p.createNodeGroupFromSpec(ctx, clusterConfig.Name, clusterConfig.NodeRoleARN, subnetIDs, ng); err != nil {
-				log.Printf("Warning: Failed to create node group '%s': %v", ng.Name, err)
-			} else {
-				log.Printf("Node group '%s' creation started for cluster %s", ng.Name, clusterConfig.Name)
+				return nil, fmt.Errorf("failed to create node group '%s': %w", ng.Name, err)
 			}
+			log.Printf("Waiting for node group '%s' to become ready...", ng.Name)
+			if err := p.waitForNodeGroupReady(ctx, clusterConfig.Name, ng.Name); err != nil {
+				return nil, fmt.Errorf("node group '%s' did not become ready: %w", ng.Name, err)
+			}
+			log.Printf("Node group '%s' is ready", ng.Name)
 		}
 	} else {
+		nodeGroupName := fmt.Sprintf("%s-nodes", clusterConfig.Name)
 		if err := p.createNodeGroup(ctx, clusterConfig.Name, clusterConfig.NodeRoleARN, subnetIDs, clusterConfig.Nodes); err != nil {
-			log.Printf("Warning: Failed to create node group: %v", err)
-		} else {
-			log.Printf("Node group creation started for cluster %s", clusterConfig.Name)
+			return nil, fmt.Errorf("failed to create node group: %w", err)
 		}
+		log.Printf("Waiting for node group '%s' to become ready...", nodeGroupName)
+		if err := p.waitForNodeGroupReady(ctx, clusterConfig.Name, nodeGroupName); err != nil {
+			return nil, fmt.Errorf("node group '%s' did not become ready: %w", nodeGroupName, err)
+		}
+		log.Printf("Node group '%s' is ready", nodeGroupName)
 	}
 
 	// Refresh cluster info
@@ -795,6 +802,48 @@ func (p *Provider) deleteNodeGroups(ctx context.Context, clusterName string) err
 	}
 
 	return nil
+}
+
+// waitForNodeGroupReady waits for a node group to reach ACTIVE status.
+// Returns an error if the node group reaches DEGRADED or CREATE_FAILED.
+func (p *Provider) waitForNodeGroupReady(ctx context.Context, clusterName, nodeGroupName string) error {
+	for {
+		resp, err := p.eksClient.DescribeNodegroup(ctx, &eks.DescribeNodegroupInput{
+			ClusterName:   aws.String(clusterName),
+			NodegroupName: aws.String(nodeGroupName),
+		})
+		if err != nil {
+			return fmt.Errorf("failed to check node group status: %w", err)
+		}
+
+		status := resp.Nodegroup.Status
+		log.Printf("Node group '%s' status: %s", nodeGroupName, status)
+
+		switch status {
+		case ekstypes.NodegroupStatusActive:
+			return nil
+		case ekstypes.NodegroupStatusDegraded:
+			issues := resp.Nodegroup.Health.Issues
+			if len(issues) > 0 {
+				return fmt.Errorf("node group '%s' is DEGRADED: %s - %s",
+					nodeGroupName, issues[0].Code, aws.ToString(issues[0].Message))
+			}
+			return fmt.Errorf("node group '%s' is DEGRADED", nodeGroupName)
+		case ekstypes.NodegroupStatusCreateFailed:
+			issues := resp.Nodegroup.Health.Issues
+			if len(issues) > 0 {
+				return fmt.Errorf("node group '%s' creation failed: %s - %s",
+					nodeGroupName, issues[0].Code, aws.ToString(issues[0].Message))
+			}
+			return fmt.Errorf("node group '%s' creation failed", nodeGroupName)
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(30 * time.Second):
+		}
+	}
 }
 
 // waitForNodeGroupDeleted waits for a node group to be fully deleted
