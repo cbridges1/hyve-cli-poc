@@ -19,6 +19,7 @@ import (
 	"hyve/internal/config"
 	"hyve/internal/kubeconfig"
 	"hyve/internal/provider"
+	"hyve/internal/providerconfig"
 	"hyve/internal/repository"
 	"hyve/internal/types"
 )
@@ -531,16 +532,53 @@ func (e *Executor) exportClusterEnvironmentVariables(ctx context.Context, cluste
 		return fmt.Errorf("failed to load cluster definition: %w", err)
 	}
 
-	// Get API key from database, environment, or .env file (in that order)
-	configMgr := config.NewManager()
-	apiKey := configMgr.GetCivoToken()
-	if apiKey == "" {
-		return fmt.Errorf("CIVO API token not found. Please run 'hyve config set-token civo' or set CIVO_TOKEN environment variable")
+	// Create provider for this cluster
+	providerName := clusterDef.Spec.Provider
+	if providerName == "" {
+		providerName = "civo"
 	}
 
-	// Create provider for this cluster
+	opts := provider.ProviderOptions{
+		Region: clusterDef.Metadata.Region,
+	}
+
+	switch strings.ToLower(providerName) {
+	case "civo":
+		opts.AccountName = clusterDef.Spec.CivoOrganization
+		opts.APIKey = config.NewManager().GetCivoToken()
+	case "aws":
+		opts.AccountName = clusterDef.Spec.AWSAccount
+	case "gcp":
+		opts.AccountName = clusterDef.Spec.GCPProject
+		if clusterDef.Spec.GCPProject != "" {
+			if repoMgr, err := repository.NewManager(); err == nil {
+				defer repoMgr.Close()
+				if currentRepo, err := repoMgr.GetCurrentRepository(); err == nil {
+					pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
+					if projectID, err := pcMgr.GetGCPProjectID(clusterDef.Spec.GCPProject); err == nil {
+						opts.ProjectID = projectID
+					}
+				}
+			}
+		}
+	case "azure":
+		opts.AccountName = clusterDef.Spec.AzureSubscription
+		opts.AzureResourceGroup = clusterDef.Spec.AzureResourceGroup
+		if clusterDef.Spec.AzureSubscription != "" {
+			if repoMgr, err := repository.NewManager(); err == nil {
+				defer repoMgr.Close()
+				if currentRepo, err := repoMgr.GetCurrentRepository(); err == nil {
+					pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
+					if subID, err := pcMgr.GetAzureSubscriptionID(clusterDef.Spec.AzureSubscription); err == nil {
+						opts.AzureSubscriptionID = subID
+					}
+				}
+			}
+		}
+	}
+
 	factory := provider.NewFactory()
-	prov, err := factory.CreateProvider(clusterDef.Spec.Provider, apiKey, clusterDef.Metadata.Region)
+	prov, err := factory.CreateProviderWithOptions(providerName, opts)
 	if err != nil {
 		return fmt.Errorf("failed to create provider: %w", err)
 	}

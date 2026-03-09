@@ -23,7 +23,13 @@ type TemplateSpec struct {
 		LoadBalancer bool   `yaml:"loadBalancer"`
 		ChartVersion string `yaml:"chartVersion,omitempty"`
 	} `yaml:"ingress"`
-	Workflows TemplateWorkflowsSpec `yaml:"workflows,omitempty"` // Workflows to run on lifecycle events
+	Workflows TemplateWorkflowsSpec `yaml:"workflows,omitempty"`
+
+	// AWS-specific configuration (alias names defined in provider-configs/aws.yaml)
+	AWSAccount  string `yaml:"awsAccount,omitempty"`  // AWS account alias
+	AWSVPCName  string `yaml:"awsVpcName,omitempty"`  // VPC alias
+	AWSEKSRole  string `yaml:"awsEksRole,omitempty"`  // EKS cluster role alias
+	AWSNodeRole string `yaml:"awsNodeRole,omitempty"` // EKS node role alias
 }
 
 // Template represents a complete cluster template definition

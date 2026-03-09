@@ -10,12 +10,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"hyve/internal/config"
-	"hyve/internal/credentials"
 	"hyve/internal/kubeconfig"
 	"hyve/internal/provider"
 	"hyve/internal/providerconfig"
 	"hyve/internal/repository"
-	"hyve/internal/state"
 	"hyve/internal/types"
 )
 
@@ -131,85 +129,6 @@ func createKubeconfigManager() (*kubeconfig.Manager, string, error) {
 	}
 
 	return kubeconfigMgr, currentRepo.Name, nil
-}
-
-// createProviderFromCurrentRepo creates a provider instance from current repository configuration
-func createProviderFromCurrentRepo(ctx context.Context) (provider.Provider, error) {
-	// Get current repository
-	repoMgr, err := repository.NewManager()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create repository manager: %w", err)
-	}
-	defer repoMgr.Close()
-
-	currentRepo, err := repoMgr.GetCurrentRepository()
-	if err != nil {
-		return nil, fmt.Errorf("no Git repository configured")
-	}
-
-	// Get API key
-	configMgr := config.NewManager()
-	apiKey := configMgr.GetCivoToken()
-	if apiKey == "" {
-		return nil, fmt.Errorf("CIVO API token not found. Please run 'hyve config set-token civo' or set CIVO_TOKEN environment variable")
-	}
-
-	// Get authentication - prefer global credentials, fallback to environment token
-	credsMgr, err := credentials.NewManager()
-	var authToken string
-	var authUsername = currentRepo.Username
-
-	if err == nil {
-		defer credsMgr.Close()
-		if creds, _ := credsMgr.GetCredentials(); creds != nil {
-			if password, err := creds.GetPassword(); err == nil && password != "" {
-				authToken = password
-				if authUsername == "" {
-					authUsername = creds.Username
-				}
-			}
-		}
-	}
-
-	if authToken == "" {
-		authToken = os.Getenv("HYVE_GIT_TOKEN")
-	}
-
-	// Create state manager to get cluster definitions (to determine regions)
-	stateMgr, err := state.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
-	if err != nil {
-		log.Fatalf("Failed to create state manager: %v", err)
-	}
-
-	// Initialize and sync Git repository
-	if err := stateMgr.InitializeGitRepo(ctx); err != nil {
-		return nil, fmt.Errorf("failed to initialize Git repository: %w", err)
-	}
-
-	if err := stateMgr.SyncWithRemote(ctx); err != nil {
-		return nil, fmt.Errorf("failed to sync with remote repository: %w", err)
-	}
-
-	// Load cluster definitions to get regions
-	clusterDefs, err := stateMgr.LoadClusterDefinitions()
-	if err != nil {
-		return nil, fmt.Errorf("failed to load cluster definitions: %w", err)
-	}
-
-	// For now, use the first cluster's region or default to PHX1
-	region := "PHX1"
-	if len(clusterDefs) > 0 {
-		region = clusterDefs[0].Metadata.Region
-	}
-
-	// Create provider factory and provider
-	providerFactory := provider.NewFactory()
-	prov, err := providerFactory.CreateProvider("civo", apiKey, region)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create provider: %w", err)
-	}
-
-	return prov, nil
 }
 
 // createProviderForCluster creates a provider with the appropriate options for a specific cluster

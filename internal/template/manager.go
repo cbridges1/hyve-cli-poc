@@ -159,6 +159,11 @@ func (m *Manager) ConvertToClusterDefinition(template *Template, clusterName str
 				OnCreated: template.Spec.Workflows.OnCreated,
 				OnDestroy: template.Spec.Workflows.OnDestroy,
 			},
+			// AWS-specific alias names (resolved to IDs during template execution)
+			AWSAccount:  template.Spec.AWSAccount,
+			AWSVPCName:  template.Spec.AWSVPCName,
+			AWSEKSRole:  template.Spec.AWSEKSRole,
+			AWSNodeRole: template.Spec.AWSNodeRole,
 		},
 	}
 }

@@ -12,10 +12,9 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"hyve/internal/cluster"
-	"hyve/internal/config"
 	"hyve/internal/credentials"
 	"hyve/internal/kubeconfig"
-	"hyve/internal/provider"
+	"hyve/internal/providerconfig"
 	"hyve/internal/repository"
 	"hyve/internal/state"
 	"hyve/internal/template"
@@ -380,13 +379,6 @@ func showTemplate(name string) {
 func executeTemplate(templateName, clusterName string) {
 	ctx := context.Background()
 
-	// Get configuration
-	configMgr := config.NewManager()
-	apiKey := configMgr.GetCivoToken()
-	if apiKey == "" {
-		log.Fatal("CIVO API token not found. Please run 'hyve config set-token civo' or set CIVO_TOKEN environment variable")
-	}
-
 	// Get repository path
 	repoMgr, err := repository.NewManager()
 	if err != nil {
@@ -426,6 +418,39 @@ func executeTemplate(templateName, clusterName string) {
 		log.Printf("  OnDestroy Workflows: %s", strings.Join(tmpl.Spec.Workflows.OnDestroy, ", "))
 	}
 
+	// Resolve AWS aliases to actual IDs/ARNs before writing the cluster definition
+	if strings.ToLower(clusterDef.Spec.Provider) == "aws" && clusterDef.Spec.AWSAccount != "" {
+		pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
+		accountName := clusterDef.Spec.AWSAccount
+
+		if clusterDef.Spec.AWSVPCName != "" && clusterDef.Spec.AWSVPCID == "" {
+			vpcID, err := pcMgr.GetAWSVPCID(accountName, clusterDef.Spec.AWSVPCName)
+			if err != nil {
+				log.Fatalf("AWS VPC '%s' not found in account '%s': %v", clusterDef.Spec.AWSVPCName, accountName, err)
+			}
+			clusterDef.Spec.AWSVPCID = vpcID
+			log.Printf("  Resolved VPC '%s' → %s", clusterDef.Spec.AWSVPCName, vpcID)
+		}
+
+		if clusterDef.Spec.AWSEKSRole != "" && clusterDef.Spec.AWSEKSRoleARN == "" {
+			roleARN, err := pcMgr.GetAWSEKSRoleARN(accountName, clusterDef.Spec.AWSEKSRole)
+			if err != nil {
+				log.Fatalf("AWS EKS role '%s' not found in account '%s': %v", clusterDef.Spec.AWSEKSRole, accountName, err)
+			}
+			clusterDef.Spec.AWSEKSRoleARN = roleARN
+			log.Printf("  Resolved EKS role '%s' → %s", clusterDef.Spec.AWSEKSRole, roleARN)
+		}
+
+		if clusterDef.Spec.AWSNodeRole != "" && clusterDef.Spec.AWSNodeRoleARN == "" {
+			roleARN, err := pcMgr.GetAWSNodeRoleARN(accountName, clusterDef.Spec.AWSNodeRole)
+			if err != nil {
+				log.Fatalf("AWS node role '%s' not found in account '%s': %v", clusterDef.Spec.AWSNodeRole, accountName, err)
+			}
+			clusterDef.Spec.AWSNodeRoleARN = roleARN
+			log.Printf("  Resolved node role '%s' → %s", clusterDef.Spec.AWSNodeRole, roleARN)
+		}
+	}
+
 	// Save cluster definition to clusters directory
 	clustersDir := filepath.Join(currentRepo.LocalPath, "clusters")
 	if err := os.MkdirAll(clustersDir, 0755); err != nil {
@@ -456,8 +481,7 @@ func executeTemplate(templateName, clusterName string) {
 	}
 
 	// Create cluster manager
-	factory := provider.NewFactory()
-	prov, err := factory.CreateProvider(clusterDef.Spec.Provider, apiKey, clusterDef.Metadata.Region)
+	prov, err := createProviderForClusterDef(*clusterDef)
 	if err != nil {
 		log.Fatalf("Failed to create provider: %v", err)
 	}
