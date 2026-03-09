@@ -15,7 +15,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"hyve/internal/cluster"
+	cluster_pkg "hyve/internal/cluster"
 	"hyve/internal/config"
 	"hyve/internal/kubeconfig"
 	"hyve/internal/provider"
@@ -126,7 +126,7 @@ func (e *Executor) RunWorkflow(ctx context.Context, workflowName string, cluster
 	// Set up kubeconfig if cluster specified
 	var kubeconfigPath string
 	if targetCluster != "" {
-		kubeconfigPath, err = e.setupKubeconfig(targetCluster)
+		kubeconfigPath, err = e.setupKubeconfig(ctx, targetCluster)
 		if err != nil {
 			e.execution.Status = StatusFailed
 			e.addLog("ERROR", "", "", fmt.Sprintf("Failed to setup kubeconfig: %v", err))
@@ -459,8 +459,59 @@ func (e *Executor) executeAction(ctx context.Context, action string, params map[
 	}
 }
 
-// setupKubeconfig sets up kubeconfig for the target cluster
-func (e *Executor) setupKubeconfig(cluster string) (string, error) {
+// createProviderFromClusterDef creates a provider for the given cluster definition
+func (e *Executor) createProviderFromClusterDef(clusterDef *types.ClusterDefinition) (provider.Provider, error) {
+	providerName := clusterDef.Spec.Provider
+	if providerName == "" {
+		providerName = "civo"
+	}
+
+	opts := provider.ProviderOptions{
+		Region: clusterDef.Metadata.Region,
+	}
+
+	switch strings.ToLower(providerName) {
+	case "civo":
+		opts.AccountName = clusterDef.Spec.CivoOrganization
+		opts.APIKey = config.NewManager().GetCivoToken()
+	case "aws":
+		opts.AccountName = clusterDef.Spec.AWSAccount
+	case "gcp":
+		opts.AccountName = clusterDef.Spec.GCPProject
+		if clusterDef.Spec.GCPProject != "" {
+			if repoMgr, err := repository.NewManager(); err == nil {
+				defer repoMgr.Close()
+				if currentRepo, err := repoMgr.GetCurrentRepository(); err == nil {
+					pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
+					if projectID, err := pcMgr.GetGCPProjectID(clusterDef.Spec.GCPProject); err == nil {
+						opts.ProjectID = projectID
+					}
+				}
+			}
+		}
+	case "azure":
+		opts.AccountName = clusterDef.Spec.AzureSubscription
+		opts.AzureResourceGroup = clusterDef.Spec.AzureResourceGroup
+		if clusterDef.Spec.AzureSubscription != "" {
+			if repoMgr, err := repository.NewManager(); err == nil {
+				defer repoMgr.Close()
+				if currentRepo, err := repoMgr.GetCurrentRepository(); err == nil {
+					pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
+					if subID, err := pcMgr.GetAzureSubscriptionID(clusterDef.Spec.AzureSubscription); err == nil {
+						opts.AzureSubscriptionID = subID
+					}
+				}
+			}
+		}
+	}
+
+	factory := provider.NewFactory()
+	return factory.CreateProviderWithOptions(providerName, opts)
+}
+
+// setupKubeconfig sets up kubeconfig for the target cluster.
+// If no stored kubeconfig is found, it falls back to fetching from the cloud provider.
+func (e *Executor) setupKubeconfig(ctx context.Context, cluster string) (string, error) {
 	if e.kubeconfigManager == nil {
 		return "", fmt.Errorf("kubeconfig manager not initialized")
 	}
@@ -470,13 +521,43 @@ func (e *Executor) setupKubeconfig(cluster string) (string, error) {
 		return "", fmt.Errorf("failed to get kubeconfig: %w", err)
 	}
 
-	if kc == nil {
-		return "", fmt.Errorf("no kubeconfig found for cluster '%s'", cluster)
-	}
+	var kubeconfigData string
 
-	kubeconfigData, err := kc.GetConfig()
-	if err != nil {
-		return "", fmt.Errorf("failed to decrypt kubeconfig: %w", err)
+	if kc == nil {
+		// Fall back to fetching kubeconfig from the cloud provider
+		log.Printf("No stored kubeconfig found for cluster '%s', fetching from provider...", cluster)
+
+		clusterDef, err := e.loadClusterDefinition(cluster)
+		if err != nil {
+			return "", fmt.Errorf("no kubeconfig found for cluster '%s' and failed to load cluster definition: %w", cluster, err)
+		}
+
+		prov, err := e.createProviderFromClusterDef(clusterDef)
+		if err != nil {
+			return "", fmt.Errorf("no kubeconfig found for cluster '%s' and failed to create provider: %w", cluster, err)
+		}
+
+		clusterMgr := cluster_pkg.NewManager(prov)
+		clusterInfo, err := clusterMgr.GetClusterInfo(ctx, cluster)
+		if err != nil {
+			return "", fmt.Errorf("no kubeconfig found for cluster '%s' and failed to fetch from provider: %w", cluster, err)
+		}
+
+		if clusterInfo == nil || clusterInfo.Kubeconfig == "" {
+			return "", fmt.Errorf("no kubeconfig found for cluster '%s'", cluster)
+		}
+
+		kubeconfigData = clusterInfo.Kubeconfig
+
+		// Store for future use
+		if _, err := e.kubeconfigManager.StoreKubeconfig(cluster, kubeconfigData); err != nil {
+			log.Printf("Warning: failed to store kubeconfig for cluster '%s': %v", cluster, err)
+		}
+	} else {
+		kubeconfigData, err = kc.GetConfig()
+		if err != nil {
+			return "", fmt.Errorf("failed to decrypt kubeconfig: %w", err)
+		}
 	}
 
 	// Create temporary kubeconfig file
@@ -533,58 +614,13 @@ func (e *Executor) exportClusterEnvironmentVariables(ctx context.Context, cluste
 	}
 
 	// Create provider for this cluster
-	providerName := clusterDef.Spec.Provider
-	if providerName == "" {
-		providerName = "civo"
-	}
-
-	opts := provider.ProviderOptions{
-		Region: clusterDef.Metadata.Region,
-	}
-
-	switch strings.ToLower(providerName) {
-	case "civo":
-		opts.AccountName = clusterDef.Spec.CivoOrganization
-		opts.APIKey = config.NewManager().GetCivoToken()
-	case "aws":
-		opts.AccountName = clusterDef.Spec.AWSAccount
-	case "gcp":
-		opts.AccountName = clusterDef.Spec.GCPProject
-		if clusterDef.Spec.GCPProject != "" {
-			if repoMgr, err := repository.NewManager(); err == nil {
-				defer repoMgr.Close()
-				if currentRepo, err := repoMgr.GetCurrentRepository(); err == nil {
-					pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
-					if projectID, err := pcMgr.GetGCPProjectID(clusterDef.Spec.GCPProject); err == nil {
-						opts.ProjectID = projectID
-					}
-				}
-			}
-		}
-	case "azure":
-		opts.AccountName = clusterDef.Spec.AzureSubscription
-		opts.AzureResourceGroup = clusterDef.Spec.AzureResourceGroup
-		if clusterDef.Spec.AzureSubscription != "" {
-			if repoMgr, err := repository.NewManager(); err == nil {
-				defer repoMgr.Close()
-				if currentRepo, err := repoMgr.GetCurrentRepository(); err == nil {
-					pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
-					if subID, err := pcMgr.GetAzureSubscriptionID(clusterDef.Spec.AzureSubscription); err == nil {
-						opts.AzureSubscriptionID = subID
-					}
-				}
-			}
-		}
-	}
-
-	factory := provider.NewFactory()
-	prov, err := factory.CreateProviderWithOptions(providerName, opts)
+	prov, err := e.createProviderFromClusterDef(clusterDef)
 	if err != nil {
 		return fmt.Errorf("failed to create provider: %w", err)
 	}
 
 	// Create cluster manager
-	clusterMgr := cluster.NewManager(prov)
+	clusterMgr := cluster_pkg.NewManager(prov)
 
 	// Get cluster information
 	clusterInfo, err := clusterMgr.GetClusterInfo(ctx, clusterName)
