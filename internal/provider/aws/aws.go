@@ -437,7 +437,9 @@ func (p *Provider) getAvailabilityZones(ctx context.Context) ([]string, error) {
 	return azs, nil
 }
 
-// createClusterSubnets creates subnets for the EKS cluster in different AZs
+// createClusterSubnets creates subnets for the EKS cluster in different AZs,
+// then ensures an internet gateway exists and creates a public route table so
+// nodes can reach the EKS control plane and pull container images.
 func (p *Provider) createClusterSubnets(ctx context.Context, vpcID, clusterName, vpcCIDR string, azs []string) ([]string, error) {
 	// Parse the VPC CIDR to generate subnet CIDRs
 	// For a /16 VPC, we'll create /24 subnets
@@ -484,7 +486,7 @@ func (p *Provider) createClusterSubnets(ctx context.Context, vpcID, clusterName,
 		createdSubnetIDs = append(createdSubnetIDs, subnetID)
 		log.Printf("Created subnet %s (%s) in %s", subnetName, subnetID, az)
 
-		// Enable auto-assign public IP for the subnet (required for EKS nodes to access internet)
+		// Enable auto-assign public IP for the subnet (required for EKS nodes to reach internet)
 		_, err = p.ec2Client.ModifySubnetAttribute(ctx, &ec2.ModifySubnetAttributeInput{
 			SubnetId:            aws.String(subnetID),
 			MapPublicIpOnLaunch: &ec2types.AttributeBooleanValue{Value: aws.Bool(true)},
@@ -494,7 +496,124 @@ func (p *Provider) createClusterSubnets(ctx context.Context, vpcID, clusterName,
 		}
 	}
 
+	// Ensure the VPC has an internet gateway so nodes can reach the EKS control
+	// plane and pull container images. Without this, nodes boot but never register.
+	igwID, err := p.ensureInternetGateway(ctx, vpcID, clusterName)
+	if err != nil {
+		for _, subnetID := range createdSubnetIDs {
+			_ = p.deleteSubnet(ctx, subnetID)
+		}
+		return nil, fmt.Errorf("failed to ensure internet gateway: %w", err)
+	}
+
+	// Create a dedicated public route table (0.0.0.0/0 → igw) and associate it
+	// with the subnets we just created. We never modify the VPC's main route table.
+	if _, err := p.createPublicRouteTable(ctx, vpcID, igwID, clusterName, createdSubnetIDs); err != nil {
+		for _, subnetID := range createdSubnetIDs {
+			_ = p.deleteSubnet(ctx, subnetID)
+		}
+		return nil, fmt.Errorf("failed to create public route table: %w", err)
+	}
+
 	return createdSubnetIDs, nil
+}
+
+// ensureInternetGateway returns the ID of an internet gateway attached to the VPC.
+// If none exists, a new one is created, tagged, and attached.
+func (p *Provider) ensureInternetGateway(ctx context.Context, vpcID, clusterName string) (string, error) {
+	resp, err := p.ec2Client.DescribeInternetGateways(ctx, &ec2.DescribeInternetGatewaysInput{
+		Filters: []ec2types.Filter{
+			{Name: aws.String("attachment.vpc-id"), Values: []string{vpcID}},
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to describe internet gateways: %w", err)
+	}
+
+	if len(resp.InternetGateways) > 0 {
+		igwID := *resp.InternetGateways[0].InternetGatewayId
+		log.Printf("Using existing internet gateway %s for VPC %s", igwID, vpcID)
+		return igwID, nil
+	}
+
+	// No IGW attached — create one
+	createResp, err := p.ec2Client.CreateInternetGateway(ctx, &ec2.CreateInternetGatewayInput{
+		TagSpecifications: []ec2types.TagSpecification{
+			{
+				ResourceType: ec2types.ResourceTypeInternetGateway,
+				Tags: []ec2types.Tag{
+					{Key: aws.String("Name"), Value: aws.String(fmt.Sprintf("hyve-eks-%s-igw", clusterName))},
+					{Key: aws.String("CreatedBy"), Value: aws.String("hyve")},
+					{Key: aws.String("EKSCluster"), Value: aws.String(clusterName)},
+				},
+			},
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to create internet gateway: %w", err)
+	}
+
+	igwID := *createResp.InternetGateway.InternetGatewayId
+	log.Printf("Created internet gateway %s", igwID)
+
+	if _, err := p.ec2Client.AttachInternetGateway(ctx, &ec2.AttachInternetGatewayInput{
+		InternetGatewayId: aws.String(igwID),
+		VpcId:             aws.String(vpcID),
+	}); err != nil {
+		_, _ = p.ec2Client.DeleteInternetGateway(ctx, &ec2.DeleteInternetGatewayInput{
+			InternetGatewayId: aws.String(igwID),
+		})
+		return "", fmt.Errorf("failed to attach internet gateway to VPC: %w", err)
+	}
+
+	log.Printf("Attached internet gateway %s to VPC %s", igwID, vpcID)
+	return igwID, nil
+}
+
+// createPublicRouteTable creates a route table with a 0.0.0.0/0 → igw default route
+// and associates it with the given subnets. Returns the route table ID.
+func (p *Provider) createPublicRouteTable(ctx context.Context, vpcID, igwID, clusterName string, subnetIDs []string) (string, error) {
+	createResp, err := p.ec2Client.CreateRouteTable(ctx, &ec2.CreateRouteTableInput{
+		VpcId: aws.String(vpcID),
+		TagSpecifications: []ec2types.TagSpecification{
+			{
+				ResourceType: ec2types.ResourceTypeRouteTable,
+				Tags: []ec2types.Tag{
+					{Key: aws.String("Name"), Value: aws.String(fmt.Sprintf("hyve-eks-%s-rt", clusterName))},
+					{Key: aws.String("CreatedBy"), Value: aws.String("hyve")},
+					{Key: aws.String("EKSCluster"), Value: aws.String(clusterName)},
+				},
+			},
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to create route table: %w", err)
+	}
+
+	rtID := *createResp.RouteTable.RouteTableId
+	log.Printf("Created route table %s for cluster %s", rtID, clusterName)
+
+	if _, err := p.ec2Client.CreateRoute(ctx, &ec2.CreateRouteInput{
+		RouteTableId:         aws.String(rtID),
+		DestinationCidrBlock: aws.String("0.0.0.0/0"),
+		GatewayId:            aws.String(igwID),
+	}); err != nil {
+		_, _ = p.ec2Client.DeleteRouteTable(ctx, &ec2.DeleteRouteTableInput{RouteTableId: aws.String(rtID)})
+		return "", fmt.Errorf("failed to add internet route to route table: %w", err)
+	}
+
+	for _, subnetID := range subnetIDs {
+		if _, err := p.ec2Client.AssociateRouteTable(ctx, &ec2.AssociateRouteTableInput{
+			RouteTableId: aws.String(rtID),
+			SubnetId:     aws.String(subnetID),
+		}); err != nil {
+			log.Printf("Warning: Failed to associate subnet %s with route table %s: %v", subnetID, rtID, err)
+		} else {
+			log.Printf("Associated subnet %s with route table %s", subnetID, rtID)
+		}
+	}
+
+	return rtID, nil
 }
 
 // generateSubnetCIDRs generates subnet CIDRs from a VPC CIDR
@@ -894,6 +1013,16 @@ func (p *Provider) DeleteCluster(ctx context.Context, clusterID string) error {
 		log.Printf("Warning: Failed to find subnets for cluster %s: %v", clusterID, err)
 	}
 
+	routeTableIDs, err := p.findClusterRouteTables(ctx, clusterID)
+	if err != nil {
+		log.Printf("Warning: Failed to find route tables for cluster %s: %v", clusterID, err)
+	}
+
+	igwIDs, err := p.findClusterInternetGateways(ctx, clusterID)
+	if err != nil {
+		log.Printf("Warning: Failed to find internet gateways for cluster %s: %v", clusterID, err)
+	}
+
 	// Delete node groups first - EKS requires this before cluster deletion
 	log.Printf("Deleting node groups for cluster %s...", clusterID)
 	if err := p.deleteNodeGroups(ctx, clusterID); err != nil {
@@ -924,6 +1053,16 @@ func (p *Provider) DeleteCluster(ctx context.Context, clusterID string) error {
 		}
 	}
 
+	// Clean up route tables created by Hyve (disassociate subnets first)
+	for _, rtID := range routeTableIDs {
+		log.Printf("Deleting route table %s created for cluster %s", rtID, clusterID)
+		if err := p.deleteRouteTable(ctx, rtID); err != nil {
+			log.Printf("Warning: Failed to delete route table %s: %v", rtID, err)
+		} else {
+			log.Printf("Successfully deleted route table %s", rtID)
+		}
+	}
+
 	// Clean up subnets created by Hyve
 	for _, subnetID := range subnetIDs {
 		log.Printf("Deleting subnet %s created for cluster %s", subnetID, clusterID)
@@ -931,6 +1070,25 @@ func (p *Provider) DeleteCluster(ctx context.Context, clusterID string) error {
 			log.Printf("Warning: Failed to delete subnet %s: %v", subnetID, err)
 		} else {
 			log.Printf("Successfully deleted subnet %s", subnetID)
+		}
+	}
+
+	// Detach and delete internet gateways created by Hyve
+	for _, igw := range igwIDs {
+		log.Printf("Detaching and deleting internet gateway %s created for cluster %s", igw.id, clusterID)
+		if _, err := p.ec2Client.DetachInternetGateway(ctx, &ec2.DetachInternetGatewayInput{
+			InternetGatewayId: aws.String(igw.id),
+			VpcId:             aws.String(igw.vpcID),
+		}); err != nil {
+			log.Printf("Warning: Failed to detach internet gateway %s: %v", igw.id, err)
+			continue
+		}
+		if _, err := p.ec2Client.DeleteInternetGateway(ctx, &ec2.DeleteInternetGatewayInput{
+			InternetGatewayId: aws.String(igw.id),
+		}); err != nil {
+			log.Printf("Warning: Failed to delete internet gateway %s: %v", igw.id, err)
+		} else {
+			log.Printf("Successfully deleted internet gateway %s", igw.id)
 		}
 	}
 
@@ -981,6 +1139,90 @@ func (p *Provider) findClusterSubnets(ctx context.Context, clusterName string) (
 	}
 
 	return subnetIDs, nil
+}
+
+// igwRef holds an internet gateway ID together with the VPC it is attached to,
+// so the caller can detach before deleting.
+type igwRef struct {
+	id    string
+	vpcID string
+}
+
+// findClusterRouteTables finds route tables created by Hyve for a cluster.
+func (p *Provider) findClusterRouteTables(ctx context.Context, clusterName string) ([]string, error) {
+	resp, err := p.ec2Client.DescribeRouteTables(ctx, &ec2.DescribeRouteTablesInput{
+		Filters: []ec2types.Filter{
+			{Name: aws.String("tag:EKSCluster"), Values: []string{clusterName}},
+			{Name: aws.String("tag:CreatedBy"), Values: []string{"hyve"}},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to describe route tables: %w", err)
+	}
+
+	var ids []string
+	for _, rt := range resp.RouteTables {
+		if rt.RouteTableId != nil {
+			ids = append(ids, *rt.RouteTableId)
+		}
+	}
+	return ids, nil
+}
+
+// deleteRouteTable disassociates all explicit subnet associations then deletes the route table.
+func (p *Provider) deleteRouteTable(ctx context.Context, rtID string) error {
+	resp, err := p.ec2Client.DescribeRouteTables(ctx, &ec2.DescribeRouteTablesInput{
+		RouteTableIds: []string{rtID},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to describe route table %s: %w", rtID, err)
+	}
+	if len(resp.RouteTables) > 0 {
+		for _, assoc := range resp.RouteTables[0].Associations {
+			if assoc.Main != nil && *assoc.Main {
+				continue // never disassociate the main route table
+			}
+			if assoc.RouteTableAssociationId != nil {
+				if _, err := p.ec2Client.DisassociateRouteTable(ctx, &ec2.DisassociateRouteTableInput{
+					AssociationId: assoc.RouteTableAssociationId,
+				}); err != nil {
+					log.Printf("Warning: Failed to disassociate route table %s: %v", rtID, err)
+				}
+			}
+		}
+	}
+	if _, err := p.ec2Client.DeleteRouteTable(ctx, &ec2.DeleteRouteTableInput{
+		RouteTableId: aws.String(rtID),
+	}); err != nil {
+		return fmt.Errorf("failed to delete route table %s: %w", rtID, err)
+	}
+	return nil
+}
+
+// findClusterInternetGateways finds internet gateways created by Hyve for a cluster.
+func (p *Provider) findClusterInternetGateways(ctx context.Context, clusterName string) ([]igwRef, error) {
+	resp, err := p.ec2Client.DescribeInternetGateways(ctx, &ec2.DescribeInternetGatewaysInput{
+		Filters: []ec2types.Filter{
+			{Name: aws.String("tag:EKSCluster"), Values: []string{clusterName}},
+			{Name: aws.String("tag:CreatedBy"), Values: []string{"hyve"}},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to describe internet gateways: %w", err)
+	}
+
+	var refs []igwRef
+	for _, igw := range resp.InternetGateways {
+		if igw.InternetGatewayId == nil {
+			continue
+		}
+		vpcID := ""
+		if len(igw.Attachments) > 0 && igw.Attachments[0].VpcId != nil {
+			vpcID = *igw.Attachments[0].VpcId
+		}
+		refs = append(refs, igwRef{id: *igw.InternetGatewayId, vpcID: vpcID})
+	}
+	return refs, nil
 }
 
 // waitForClusterDeleted waits for a cluster to be fully deleted
