@@ -71,6 +71,7 @@ func (m *Manager) Create(ctx context.Context, clusterDef types.ClusterDefinition
 		Name:        clusterDef.Metadata.Name,
 		Region:      clusterDef.Metadata.Region,
 		Nodes:       clusterDef.Spec.Nodes,
+		NodeGroups:  clusterDef.Spec.NodeGroups,
 		ClusterType: clusterDef.Spec.ClusterType,
 		// AWS-specific configuration
 		AWSRoleARN:     clusterDef.Spec.AWSEKSRoleARN,
@@ -93,8 +94,9 @@ func (m *Manager) Update(ctx context.Context, clusterDef types.ClusterDefinition
 	}
 
 	config := &provider.ClusterUpdateConfig{
-		Name:  clusterDef.Metadata.Name,
-		Nodes: clusterDef.Spec.Nodes,
+		Name:       clusterDef.Metadata.Name,
+		Nodes:      clusterDef.Spec.Nodes,
+		NodeGroups: clusterDef.Spec.NodeGroups,
 	}
 
 	_, err = m.provider.UpdateCluster(ctx, cluster.ID, config)

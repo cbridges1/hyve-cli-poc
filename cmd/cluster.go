@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -172,7 +173,18 @@ Use --account-name, --project-name, --subscription-name, or --org-name to overri
 			}
 		}
 
-		addClusterFromCLI(clusterName, region, providerName, nodes, clusterType, accountName, projectName, subscriptionName, orgName, vpcName, eksRoleName, nodeRoleName)
+		// Parse --node-group flags
+		nodeGroupStrs, _ := cmd.Flags().GetStringArray("node-group")
+		var nodeGroups []types.NodeGroup
+		for _, s := range nodeGroupStrs {
+			ng, err := parseNodeGroup(s)
+			if err != nil {
+				log.Fatalf("Invalid --node-group value '%s': %v", s, err)
+			}
+			nodeGroups = append(nodeGroups, ng)
+		}
+
+		addClusterFromCLI(clusterName, region, providerName, nodes, nodeGroups, clusterType, accountName, projectName, subscriptionName, orgName, vpcName, eksRoleName, nodeRoleName)
 	},
 }
 
@@ -292,10 +304,13 @@ func init() {
 	addCmd.Flags().String("eks-role-name", "", "AWS EKS IAM role name alias (required for AWS provider)")
 	addCmd.Flags().String("node-role-name", "", "AWS EKS node IAM role name alias (required for AWS provider)")
 
+	addCmd.Flags().StringArray("node-group", nil, `Node group spec (repeatable): name=workers,type=t3.medium,count=3[,min=1,max=5,disk=50,spot=true,mode=System]`)
+
 	modifyCmd.Flags().StringP("region", "r", "", "Region for the cluster")
 	modifyCmd.Flags().StringP("provider", "p", "", "Cloud provider")
 	modifyCmd.Flags().StringSliceP("nodes", "n", nil, "Node sizes")
 	modifyCmd.Flags().StringP("cluster-type", "t", "", "Type of Kubernetes cluster")
+	modifyCmd.Flags().StringArray("node-group", nil, `Node group spec (repeatable): name=workers,type=t3.medium,count=3[,min=1,max=5,disk=50,spot=true,mode=System]`)
 
 	deleteCmd.Flags().Bool("force-cloud", false, "With --force: delete from cloud even if no configuration file exists")
 	deleteCmd.Flags().Bool("force", false, "Delete cluster from cloud immediately before removing configuration (bypasses CI/CD)")
@@ -380,7 +395,64 @@ func commitStateChanges(ctx gocontext.Context, stateMgr *state.Manager, message 
 	log.Println("✅ Changes committed and pushed to remote repository successfully")
 }
 
-func addClusterFromCLI(clusterName, region, providerName string, nodes []string, clusterType, accountName, projectName, subscriptionName, orgName, vpcName, eksRoleName, nodeRoleName string) {
+// parseNodeGroup parses a node group spec string into a types.NodeGroup.
+// Format: name=workers,type=t3.medium,count=3[,min=1,max=5,disk=50,spot=true,mode=System]
+func parseNodeGroup(s string) (types.NodeGroup, error) {
+	ng := types.NodeGroup{}
+	for _, part := range strings.Split(s, ",") {
+		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		k, v := strings.TrimSpace(kv[0]), strings.TrimSpace(kv[1])
+		switch k {
+		case "name":
+			ng.Name = v
+		case "type", "instanceType":
+			ng.InstanceType = v
+		case "count":
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				return ng, fmt.Errorf("invalid count '%s': %w", v, err)
+			}
+			ng.Count = n
+		case "min":
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				return ng, fmt.Errorf("invalid min '%s': %w", v, err)
+			}
+			ng.MinCount = n
+		case "max":
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				return ng, fmt.Errorf("invalid max '%s': %w", v, err)
+			}
+			ng.MaxCount = n
+		case "disk":
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				return ng, fmt.Errorf("invalid disk '%s': %w", v, err)
+			}
+			ng.DiskSize = n
+		case "spot":
+			ng.Spot = strings.EqualFold(v, "true")
+		case "mode":
+			ng.Mode = v
+		}
+	}
+	if ng.Name == "" {
+		return ng, fmt.Errorf("node group must have a name (name=<value>)")
+	}
+	if ng.InstanceType == "" {
+		return ng, fmt.Errorf("node group '%s' must have a type (type=<value>)", ng.Name)
+	}
+	if ng.Count < 1 {
+		ng.Count = 1
+	}
+	return ng, nil
+}
+
+func addClusterFromCLI(clusterName, region, providerName string, nodes []string, nodeGroups []types.NodeGroup, clusterType, accountName, projectName, subscriptionName, orgName, vpcName, eksRoleName, nodeRoleName string) {
 	ctx := gocontext.Background()
 	stateMgr, stateDir := createStateManager(ctx)
 
@@ -466,6 +538,7 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 		Spec: types.ClusterSpec{
 			Provider:    providerName,
 			Nodes:       nodes,
+			NodeGroups:  nodeGroups,
 			ClusterType: clusterType,
 			// GCP-specific
 			GCPProject:   projectName,
@@ -567,6 +640,18 @@ func modifyClusterFromCLI(cmd *cobra.Command, clusterName string) {
 	if cmd.Flags().Changed("cluster-type") {
 		clusterType, _ := cmd.Flags().GetString("cluster-type")
 		clusterDef.Spec.ClusterType = clusterType
+	}
+	if cmd.Flags().Changed("node-group") {
+		nodeGroupStrs, _ := cmd.Flags().GetStringArray("node-group")
+		var nodeGroups []types.NodeGroup
+		for _, s := range nodeGroupStrs {
+			ng, err := parseNodeGroup(s)
+			if err != nil {
+				log.Fatalf("Invalid --node-group value '%s': %v", s, err)
+			}
+			nodeGroups = append(nodeGroups, ng)
+		}
+		clusterDef.Spec.NodeGroups = nodeGroups
 	}
 
 	updatedData, err := yaml.Marshal(&clusterDef)
@@ -972,7 +1057,14 @@ func listClusters() {
 		log.Printf("  %s", cluster.Metadata.Name)
 		log.Printf("    Provider: %s", cluster.Spec.Provider)
 		log.Printf("    Region: %s", cluster.Metadata.Region)
-		log.Printf("    Nodes: %d (%s)", len(cluster.Spec.Nodes), strings.Join(cluster.Spec.Nodes, ", "))
+		if len(cluster.Spec.NodeGroups) > 0 {
+			log.Printf("    NodeGroups: %d", len(cluster.Spec.NodeGroups))
+			for _, ng := range cluster.Spec.NodeGroups {
+				log.Printf("      - %s: %s x%d", ng.Name, ng.InstanceType, ng.Count)
+			}
+		} else {
+			log.Printf("    Nodes: %d (%s)", len(cluster.Spec.Nodes), strings.Join(cluster.Spec.Nodes, ", "))
+		}
 		if cluster.Spec.Ingress.Enabled {
 			log.Printf("    Ingress: enabled")
 		}

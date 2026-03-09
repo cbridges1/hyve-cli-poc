@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
@@ -52,6 +53,7 @@ type ClusterConfig struct {
 	Name         string
 	Region       string
 	Nodes        []string
+	NodeGroups   []types.NodeGroup
 	ClusterType  string
 	FirewallID   string
 	Applications []string
@@ -59,8 +61,9 @@ type ClusterConfig struct {
 
 // ClusterUpdateConfig represents cluster update configuration
 type ClusterUpdateConfig struct {
-	Name  string
-	Nodes []string
+	Name       string
+	Nodes      []string
+	NodeGroups []types.NodeGroup
 }
 
 // FirewallConfig represents firewall creation configuration
@@ -171,32 +174,96 @@ func (p *Provider) FindClusterByName(ctx context.Context, name string) (*Cluster
 	return p.convertCluster(&resp.ManagedCluster), nil
 }
 
+// agentPoolMode converts a mode string to the AKS enum value
+func agentPoolMode(mode string) armcontainerservice.AgentPoolMode {
+	if strings.EqualFold(mode, "User") {
+		return armcontainerservice.AgentPoolModeUser
+	}
+	return armcontainerservice.AgentPoolModeSystem
+}
+
 // CreateCluster creates a new cluster
 func (p *Provider) CreateCluster(ctx context.Context, config *ClusterConfig) (*Cluster, error) {
 	log.Printf("Creating AKS cluster %s in region %s", config.Name, p.region)
 
-	// Determine VM size from nodes config
-	vmSize := "Standard_DS2_v2"
-	nodeCount := int32(len(config.Nodes))
-	if nodeCount == 0 {
-		nodeCount = 1
-	}
-	if len(config.Nodes) > 0 {
-		vmSize = config.Nodes[0]
+	var agentPoolProfiles []*armcontainerservice.ManagedClusterAgentPoolProfile
+
+	if len(config.NodeGroups) > 0 {
+		// Multi-pool cluster from NodeGroups
+		for i, ng := range config.NodeGroups {
+			poolName := ng.Name
+			if poolName == "" {
+				poolName = fmt.Sprintf("nodepool%d", i+1)
+			}
+			// AKS pool names must be lowercase alphanumeric, max 12 chars
+			if len(poolName) > 12 {
+				poolName = poolName[:12]
+			}
+			vmSize := ng.InstanceType
+			if vmSize == "" {
+				vmSize = "Standard_DS2_v2"
+			}
+			count := int32(ng.Count)
+			if count < 1 {
+				count = 1
+			}
+			mode := agentPoolMode(ng.Mode)
+			// First pool must be System mode
+			if i == 0 {
+				mode = armcontainerservice.AgentPoolModeSystem
+			}
+			profile := &armcontainerservice.ManagedClusterAgentPoolProfile{
+				Name:   strPtr(poolName),
+				Count:  &count,
+				VMSize: &vmSize,
+				Mode:   ptr(mode),
+			}
+			if ng.MinCount > 0 || ng.MaxCount > 0 {
+				minCount := int32(ng.MinCount)
+				if minCount < 1 {
+					minCount = 1
+				}
+				maxCount := int32(ng.MaxCount)
+				if maxCount < count {
+					maxCount = count + 2
+				}
+				enableAutoScale := true
+				profile.EnableAutoScaling = &enableAutoScale
+				profile.MinCount = &minCount
+				profile.MaxCount = &maxCount
+			}
+			if ng.DiskSize > 0 {
+				diskSize := int32(ng.DiskSize)
+				profile.OSDiskSizeGB = &diskSize
+			}
+			agentPoolProfiles = append(agentPoolProfiles, profile)
+		}
+		log.Printf("Creating AKS cluster with %d agent pool(s)", len(agentPoolProfiles))
+	} else {
+		// Legacy single pool from Nodes slice
+		vmSize := "Standard_DS2_v2"
+		nodeCount := int32(len(config.Nodes))
+		if nodeCount == 0 {
+			nodeCount = 1
+		}
+		if len(config.Nodes) > 0 {
+			vmSize = config.Nodes[0]
+		}
+		agentPoolProfiles = []*armcontainerservice.ManagedClusterAgentPoolProfile{
+			{
+				Name:   strPtr("nodepool1"),
+				Count:  &nodeCount,
+				VMSize: &vmSize,
+				Mode:   ptr(armcontainerservice.AgentPoolModeSystem),
+			},
+		}
 	}
 
 	parameters := armcontainerservice.ManagedCluster{
 		Location: &p.region,
 		Properties: &armcontainerservice.ManagedClusterProperties{
-			DNSPrefix: &config.Name,
-			AgentPoolProfiles: []*armcontainerservice.ManagedClusterAgentPoolProfile{
-				{
-					Name:   strPtr("nodepool1"),
-					Count:  &nodeCount,
-					VMSize: &vmSize,
-					Mode:   ptr(armcontainerservice.AgentPoolModeSystem),
-				},
-			},
+			DNSPrefix:         &config.Name,
+			AgentPoolProfiles: agentPoolProfiles,
 		},
 	}
 

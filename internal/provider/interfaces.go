@@ -47,6 +47,7 @@ type ClusterConfig struct {
 	Name         string
 	Region       string
 	Nodes        []string
+	NodeGroups   []types.NodeGroup
 	ClusterType  string
 	FirewallID   string
 	Applications []string
@@ -60,8 +61,9 @@ type ClusterConfig struct {
 
 // ClusterUpdateConfig represents cluster update configuration
 type ClusterUpdateConfig struct {
-	Name  string
-	Nodes []string
+	Name       string
+	Nodes      []string
+	NodeGroups []types.NodeGroup
 }
 
 // FirewallConfig represents firewall creation configuration

@@ -51,6 +51,7 @@ type ClusterConfig struct {
 	Name         string
 	Region       string
 	Nodes        []string
+	NodeGroups   []types.NodeGroup
 	ClusterType  string
 	FirewallID   string
 	Applications []string
@@ -58,8 +59,9 @@ type ClusterConfig struct {
 
 // ClusterUpdateConfig represents cluster update configuration
 type ClusterUpdateConfig struct {
-	Name  string
-	Nodes []string
+	Name       string
+	Nodes      []string
+	NodeGroups []types.NodeGroup
 }
 
 // FirewallConfig represents firewall creation configuration
@@ -152,17 +154,38 @@ func (p *Provider) FindClusterByName(ctx context.Context, name string) (*Cluster
 func (p *Provider) CreateCluster(ctx context.Context, config *ClusterConfig) (*Cluster, error) {
 	log.Printf("Creating cluster %s in region %s", config.Name, config.Region)
 
+	// Resolve node size and count from NodeGroups or legacy Nodes
+	nodeSize := "g4s.kube.small"
+	nodeCount := len(config.Nodes)
+
+	if len(config.NodeGroups) > 0 {
+		// Civo only supports a single homogeneous pool; use the first node group
+		ng := config.NodeGroups[0]
+		if ng.InstanceType != "" {
+			nodeSize = ng.InstanceType
+		}
+		if ng.Count > 0 {
+			nodeCount = ng.Count
+		}
+		if len(config.NodeGroups) > 1 {
+			log.Printf("Warning: Civo only supports a single node pool; using first node group '%s'", ng.Name)
+		}
+	} else if len(config.Nodes) > 0 {
+		nodeSize = config.Nodes[0]
+	}
+	if nodeCount < 1 {
+		nodeCount = 1
+	}
+
 	clusterConfig := &civogo.KubernetesClusterConfig{
 		Name:            config.Name,
 		Region:          config.Region,
-		NumTargetNodes:  len(config.Nodes),
-		TargetNodesSize: config.Nodes[0], // Use first node size
-		//KubernetesVersion: config.ClusterType,
-		NodeDestroy:  "",
-		NetworkID:    "",
-		Tags:         "",
-		Applications: "",
-		//FirewallID:        config.FirewallID,
+		NumTargetNodes:  nodeCount,
+		TargetNodesSize: nodeSize,
+		NodeDestroy:     "",
+		NetworkID:       "",
+		Tags:            "",
+		Applications:    "",
 	}
 
 	log.Printf("Creating cluster %v", clusterConfig)
@@ -182,10 +205,26 @@ func (p *Provider) CreateCluster(ctx context.Context, config *ClusterConfig) (*C
 
 // UpdateCluster updates an existing cluster
 func (p *Provider) UpdateCluster(ctx context.Context, clusterID string, config *ClusterUpdateConfig) (*Cluster, error) {
+	// Resolve node size and count from NodeGroups or legacy Nodes
+	nodeSize := ""
+	nodeCount := len(config.Nodes)
+
+	if len(config.NodeGroups) > 0 {
+		ng := config.NodeGroups[0]
+		if ng.InstanceType != "" {
+			nodeSize = ng.InstanceType
+		}
+		if ng.Count > 0 {
+			nodeCount = ng.Count
+		}
+	} else if len(config.Nodes) > 0 {
+		nodeSize = config.Nodes[0]
+	}
+
 	updateConfig := &civogo.KubernetesClusterConfig{
 		Name:            config.Name,
-		NumTargetNodes:  len(config.Nodes),
-		TargetNodesSize: config.Nodes[0],
+		NumTargetNodes:  nodeCount,
+		TargetNodesSize: nodeSize,
 	}
 
 	cluster, err := p.client.UpdateKubernetesCluster(clusterID, updateConfig)

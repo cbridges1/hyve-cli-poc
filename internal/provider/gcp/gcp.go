@@ -54,6 +54,7 @@ type ClusterConfig struct {
 	Name         string
 	Region       string
 	Nodes        []string
+	NodeGroups   []types.NodeGroup
 	ClusterType  string
 	FirewallID   string
 	Applications []string
@@ -61,8 +62,9 @@ type ClusterConfig struct {
 
 // ClusterUpdateConfig represents cluster update configuration
 type ClusterUpdateConfig struct {
-	Name  string
-	Nodes []string
+	Name       string
+	Nodes      []string
+	NodeGroups []types.NodeGroup
 }
 
 // FirewallConfig represents firewall creation configuration
@@ -200,35 +202,88 @@ func (p *Provider) FindClusterByName(ctx context.Context, name string) (*Cluster
 func (p *Provider) CreateCluster(ctx context.Context, config *ClusterConfig) (*Cluster, error) {
 	log.Printf("Creating GKE cluster %s in region %s", config.Name, p.region)
 
-	// Determine machine type and node count from nodes config
-	// The nodes slice contains machine types - use the first one and count the total
-	machineType := "e2-medium"
-	nodeCount := int64(len(config.Nodes))
-	if nodeCount == 0 {
-		nodeCount = 1
-	}
-	if len(config.Nodes) > 0 {
-		machineType = config.Nodes[0]
-	}
-
-	log.Printf("Creating GKE cluster with %d nodes of type %s", nodeCount, machineType)
-
 	// Create a zonal cluster for precise node count control
-	// Regional clusters multiply nodes across zones (3 zones = 3x nodes)
-	// We'll create the cluster in a specific zone derived from the region
 	zone := p.getDefaultZone()
-
-	// For zonal clusters, use the zone as the location
 	zonalPath := fmt.Sprintf("projects/%s/locations/%s", p.projectID, zone)
 
-	createReq := &container.CreateClusterRequest{
-		Cluster: &container.Cluster{
-			Name:             config.Name,
-			InitialNodeCount: nodeCount,
-			NodeConfig: &container.NodeConfig{
-				MachineType: machineType,
+	var createReq *container.CreateClusterRequest
+
+	if len(config.NodeGroups) > 0 {
+		// Multi-pool cluster from NodeGroups
+		var nodePools []*container.NodePool
+		for _, ng := range config.NodeGroups {
+			poolName := ng.Name
+			if poolName == "" {
+				poolName = "default-pool"
+			}
+			machineType := ng.InstanceType
+			if machineType == "" {
+				machineType = "e2-medium"
+			}
+			count := int64(ng.Count)
+			if count < 1 {
+				count = 1
+			}
+			pool := &container.NodePool{
+				Name:             poolName,
+				InitialNodeCount: count,
+				Config: &container.NodeConfig{
+					MachineType: machineType,
+				},
+			}
+			if ng.Spot {
+				pool.Config.Spot = true
+			}
+			if ng.DiskSize > 0 {
+				pool.Config.DiskSizeGb = int64(ng.DiskSize)
+			}
+			if len(ng.Labels) > 0 {
+				pool.Config.Labels = ng.Labels
+			}
+			if ng.MinCount > 0 || ng.MaxCount > 0 {
+				minCount := int64(ng.MinCount)
+				if minCount < 1 {
+					minCount = 1
+				}
+				maxCount := int64(ng.MaxCount)
+				if maxCount < count {
+					maxCount = count + 2
+				}
+				pool.Autoscaling = &container.NodePoolAutoscaling{
+					Enabled:      true,
+					MinNodeCount: minCount,
+					MaxNodeCount: maxCount,
+				}
+			}
+			nodePools = append(nodePools, pool)
+		}
+		log.Printf("Creating GKE cluster with %d node pool(s)", len(nodePools))
+		createReq = &container.CreateClusterRequest{
+			Cluster: &container.Cluster{
+				Name:      config.Name,
+				NodePools: nodePools,
 			},
-		},
+		}
+	} else {
+		// Legacy single pool from Nodes slice
+		machineType := "e2-medium"
+		nodeCount := int64(len(config.Nodes))
+		if nodeCount == 0 {
+			nodeCount = 1
+		}
+		if len(config.Nodes) > 0 {
+			machineType = config.Nodes[0]
+		}
+		log.Printf("Creating GKE cluster with %d nodes of type %s", nodeCount, machineType)
+		createReq = &container.CreateClusterRequest{
+			Cluster: &container.Cluster{
+				Name:             config.Name,
+				InitialNodeCount: nodeCount,
+				NodeConfig: &container.NodeConfig{
+					MachineType: machineType,
+				},
+			},
+		}
 	}
 
 	op, err := p.containerService.Projects.Locations.Clusters.Create(zonalPath, createReq).Context(ctx).Do()

@@ -180,6 +180,7 @@ func (a *ProviderAdapter) CreateCluster(ctx context.Context, config *ClusterConf
 			Name:         config.Name,
 			Region:       config.Region,
 			Nodes:        config.Nodes,
+			NodeGroups:   config.NodeGroups,
 			ClusterType:  config.ClusterType,
 			FirewallID:   config.FirewallID,
 			Applications: config.Applications,
@@ -201,6 +202,7 @@ func (a *ProviderAdapter) CreateCluster(ctx context.Context, config *ClusterConf
 			Name:         config.Name,
 			Region:       config.Region,
 			Nodes:        config.Nodes,
+			NodeGroups:   config.NodeGroups,
 			ClusterType:  config.ClusterType,
 			FirewallID:   config.FirewallID,
 			Applications: config.Applications,
@@ -217,6 +219,7 @@ func (a *ProviderAdapter) CreateCluster(ctx context.Context, config *ClusterConf
 			Name:         config.Name,
 			Region:       config.Region,
 			Nodes:        config.Nodes,
+			NodeGroups:   config.NodeGroups,
 			ClusterType:  config.ClusterType,
 			FirewallID:   config.FirewallID,
 			Applications: config.Applications,
@@ -233,6 +236,7 @@ func (a *ProviderAdapter) CreateCluster(ctx context.Context, config *ClusterConf
 		Name:         config.Name,
 		Region:       config.Region,
 		Nodes:        config.Nodes,
+		NodeGroups:   config.NodeGroups,
 		ClusterType:  config.ClusterType,
 		FirewallID:   config.FirewallID,
 		Applications: config.Applications,
@@ -251,8 +255,9 @@ func (a *ProviderAdapter) CreateCluster(ctx context.Context, config *ClusterConf
 func (a *ProviderAdapter) UpdateCluster(ctx context.Context, clusterID string, config *ClusterUpdateConfig) (*Cluster, error) {
 	if a.aws != nil {
 		awsConfig := &aws.ClusterUpdateConfig{
-			Name:  config.Name,
-			Nodes: config.Nodes,
+			Name:       config.Name,
+			Nodes:      config.Nodes,
+			NodeGroups: config.NodeGroups,
 		}
 		awsCluster, err := a.aws.UpdateCluster(ctx, clusterID, awsConfig)
 		if err != nil {
@@ -262,8 +267,9 @@ func (a *ProviderAdapter) UpdateCluster(ctx context.Context, clusterID string, c
 	}
 	if a.azure != nil {
 		azureConfig := &azure.ClusterUpdateConfig{
-			Name:  config.Name,
-			Nodes: config.Nodes,
+			Name:       config.Name,
+			Nodes:      config.Nodes,
+			NodeGroups: config.NodeGroups,
 		}
 		azureCluster, err := a.azure.UpdateCluster(ctx, clusterID, azureConfig)
 		if err != nil {
@@ -273,8 +279,9 @@ func (a *ProviderAdapter) UpdateCluster(ctx context.Context, clusterID string, c
 	}
 	if a.gcp != nil {
 		gcpConfig := &gcp.ClusterUpdateConfig{
-			Name:  config.Name,
-			Nodes: config.Nodes,
+			Name:       config.Name,
+			Nodes:      config.Nodes,
+			NodeGroups: config.NodeGroups,
 		}
 		gcpCluster, err := a.gcp.UpdateCluster(ctx, clusterID, gcpConfig)
 		if err != nil {
@@ -284,8 +291,9 @@ func (a *ProviderAdapter) UpdateCluster(ctx context.Context, clusterID string, c
 	}
 
 	civoConfig := &civo.ClusterUpdateConfig{
-		Name:  config.Name,
-		Nodes: config.Nodes,
+		Name:       config.Name,
+		Nodes:      config.Nodes,
+		NodeGroups: config.NodeGroups,
 	}
 
 	civoCluster, err := a.civo.UpdateCluster(ctx, clusterID, civoConfig)

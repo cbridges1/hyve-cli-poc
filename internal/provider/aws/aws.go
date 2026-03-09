@@ -58,6 +58,7 @@ type ClusterConfig struct {
 	Name         string
 	Region       string
 	Nodes        []string
+	NodeGroups   []types.NodeGroup
 	ClusterType  string
 	FirewallID   string
 	Applications []string
@@ -70,8 +71,9 @@ type ClusterConfig struct {
 
 // ClusterUpdateConfig represents cluster update configuration
 type ClusterUpdateConfig struct {
-	Name  string
-	Nodes []string
+	Name       string
+	Nodes      []string
+	NodeGroups []types.NodeGroup
 }
 
 // FirewallConfig represents firewall creation configuration
@@ -339,13 +341,22 @@ func (p *Provider) CreateCluster(ctx context.Context, clusterConfig *ClusterConf
 		return nil, fmt.Errorf("failed waiting for cluster to be ready: %w", err)
 	}
 
-	// Create node group with the specified nodes
-	log.Printf("Creating node group for cluster %s...", clusterConfig.Name)
-	if err := p.createNodeGroup(ctx, clusterConfig.Name, clusterConfig.NodeRoleARN, subnetIDs, clusterConfig.Nodes); err != nil {
-		log.Printf("Warning: Failed to create node group: %v", err)
-		// Return the cluster even if node group creation fails - cluster is still usable
+	// Create node group(s)
+	log.Printf("Creating node group(s) for cluster %s...", clusterConfig.Name)
+	if len(clusterConfig.NodeGroups) > 0 {
+		for _, ng := range clusterConfig.NodeGroups {
+			if err := p.createNodeGroupFromSpec(ctx, clusterConfig.Name, clusterConfig.NodeRoleARN, subnetIDs, ng); err != nil {
+				log.Printf("Warning: Failed to create node group '%s': %v", ng.Name, err)
+			} else {
+				log.Printf("Node group '%s' creation started for cluster %s", ng.Name, clusterConfig.Name)
+			}
+		}
 	} else {
-		log.Printf("Node group creation started for cluster %s", clusterConfig.Name)
+		if err := p.createNodeGroup(ctx, clusterConfig.Name, clusterConfig.NodeRoleARN, subnetIDs, clusterConfig.Nodes); err != nil {
+			log.Printf("Warning: Failed to create node group: %v", err)
+		} else {
+			log.Printf("Node group creation started for cluster %s", clusterConfig.Name)
+		}
 	}
 
 	// Refresh cluster info
@@ -661,6 +672,87 @@ func (p *Provider) createNodeGroup(ctx context.Context, clusterName, nodeRoleARN
 	_, err := p.eksClient.CreateNodegroup(ctx, createInput)
 	if err != nil {
 		return fmt.Errorf("failed to create node group: %w", err)
+	}
+
+	return nil
+}
+
+// createNodeGroupFromSpec creates a managed node group from a NodeGroup spec
+func (p *Provider) createNodeGroupFromSpec(ctx context.Context, clusterName, nodeRoleARN string, subnetIDs []string, ng types.NodeGroup) error {
+	name := ng.Name
+	if name == "" {
+		name = fmt.Sprintf("%s-nodes", clusterName)
+	}
+
+	instanceType := ng.InstanceType
+	if instanceType == "" {
+		instanceType = "t3.medium"
+	}
+
+	desiredSize := int32(ng.Count)
+	if desiredSize < 1 {
+		desiredSize = 1
+	}
+	minSize := int32(ng.MinCount)
+	if minSize < 1 {
+		minSize = 1
+	}
+	maxSize := int32(ng.MaxCount)
+	if maxSize < desiredSize {
+		maxSize = desiredSize + 2
+	}
+
+	log.Printf("Creating node group %s with instance type %s and %d nodes", name, instanceType, desiredSize)
+
+	input := &eks.CreateNodegroupInput{
+		ClusterName:   aws.String(clusterName),
+		NodegroupName: aws.String(name),
+		NodeRole:      aws.String(nodeRoleARN),
+		Subnets:       subnetIDs,
+		ScalingConfig: &ekstypes.NodegroupScalingConfig{
+			DesiredSize: aws.Int32(desiredSize),
+			MinSize:     aws.Int32(minSize),
+			MaxSize:     aws.Int32(maxSize),
+		},
+		InstanceTypes: []string{instanceType},
+		Tags: map[string]string{
+			"CreatedBy":  "hyve",
+			"EKSCluster": clusterName,
+		},
+	}
+
+	if ng.Spot {
+		input.CapacityType = ekstypes.CapacityTypesSpot
+	}
+
+	if ng.DiskSize > 0 {
+		input.DiskSize = aws.Int32(int32(ng.DiskSize))
+	}
+
+	if len(ng.Labels) > 0 {
+		input.Labels = ng.Labels
+	}
+
+	if len(ng.Taints) > 0 {
+		for _, t := range ng.Taints {
+			effect := ekstypes.TaintEffectNoSchedule
+			switch t.Effect {
+			case "PreferNoSchedule":
+				effect = ekstypes.TaintEffectPreferNoSchedule
+			case "NoExecute":
+				effect = ekstypes.TaintEffectNoExecute
+			}
+			input.Taints = append(input.Taints, ekstypes.Taint{
+				Key:    aws.String(t.Key),
+				Value:  aws.String(t.Value),
+				Effect: effect,
+			})
+		}
+	}
+
+	_, err := p.eksClient.CreateNodegroup(ctx, input)
+	if err != nil {
+		return fmt.Errorf("failed to create node group '%s': %w", name, err)
 	}
 
 	return nil

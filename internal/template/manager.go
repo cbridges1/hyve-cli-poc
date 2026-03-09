@@ -149,6 +149,7 @@ func (m *Manager) ConvertToClusterDefinition(template *Template, clusterName str
 		Spec: types.ClusterSpec{
 			Provider:    template.Spec.Provider,
 			Nodes:       template.Spec.Nodes,
+			NodeGroups:  template.Spec.NodeGroups,
 			ClusterType: template.Spec.ClusterType,
 			Ingress: types.IngressSpec{
 				Enabled:      template.Spec.Ingress.Enabled,

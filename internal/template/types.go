@@ -1,5 +1,7 @@
 package template
 
+import "hyve/internal/types"
+
 // TemplateMetadata represents template metadata
 type TemplateMetadata struct {
 	Name        string `yaml:"name"`
@@ -14,10 +16,11 @@ type TemplateWorkflowsSpec struct {
 
 // TemplateSpec represents the template specification
 type TemplateSpec struct {
-	Provider    string   `yaml:"provider"`
-	Region      string   `yaml:"region"`
-	Nodes       []string `yaml:"nodes"`
-	ClusterType string   `yaml:"clusterType"`
+	Provider    string            `yaml:"provider"`
+	Region      string            `yaml:"region"`
+	Nodes       []string          `yaml:"nodes,omitempty"`
+	NodeGroups  []types.NodeGroup `yaml:"nodeGroups,omitempty"`
+	ClusterType string            `yaml:"clusterType"`
 	Ingress     struct {
 		Enabled      bool   `yaml:"enabled"`
 		LoadBalancer bool   `yaml:"loadBalancer"`
