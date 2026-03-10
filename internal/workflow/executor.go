@@ -45,7 +45,7 @@ func NewExecutor(manager *Manager, cluster string) (*Executor, error) {
 	if repoErr == nil {
 		defer execRepoMgr.Close()
 		if currentRepo, err := execRepoMgr.GetCurrentRepository(); err == nil {
-			repoName = strings.TrimSuffix(filepath.Base(currentRepo.RepoURL), ".git")
+			repoName = currentRepo.Name
 		}
 	}
 
