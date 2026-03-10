@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -45,13 +46,12 @@ var kubeconfigGetCmd = &cobra.Command{
 
 var kubeconfigUseCmd = &cobra.Command{
 	Use:   "use [cluster-name]",
-	Short: "Set kubeconfig for current terminal session",
-	Long:  "Create a temporary kubeconfig and provide export command to use it in the current terminal session",
+	Short: "Merge cluster into ~/.kube/config and set as active context",
+	Long:  "Merge the cluster's kubeconfig into ~/.kube/config and set it as the active kubectl context",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		clusterName := args[0]
-		evalMode, _ := cmd.Flags().GetBool("eval")
-		useKubeconfig(clusterName, evalMode)
+		useKubeconfig(clusterName)
 	},
 }
 
@@ -99,8 +99,6 @@ func init() {
 	kubeconfigGetCmd.Flags().BoolP("save", "s", false, "Save kubeconfig to ~/.kube/config-<cluster-name>")
 	kubeconfigGetCmd.Flags().BoolP("merge", "m", false, "Merge kubeconfig into ~/.kube/config")
 	kubeconfigGetCmd.Flags().StringP("output", "o", "", "Output file path for kubeconfig")
-
-	kubeconfigUseCmd.Flags().BoolP("eval", "e", false, "Output shell commands for evaluation (use with eval)")
 
 	kubeconfigCmd.AddCommand(kubeconfigSyncCmd)
 	kubeconfigCmd.AddCommand(kubeconfigGetCmd)
@@ -310,8 +308,8 @@ func getKubeconfig(cmd *cobra.Command, clusterName string) {
 	}
 }
 
-func useKubeconfig(clusterName string, evalMode bool) {
-	kubeconfigMgr, repoName, err := createKubeconfigManager()
+func useKubeconfig(clusterName string) {
+	kubeconfigMgr, _, err := createKubeconfigManager()
 	if err != nil {
 		log.Fatalf("Failed to create kubeconfig manager: %v", err)
 	}
@@ -332,41 +330,63 @@ func useKubeconfig(clusterName string, evalMode bool) {
 		log.Fatalf("Failed to decrypt kubeconfig: %v", err)
 	}
 
-	// Create temporary kubeconfig file in ~/.hyve/temp/
-	tempDir := fmt.Sprintf("%s/temp", HyveHome())
-	if err := os.MkdirAll(tempDir, 0755); err != nil {
-		log.Fatalf("Failed to create temp directory: %v", err)
-	}
-
-	// Create a unique temporary file for this cluster and repository
-	tempFile := fmt.Sprintf("%s/kubeconfig-%s-%s", tempDir, repoName, clusterName)
-	err = os.WriteFile(tempFile, []byte(config), 0600)
+	// Get ~/.kube/config path
+	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		log.Fatalf("Failed to write temporary kubeconfig: %v", err)
+		log.Fatalf("Failed to get user home directory: %v", err)
 	}
 
-	if evalMode {
-		// Output only the shell commands for evaluation
-		log.Printf("export KUBECONFIG='%s'", tempFile)
-		log.Printf("; echo '✅ Kubeconfig set for cluster %s (repository: %s)'", clusterName, repoName)
-		log.Printf("; echo '💡 Use \"unset KUBECONFIG\" to revert'")
+	kubeDir := fmt.Sprintf("%s/.kube", homeDir)
+	if err := os.MkdirAll(kubeDir, 0755); err != nil {
+		log.Fatalf("Failed to create .kube directory: %v", err)
+	}
+
+	kubeConfigPath := fmt.Sprintf("%s/config", kubeDir)
+
+	// Merge kubeconfig into ~/.kube/config
+	log.Printf("🔀 Merging cluster '%s' into %s", clusterName, kubeConfigPath)
+
+	existingConfig := ""
+	if existingData, err := os.ReadFile(kubeConfigPath); err == nil {
+		existingConfig = string(existingData)
+	}
+
+	if existingConfig == "" {
+		if err := os.WriteFile(kubeConfigPath, []byte(config), 0600); err != nil {
+			log.Fatalf("Failed to write kubeconfig: %v", err)
+		}
 	} else {
-		// Regular informational output
-		log.Printf("✅ Temporary kubeconfig created for cluster '%s' (repository: %s)", clusterName, repoName)
-		log.Printf("📁 Temporary file: %s", tempFile)
+		backupPath := fmt.Sprintf("%s.backup", kubeConfigPath)
+		if err := os.WriteFile(backupPath, []byte(existingConfig), 0600); err != nil {
+			log.Printf("⚠️  Warning: Failed to create backup at %s", backupPath)
+		} else {
+			log.Printf("📦 Backup created at %s", backupPath)
+		}
+
+		mergedContent, err := kubeconfig.MergeKubeconfigs(existingConfig, config)
+		if err != nil {
+			log.Fatalf("Failed to merge kubeconfigs: %v", err)
+		}
+
+		if err := os.WriteFile(kubeConfigPath, []byte(mergedContent), 0600); err != nil {
+			log.Fatalf("Failed to write merged kubeconfig: %v", err)
+		}
+	}
+
+	log.Printf("✅ Merged cluster '%s' into %s", clusterName, kubeConfigPath)
+
+	// Set the active context
+	useCtxCmd := exec.Command("kubectl", "config", "use-context", clusterName)
+	useCtxCmd.Stdout = os.Stdout
+	useCtxCmd.Stderr = os.Stderr
+	if err := useCtxCmd.Run(); err != nil {
+		log.Printf("⚠️  Failed to set context: %v", err)
+		log.Printf("   Run manually: kubectl config use-context %s", clusterName)
+	} else {
+		log.Printf("✅ Active context set to '%s'", clusterName)
 		log.Println()
-		log.Println("🔧 To use this kubeconfig in your current terminal session, run:")
-		log.Printf("   export KUBECONFIG='%s'", tempFile)
-		log.Println()
-		log.Println("💡 This will only affect your current terminal session.")
-		log.Println("💡 To revert, use: unset KUBECONFIG")
-		log.Println()
-		log.Println("🧪 Test your connection:")
-		log.Printf("   export KUBECONFIG='%s' && kubectl get nodes", tempFile)
-		log.Println()
-		log.Println()
-		log.Println("⚡ For automatic setup, use:")
-		log.Printf("   eval $(./hyve kubeconfig use %s --eval)", clusterName)
+		log.Println("💡 Test your connection:")
+		log.Println("   kubectl get nodes")
 	}
 }
 
