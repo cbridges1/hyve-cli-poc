@@ -17,6 +17,7 @@ var rootCmd = &cobra.Command{
 	Short: "Hyve cluster management CLI",
 	Long: `A CLI tool for managing Kubernetes clusters on various cloud providers.
 Supports cluster creation, modification, deletion, and reconciliation.`,
+	CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		home := resolvedHyveHome()
 		if home != "" {
@@ -64,7 +65,6 @@ func init() {
 	rootCmd.AddCommand(kubeconfigCmd)
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(useCmd)
-	rootCmd.AddCommand(installCmd)
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(workflowCmd)
 	rootCmd.AddCommand(templateCmd)
