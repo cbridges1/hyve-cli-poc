@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"hyve/internal/cluster"
-	"hyve/internal/ingress"
 	"hyve/internal/kubeconfig"
 	"hyve/internal/provider"
 	"hyve/internal/providerconfig"
@@ -95,9 +94,8 @@ func (r *Reconciler) reconcileRegion(ctx context.Context, region string, cluster
 		}
 
 		clusterMgr := cluster.NewManager(prov)
-		ingressMgr := ingress.NewManager(prov)
 
-		err = r.reconcileCluster(ctx, clusterMgr, ingressMgr, clusterDef)
+		err = r.reconcileCluster(ctx, clusterMgr, clusterDef)
 		if err != nil {
 			log.Printf("Failed to reconcile cluster %s: %v", clusterDef.Metadata.Name, err)
 		}
@@ -199,16 +197,16 @@ func (r *Reconciler) createProviderForCluster(clusterDef types.ClusterDefinition
 }
 
 // reconcileCluster handles the reconciliation of a single cluster
-func (r *Reconciler) reconcileCluster(ctx context.Context, clusterMgr *cluster.Manager, ingressMgr *ingress.Manager, clusterDef types.ClusterDefinition) error {
+func (r *Reconciler) reconcileCluster(ctx context.Context, clusterMgr *cluster.Manager, clusterDef types.ClusterDefinition) error {
 	action := clusterMgr.DetermineAction(ctx, clusterDef)
 
 	switch action {
 	case types.ActionCreate:
-		return r.createCluster(ctx, clusterMgr, ingressMgr, clusterDef)
+		return r.createCluster(ctx, clusterMgr, clusterDef)
 	case types.ActionUpdate:
-		return r.updateCluster(ctx, clusterMgr, ingressMgr, clusterDef)
+		return r.updateCluster(ctx, clusterMgr, clusterDef)
 	case types.ActionDelete:
-		return r.deleteCluster(ctx, clusterMgr, ingressMgr, clusterDef)
+		return r.deleteCluster(ctx, clusterMgr, clusterDef)
 	case types.ActionNone:
 		log.Printf("Cluster %s is up to date, no action needed", clusterDef.Metadata.Name)
 		return nil
@@ -218,8 +216,8 @@ func (r *Reconciler) reconcileCluster(ctx context.Context, clusterMgr *cluster.M
 	}
 }
 
-// createCluster creates a new cluster with optional ingress controller
-func (r *Reconciler) createCluster(ctx context.Context, clusterMgr *cluster.Manager, ingressMgr *ingress.Manager, clusterDef types.ClusterDefinition) error {
+// createCluster creates a new cluster
+func (r *Reconciler) createCluster(ctx context.Context, clusterMgr *cluster.Manager, clusterDef types.ClusterDefinition) error {
 	existingCluster, err := clusterMgr.FindByName(ctx, clusterDef.Metadata.Name)
 	if err != nil {
 		return err
@@ -244,17 +242,6 @@ func (r *Reconciler) createCluster(ctx context.Context, clusterMgr *cluster.Mana
 	}
 	log.Println("Cluster is ready!")
 
-	var loadBalancerIP string
-	if clusterDef.Spec.Ingress.Enabled {
-		lb, err := ingressMgr.DeployIngressController(ctx, createdCluster.ID, clusterDef.Spec.Ingress)
-		if err != nil {
-			log.Printf("Failed to deploy ingress controller: %v", err)
-		} else if lb != nil {
-			loadBalancerIP = lb.PublicIP
-			log.Printf("Ingress controller deployed with load balancer IP: %s", loadBalancerIP)
-		}
-	}
-
 	log.Printf("Cluster %s created successfully!", clusterDef.Metadata.Name)
 
 	// Run onCreated workflows if defined
@@ -267,12 +254,12 @@ func (r *Reconciler) createCluster(ctx context.Context, clusterMgr *cluster.Mana
 }
 
 // updateCluster updates an existing cluster
-func (r *Reconciler) updateCluster(ctx context.Context, clusterMgr *cluster.Manager, ingressMgr *ingress.Manager, clusterDef types.ClusterDefinition) error {
+func (r *Reconciler) updateCluster(ctx context.Context, clusterMgr *cluster.Manager, clusterDef types.ClusterDefinition) error {
 	return clusterMgr.Update(ctx, clusterDef)
 }
 
 // deleteCluster deletes a cluster and its associated resources
-func (r *Reconciler) deleteCluster(ctx context.Context, clusterMgr *cluster.Manager, ingressMgr *ingress.Manager, clusterDef types.ClusterDefinition) error {
+func (r *Reconciler) deleteCluster(ctx context.Context, clusterMgr *cluster.Manager, clusterDef types.ClusterDefinition) error {
 	existingCluster, err := clusterMgr.FindByName(ctx, clusterDef.Metadata.Name)
 	if err != nil {
 		return err
@@ -290,13 +277,6 @@ func (r *Reconciler) deleteCluster(ctx context.Context, clusterMgr *cluster.Mana
 	}
 
 	log.Printf("Deleting cluster %s with ID %s", clusterDef.Metadata.Name, existingCluster.ID)
-
-	if clusterDef.Spec.Ingress.Enabled {
-		err := ingressMgr.RemoveIngressController(ctx, existingCluster.ID)
-		if err != nil {
-			log.Printf("Failed to remove ingress controller: %v", err)
-		}
-	}
 
 	err = clusterMgr.Delete(ctx, existingCluster.ID)
 	if err != nil {

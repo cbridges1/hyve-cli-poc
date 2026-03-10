@@ -43,12 +43,10 @@ and workflows to execute upon cluster creation or destruction.`,
 		region, _ := cmd.Flags().GetString("region")
 		nodes, _ := cmd.Flags().GetString("nodes")
 		clusterType, _ := cmd.Flags().GetString("cluster-type")
-		ingressEnabled, _ := cmd.Flags().GetBool("ingress")
-		loadBalancer, _ := cmd.Flags().GetBool("load-balancer")
 		onCreatedWorkflows, _ := cmd.Flags().GetString("on-created")
 		onDestroyWorkflows, _ := cmd.Flags().GetString("on-destroy")
 
-		createTemplate(templateName, description, provider, region, nodes, clusterType, ingressEnabled, loadBalancer, onCreatedWorkflows, onDestroyWorkflows)
+		createTemplate(templateName, description, provider, region, nodes, clusterType, onCreatedWorkflows, onDestroyWorkflows)
 	},
 }
 
@@ -141,8 +139,6 @@ func init() {
 	templateCreateCmd.Flags().StringP("region", "r", "PHX1", "Region")
 	templateCreateCmd.Flags().StringP("nodes", "n", "g4s.kube.small", "Node sizes (comma-separated)")
 	templateCreateCmd.Flags().StringP("cluster-type", "t", "k3s", "Kubernetes cluster type")
-	templateCreateCmd.Flags().Bool("ingress", true, "Enable ingress controller")
-	templateCreateCmd.Flags().Bool("load-balancer", true, "Enable load balancer for ingress")
 	templateCreateCmd.Flags().String("on-created", "", "Workflows to run after cluster creation (comma-separated)")
 	templateCreateCmd.Flags().String("on-destroy", "", "Workflows to run before cluster destruction (comma-separated)")
 
@@ -154,7 +150,7 @@ func init() {
 	templateCmd.AddCommand(templateValidateCmd)
 }
 
-func createTemplate(name, description, provider, region, nodesSizes, clusterType string, ingressEnabled, loadBalancer bool, onCreatedStr, onDestroyStr string) {
+func createTemplate(name, description, provider, region, nodesSizes, clusterType string, onCreatedStr, onDestroyStr string) {
 	ctx := context.Background()
 
 	// Get repository path
@@ -217,9 +213,6 @@ func createTemplate(name, description, provider, region, nodesSizes, clusterType
 		},
 	}
 
-	tmpl.Spec.Ingress.Enabled = ingressEnabled
-	tmpl.Spec.Ingress.LoadBalancer = loadBalancer
-
 	// Save template
 	if err := templateMgr.CreateTemplate(tmpl); err != nil {
 		log.Fatalf("Failed to create template: %v", err)
@@ -242,7 +235,6 @@ func createTemplate(name, description, provider, region, nodesSizes, clusterType
 	log.Printf("  Region: %s", region)
 	log.Printf("  Nodes: %s", strings.Join(nodes, ", "))
 	log.Printf("  Cluster Type: %s", clusterType)
-	log.Printf("  Ingress: %v", ingressEnabled)
 	if len(onCreatedWorkflows) > 0 {
 		log.Printf("  OnCreated Workflows: %s", strings.Join(onCreatedWorkflows, ", "))
 	}

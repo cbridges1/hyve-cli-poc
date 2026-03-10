@@ -1381,32 +1381,6 @@ func (p *Provider) FindFirewallByName(ctx context.Context, name string) (*Firewa
 	return nil, nil
 }
 
-// ListLoadBalancers lists all load balancers
-func (p *Provider) ListLoadBalancers(ctx context.Context) ([]*LoadBalancer, error) {
-	// Load balancers are managed by Kubernetes services in EKS
-	return []*LoadBalancer{}, nil
-}
-
-// DeployIngressController deploys ingress controller
-func (p *Provider) DeployIngressController(ctx context.Context, clusterID string, spec types.IngressSpec) (*LoadBalancer, error) {
-	if !spec.LoadBalancer {
-		return nil, nil
-	}
-	// AWS Load Balancer Controller handles this in EKS
-	return nil, nil
-}
-
-// RemoveIngressController removes ingress controller
-func (p *Provider) RemoveIngressController(ctx context.Context, clusterID string) error {
-	return nil
-}
-
-// GetLoadBalancerIP gets load balancer IP for cluster
-func (p *Provider) GetLoadBalancerIP(ctx context.Context, clusterID string) (string, error) {
-	// Would need to query Kubernetes services
-	return "", nil
-}
-
 // convertCluster converts an EKS cluster to provider cluster
 func (p *Provider) convertCluster(eksCluster *ekstypes.Cluster) *Cluster {
 	name := ""

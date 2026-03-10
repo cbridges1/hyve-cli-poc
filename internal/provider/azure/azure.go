@@ -40,14 +40,6 @@ type FirewallRule struct {
 	Direction string
 }
 
-// LoadBalancer represents a generic load balancer
-type LoadBalancer struct {
-	ID        string
-	Name      string
-	PublicIP  string
-	ClusterID string
-}
-
 // ClusterConfig represents cluster creation configuration
 type ClusterConfig struct {
 	Name         string
@@ -396,32 +388,6 @@ func (p *Provider) DeleteFirewall(ctx context.Context, firewallID string) error 
 func (p *Provider) FindFirewallByName(ctx context.Context, name string) (*Firewall, error) {
 	// AKS manages NSGs automatically
 	return nil, nil
-}
-
-// ListLoadBalancers lists all load balancers
-func (p *Provider) ListLoadBalancers(ctx context.Context) ([]*LoadBalancer, error) {
-	// Load balancers are managed by Kubernetes services in AKS
-	return []*LoadBalancer{}, nil
-}
-
-// DeployIngressController deploys ingress controller
-func (p *Provider) DeployIngressController(ctx context.Context, clusterID string, spec types.IngressSpec) (*LoadBalancer, error) {
-	if !spec.LoadBalancer {
-		return nil, nil
-	}
-	// Azure Load Balancer handles this in AKS
-	return nil, nil
-}
-
-// RemoveIngressController removes ingress controller
-func (p *Provider) RemoveIngressController(ctx context.Context, clusterID string) error {
-	return nil
-}
-
-// GetLoadBalancerIP gets load balancer IP for cluster
-func (p *Provider) GetLoadBalancerIP(ctx context.Context, clusterID string) (string, error) {
-	// Would need to query Kubernetes services
-	return "", nil
 }
 
 // convertCluster converts an AKS cluster to provider cluster

@@ -16,7 +16,6 @@ import (
 	"hyve/internal/config"
 	"hyve/internal/context"
 	"hyve/internal/credentials"
-	"hyve/internal/ingress"
 	"hyve/internal/provider"
 	"hyve/internal/providerconfig"
 	"hyve/internal/repository"
@@ -779,9 +778,8 @@ func deleteClusterExplicitly(ctx gocontext.Context, clusterDef types.ClusterDefi
 		return fmt.Errorf("failed to create provider: %w", err)
 	}
 
-	// Create cluster and ingress managers
+	// Create cluster manager
 	clusterMgr := cluster.NewManager(prov)
-	ingressMgr := ingress.NewManager(prov)
 
 	log.Printf("🔍 Explicitly searching for cluster '%s' in region %s (provider: %s)...", clusterName, region, providerName)
 
@@ -797,14 +795,6 @@ func deleteClusterExplicitly(ctx gocontext.Context, clusterDef types.ClusterDefi
 	}
 
 	log.Printf("🗑️ Found cluster '%s' with ID %s, explicitly deleting...", clusterName, existingCluster.ID)
-
-	// If cluster has ingress enabled, try to remove it first
-	// We assume it might have ingress based on common patterns
-	log.Printf("🔌 Attempting to remove any ingress controllers...")
-	err = ingressMgr.RemoveIngressController(ctx, existingCluster.ID)
-	if err != nil {
-		log.Printf("Warning: Failed to remove ingress controller (may not exist): %v", err)
-	}
 
 	// Delete the cluster explicitly by ID
 	err = clusterMgr.Delete(ctx, existingCluster.ID)
@@ -968,7 +958,6 @@ func forceDeleteClusterFromCloud(clusterName, region, providerName, projectName 
 		}
 
 		clusterMgr := cluster.NewManager(prov)
-		ingressMgr := ingress.NewManager(prov)
 
 		existingCluster, err := clusterMgr.FindByName(ctx, clusterName)
 		if err != nil {
@@ -984,13 +973,6 @@ func forceDeleteClusterFromCloud(clusterName, region, providerName, projectName 
 		found = true
 		log.Printf("✅ Found cluster '%s' in region %s with ID %s", clusterName, r, existingCluster.ID)
 		log.Printf("🗑️ Force deleting cluster '%s'...", clusterName)
-
-		// Remove ingress controller if present
-		log.Printf("🔌 Attempting to remove any ingress controllers...")
-		err = ingressMgr.RemoveIngressController(ctx, existingCluster.ID)
-		if err != nil {
-			log.Printf("Warning: Failed to remove ingress controller (may not exist): %v", err)
-		}
 
 		// Delete the cluster
 		err = clusterMgr.Delete(ctx, existingCluster.ID)

@@ -34,14 +34,6 @@ type FirewallRule struct {
 	Direction string
 }
 
-// LoadBalancer represents a generic load balancer
-type LoadBalancer struct {
-	ID        string
-	Name      string
-	PublicIP  string
-	ClusterID string
-}
-
 // ClusterConfig represents cluster creation configuration
 type ClusterConfig struct {
 	Name         string
@@ -103,19 +95,10 @@ type FirewallProvider interface {
 	FindFirewallByName(ctx context.Context, name string) (*Firewall, error)
 }
 
-// IngressProvider interface defines ingress operations
-type IngressProvider interface {
-	ListLoadBalancers(ctx context.Context) ([]*LoadBalancer, error)
-	DeployIngressController(ctx context.Context, clusterID string, spec types.IngressSpec) (*LoadBalancer, error)
-	RemoveIngressController(ctx context.Context, clusterID string) error
-	GetLoadBalancerIP(ctx context.Context, clusterID string) (string, error)
-}
-
 // Provider combines all provider interfaces
 type Provider interface {
 	ClusterProvider
 	FirewallProvider
-	IngressProvider
 
 	// Provider metadata
 	Name() string

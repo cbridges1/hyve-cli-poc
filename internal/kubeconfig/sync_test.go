@@ -74,16 +74,6 @@ func (m *mockProvider) DeleteFirewall(_ context.Context, _ string) error { retur
 func (m *mockProvider) FindFirewallByName(_ context.Context, _ string) (*provider.Firewall, error) {
 	return nil, nil
 }
-func (m *mockProvider) ListLoadBalancers(_ context.Context) ([]*provider.LoadBalancer, error) {
-	return nil, nil
-}
-func (m *mockProvider) DeployIngressController(_ context.Context, _ string, _ types.IngressSpec) (*provider.LoadBalancer, error) {
-	return nil, nil
-}
-func (m *mockProvider) RemoveIngressController(_ context.Context, _ string) error { return nil }
-func (m *mockProvider) GetLoadBalancerIP(_ context.Context, _ string) (string, error) {
-	return "", nil
-}
 func (m *mockProvider) Name() string   { return "mock" }
 func (m *mockProvider) Region() string { return "test-region" }
 
