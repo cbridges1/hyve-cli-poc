@@ -737,7 +737,30 @@ func deleteClusterFromCLI(clusterName string, forceCloud bool, force bool) {
 		log.Printf("📝 No configuration file to remove")
 	}
 
+	// Remove kubeconfig from ~/.kube/config and from Hyve's database
+	cleanupClusterKubeconfig(clusterName)
+
 	runReconciliation("")
+}
+
+// cleanupClusterKubeconfig removes a cluster's kubeconfig from both the Hyve
+// database and the active ~/.kube/config context list.
+func cleanupClusterKubeconfig(clusterName string) {
+	// Remove from the Hyve encrypted database
+	kubeconfigMgr, _, err := createKubeconfigManager()
+	if err != nil {
+		log.Printf("⚠️  Could not open kubeconfig database: %v", err)
+	} else {
+		defer kubeconfigMgr.Close()
+		if err := kubeconfigMgr.DeleteKubeconfig(clusterName); err != nil {
+			log.Printf("⚠️  Failed to remove kubeconfig from database: %v", err)
+		} else {
+			log.Printf("🗑️  Removed kubeconfig for '%s' from Hyve database", clusterName)
+		}
+	}
+
+	// Remove from ~/.kube/config
+	removeKubeconfig(clusterName)
 }
 
 // deleteClusterExplicitly deletes a cluster by name directly from the provider
