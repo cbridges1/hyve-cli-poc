@@ -23,6 +23,44 @@ import (
 	"hyve/internal/types"
 )
 
+// syncRepoState performs a git pull to synchronise the local repository with
+// the remote before any operation that reads or writes repository state.
+// It is non-fatal: if the sync cannot be completed (e.g. no network), a
+// warning is logged and the caller continues with local state.
+func syncRepoState(ctx gocontext.Context) {
+	repoMgr, err := repository.NewManager()
+	if err != nil {
+		log.Printf("⚠️  Skipping git sync: failed to open repository manager: %v", err)
+		return
+	}
+	defer repoMgr.Close()
+
+	currentRepo, err := repoMgr.GetCurrentRepository()
+	if err != nil {
+		// No repository configured — nothing to sync.
+		return
+	}
+
+	authUsername, authToken := getAuthCredentials(currentRepo)
+	stateMgr, err := state.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
+	if err != nil {
+		log.Printf("⚠️  Skipping git sync: failed to create state manager: %v", err)
+		return
+	}
+
+	if err := stateMgr.InitializeGitRepo(ctx); err != nil {
+		log.Printf("⚠️  Skipping git sync: failed to initialise git repo: %v", err)
+		return
+	}
+
+	if err := stateMgr.SyncWithRemote(ctx); err != nil {
+		log.Printf("⚠️  Skipping git sync: failed to sync with remote: %v", err)
+		return
+	}
+
+	log.Println("🔄 Repository synchronised")
+}
+
 // ValidProviders is the list of supported cloud providers
 var ValidProviders = []string{"civo", "aws", "gcp", "azure"}
 

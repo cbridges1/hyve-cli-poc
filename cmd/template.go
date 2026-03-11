@@ -152,6 +152,7 @@ func init() {
 
 func createTemplate(name, description, provider, region, nodesSizes, clusterType string, onCreatedStr, onDestroyStr string) {
 	ctx := context.Background()
+	syncRepoState(ctx)
 
 	// Get repository path
 	repoMgr, err := repository.NewManager()
@@ -247,6 +248,8 @@ func createTemplate(name, description, provider, region, nodesSizes, clusterType
 }
 
 func listTemplates() {
+	syncRepoState(context.Background())
+
 	// Get repository path
 	repoMgr, err := repository.NewManager()
 	if err != nil {
@@ -300,6 +303,7 @@ func listTemplates() {
 
 func deleteTemplate(name string) {
 	ctx := context.Background()
+	syncRepoState(ctx)
 
 	// Get repository path
 	repoMgr, err := repository.NewManager()
@@ -336,6 +340,8 @@ func deleteTemplate(name string) {
 }
 
 func showTemplate(name string) {
+	syncRepoState(context.Background())
+
 	// Get repository path
 	repoMgr, err := repository.NewManager()
 	if err != nil {
@@ -370,6 +376,7 @@ func showTemplate(name string) {
 
 func executeTemplate(templateName, clusterName string) {
 	ctx := context.Background()
+	syncRepoState(ctx)
 
 	// Get repository path
 	repoMgr, err := repository.NewManager()

@@ -123,6 +123,8 @@ func init() {
 }
 
 func getWorkflowLocalPath() string {
+	syncRepoState(context.Background())
+
 	repoMgr, err := repository.NewManager()
 	if err != nil {
 		log.Fatalf("Failed to create repository manager: %v", err)

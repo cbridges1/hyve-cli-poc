@@ -1015,6 +1015,8 @@ func clearCivoToken() {
 
 // getRepoPath returns the current repository's local path
 func getRepoPath() string {
+	syncRepoState(gocontext.Background())
+
 	repoMgr, err := repository.NewManager()
 	if err != nil {
 		log.Fatalf("Failed to create repository manager: %v", err)
