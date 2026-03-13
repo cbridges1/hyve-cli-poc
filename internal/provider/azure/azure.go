@@ -357,10 +357,20 @@ func (p *Provider) GetClusterInfo(ctx context.Context, name string) (*ClusterInf
 		clusterName = *cluster.Name
 	}
 
+	// Fetch admin kubeconfig
+	kubeconfig := ""
+	credResp, err := p.aksClient.ListClusterAdminCredentials(ctx, p.resourceGroupName, name, nil)
+	if err != nil {
+		log.Printf("Warning: failed to fetch admin credentials for cluster %s: %v", name, err)
+	} else if len(credResp.Kubeconfigs) > 0 && credResp.Kubeconfigs[0].Value != nil {
+		kubeconfig = string(credResp.Kubeconfigs[0].Value)
+	}
+
 	return &ClusterInfo{
 		Name:       clusterName,
 		IPAddress:  fqdn,
 		AccessPort: "443",
+		Kubeconfig: kubeconfig,
 		Status:     status,
 		ID:         clusterName,
 	}, nil
