@@ -304,6 +304,94 @@ func TestTemplateWithWorkflows(t *testing.T) {
 	assert.Equal(t, []string{"cleanup"}, retrieved.Spec.Workflows.OnDestroy)
 }
 
+func TestConvertToClusterDefinition_AzureFields(t *testing.T) {
+	manager, _ := setupTemplateTest(t)
+
+	template := &Template{
+		Metadata: TemplateMetadata{Name: "azure-template"},
+		Spec: TemplateSpec{
+			Provider:           "azure",
+			Region:             "eastus",
+			ClusterType:        "k3s",
+			AzureSubscription:  "my-subscription",
+			AzureResourceGroup: "my-rg",
+		},
+	}
+
+	clusterDef := manager.ConvertToClusterDefinition(template, "my-cluster")
+	require.NotNil(t, clusterDef)
+
+	assert.Equal(t, "my-subscription", clusterDef.Spec.AzureSubscription)
+	assert.Equal(t, "my-rg", clusterDef.Spec.AzureResourceGroup)
+	assert.Equal(t, "azure", clusterDef.Spec.Provider)
+	assert.Equal(t, "eastus", clusterDef.Metadata.Region)
+}
+
+func TestConvertToClusterDefinition_GCPFields(t *testing.T) {
+	manager, _ := setupTemplateTest(t)
+
+	template := &Template{
+		Metadata: TemplateMetadata{Name: "gcp-template"},
+		Spec: TemplateSpec{
+			Provider:    "gcp",
+			Region:      "us-central1",
+			ClusterType: "gke",
+			GCPProject:  "my-gcp-project",
+		},
+	}
+
+	clusterDef := manager.ConvertToClusterDefinition(template, "my-cluster")
+	require.NotNil(t, clusterDef)
+
+	assert.Equal(t, "my-gcp-project", clusterDef.Spec.GCPProject)
+}
+
+func TestTemplateWithAzureConfig_YAMLRoundtrip(t *testing.T) {
+	manager, _ := setupTemplateTest(t)
+
+	template := &Template{
+		Metadata: TemplateMetadata{Name: "azure-yaml-template"},
+		Spec: TemplateSpec{
+			Provider:           "azure",
+			Region:             "eastus",
+			ClusterType:        "k3s",
+			AzureSubscription:  "prod-subscription",
+			AzureResourceGroup: "prod-rg",
+		},
+	}
+
+	err := manager.CreateTemplate(template)
+	require.NoError(t, err)
+
+	retrieved, err := manager.GetTemplate("azure-yaml-template")
+	require.NoError(t, err)
+
+	assert.Equal(t, "prod-subscription", retrieved.Spec.AzureSubscription)
+	assert.Equal(t, "prod-rg", retrieved.Spec.AzureResourceGroup)
+}
+
+func TestTemplateWithGCPConfig_YAMLRoundtrip(t *testing.T) {
+	manager, _ := setupTemplateTest(t)
+
+	template := &Template{
+		Metadata: TemplateMetadata{Name: "gcp-yaml-template"},
+		Spec: TemplateSpec{
+			Provider:    "gcp",
+			Region:      "us-central1",
+			ClusterType: "gke",
+			GCPProject:  "my-gcp-project",
+		},
+	}
+
+	err := manager.CreateTemplate(template)
+	require.NoError(t, err)
+
+	retrieved, err := manager.GetTemplate("gcp-yaml-template")
+	require.NoError(t, err)
+
+	assert.Equal(t, "my-gcp-project", retrieved.Spec.GCPProject)
+}
+
 func TestTemplateWithIngress(t *testing.T) {
 	manager, _ := setupTemplateTest(t)
 
