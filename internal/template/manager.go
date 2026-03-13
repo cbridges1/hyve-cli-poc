@@ -165,6 +165,11 @@ func (m *Manager) ConvertToClusterDefinition(template *Template, clusterName str
 			AWSVPCName:  template.Spec.AWSVPCName,
 			AWSEKSRole:  template.Spec.AWSEKSRole,
 			AWSNodeRole: template.Spec.AWSNodeRole,
+			// Azure-specific alias names
+			AzureSubscription:  template.Spec.AzureSubscription,
+			AzureResourceGroup: template.Spec.AzureResourceGroup,
+			// GCP-specific alias names
+			GCPProject: template.Spec.GCPProject,
 		},
 	}
 }

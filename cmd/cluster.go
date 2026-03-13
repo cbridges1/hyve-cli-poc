@@ -848,6 +848,7 @@ func createProviderForClusterDef(clusterDef types.ClusterDefinition) (provider.P
 
 	// Handle Azure-specific configuration
 	if providerName == "azure" {
+		opts.AzureResourceGroup = clusterDef.Spec.AzureResourceGroup
 		if clusterDef.Spec.AzureSubscriptionID != "" {
 			opts.AzureSubscriptionID = clusterDef.Spec.AzureSubscriptionID
 		} else if clusterDef.Spec.AzureSubscription != "" {

@@ -33,6 +33,13 @@ type TemplateSpec struct {
 	AWSVPCName  string `yaml:"awsVpcName,omitempty"`  // VPC alias
 	AWSEKSRole  string `yaml:"awsEksRole,omitempty"`  // EKS cluster role alias
 	AWSNodeRole string `yaml:"awsNodeRole,omitempty"` // EKS node role alias
+
+	// Azure-specific configuration (alias names defined in provider-configs/azure.yaml)
+	AzureSubscription  string `yaml:"azureSubscription,omitempty"`  // Azure subscription alias
+	AzureResourceGroup string `yaml:"azureResourceGroup,omitempty"` // Azure resource group name
+
+	// GCP-specific configuration (alias names defined in provider-configs/gcp.yaml)
+	GCPProject string `yaml:"gcpProject,omitempty"` // GCP project alias
 }
 
 // Template represents a complete cluster template definition
