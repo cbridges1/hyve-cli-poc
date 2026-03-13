@@ -13,6 +13,7 @@ import (
 	"hyve/internal/context"
 	"hyve/internal/credentials"
 	"hyve/internal/provider/aws"
+	azureprovider "hyve/internal/provider/azure"
 	"hyve/internal/providerconfig"
 	"hyve/internal/repository"
 )
@@ -517,19 +518,20 @@ and are committed to Git for team sharing.`,
 }
 
 var configAzureAddSubscriptionIDsCmd = &cobra.Command{
-	Use:   "add-subscription-ids [subscription-id,...]",
-	Short: "Add Azure subscription IDs to the repository configuration",
-	Long: `Add one or more Azure subscription IDs to the repository's provider configuration.
+	Use:   "add-subscription-ids",
+	Short: "Add an Azure subscription to the repository configuration",
+	Long: `Add an Azure subscription with a friendly name to the repository's provider configuration.
 
-The subscription IDs are stored in provider-configs/azure.yaml in the current repository.
-Multiple subscription IDs can be specified as comma-separated values or as separate arguments.
+The subscription is stored in provider-configs/azure.yaml in the current repository.
+The name can then be used as an alias when creating clusters.
 
 Examples:
-  hyve config azure add-subscription-ids 12345678-1234-1234-1234-123456789012
-  hyve config azure add-subscription-ids sub-1,sub-2`,
-	Args: cobra.MinimumNArgs(1),
+  hyve config azure add-subscription-ids --name prod --id 12345678-1234-1234-1234-123456789012
+  hyve config azure add-subscription-ids --name dev --id 87654321-4321-4321-4321-210987654321`,
 	Run: func(cmd *cobra.Command, args []string) {
-		addAzureSubscriptionIDs(args)
+		name, _ := cmd.Flags().GetString("name")
+		id, _ := cmd.Flags().GetString("id")
+		addAzureSubscriptionIDs(name, id)
 	},
 }
 
@@ -552,6 +554,51 @@ var configAzureListSubscriptionIDsCmd = &cobra.Command{
 	Long:  "Display all Azure subscription IDs configured in the current repository.",
 	Run: func(cmd *cobra.Command, args []string) {
 		listAzureSubscriptionIDs()
+	},
+}
+
+var configAzureAddResourceGroupCmd = &cobra.Command{
+	Use:   "add-resource-group",
+	Short: "Add a resource group to an Azure subscription",
+	Long: `Add a resource group to an Azure subscription in the repository's provider configuration.
+
+The resource group is stored under the subscription in provider-configs/azure.yaml.
+
+Examples:
+  hyve config azure add-resource-group --subscription prod --name my-rg --location eastus
+  hyve config azure add-resource-group --subscription dev --name dev-rg --location westus2`,
+	Run: func(cmd *cobra.Command, args []string) {
+		subscription, _ := cmd.Flags().GetString("subscription")
+		name, _ := cmd.Flags().GetString("name")
+		location, _ := cmd.Flags().GetString("location")
+		addAzureResourceGroup(subscription, name, location)
+	},
+}
+
+var configAzureListResourceGroupsCmd = &cobra.Command{
+	Use:   "list-resource-groups",
+	Short: "List resource groups for an Azure subscription",
+	Long: `Display all resource groups configured under an Azure subscription.
+
+Examples:
+  hyve config azure list-resource-groups --subscription prod`,
+	Run: func(cmd *cobra.Command, args []string) {
+		subscription, _ := cmd.Flags().GetString("subscription")
+		listAzureResourceGroups(subscription)
+	},
+}
+
+var configAzureDeleteResourceGroupCmd = &cobra.Command{
+	Use:   "delete-resource-group",
+	Short: "Remove a resource group from an Azure subscription",
+	Long: `Remove a resource group from an Azure subscription in the repository's provider configuration.
+
+Examples:
+  hyve config azure delete-resource-group --subscription prod --name my-rg`,
+	Run: func(cmd *cobra.Command, args []string) {
+		subscription, _ := cmd.Flags().GetString("subscription")
+		name, _ := cmd.Flags().GetString("name")
+		deleteAzureResourceGroup(subscription, name)
 	},
 }
 
@@ -741,9 +788,28 @@ func init() {
 	configAWSCmd.AddCommand(configAWSVPCDeleteCmd)
 
 	// Azure subcommands
+	configAzureAddSubscriptionIDsCmd.Flags().String("name", "", "Friendly name/alias for the subscription (required)")
+	configAzureAddSubscriptionIDsCmd.Flags().String("id", "", "Azure subscription ID (required)")
+	configAzureAddSubscriptionIDsCmd.MarkFlagRequired("name")
+	configAzureAddSubscriptionIDsCmd.MarkFlagRequired("id")
 	configAzureCmd.AddCommand(configAzureAddSubscriptionIDsCmd)
 	configAzureCmd.AddCommand(configAzureRemoveSubscriptionIDsCmd)
 	configAzureCmd.AddCommand(configAzureListSubscriptionIDsCmd)
+	configAzureAddResourceGroupCmd.Flags().String("subscription", "", "Subscription name to add the resource group to (required)")
+	configAzureAddResourceGroupCmd.Flags().String("name", "", "Resource group name (required)")
+	configAzureAddResourceGroupCmd.Flags().String("location", "", "Azure region/location for the resource group (required)")
+	configAzureAddResourceGroupCmd.MarkFlagRequired("subscription")
+	configAzureAddResourceGroupCmd.MarkFlagRequired("name")
+	configAzureAddResourceGroupCmd.MarkFlagRequired("location")
+	configAzureCmd.AddCommand(configAzureAddResourceGroupCmd)
+	configAzureListResourceGroupsCmd.Flags().String("subscription", "", "Subscription name to list resource groups for (required)")
+	configAzureListResourceGroupsCmd.MarkFlagRequired("subscription")
+	configAzureCmd.AddCommand(configAzureListResourceGroupsCmd)
+	configAzureDeleteResourceGroupCmd.Flags().String("subscription", "", "Subscription name to remove the resource group from (required)")
+	configAzureDeleteResourceGroupCmd.Flags().String("name", "", "Resource group name to remove (required)")
+	configAzureDeleteResourceGroupCmd.MarkFlagRequired("subscription")
+	configAzureDeleteResourceGroupCmd.MarkFlagRequired("name")
+	configAzureCmd.AddCommand(configAzureDeleteResourceGroupCmd)
 
 	// Civo subcommands
 	configCivoOrgAddCmd.Flags().String("name", "", "Friendly name/alias for the organization (required)")
@@ -1894,37 +1960,23 @@ func deleteAWSVPC(name, region string, configOnly bool) {
 }
 
 // Azure helper functions
-func addAzureSubscriptionIDs(args []string) {
+func addAzureSubscriptionIDs(name, subscriptionID string) {
 	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
-	// Parse args as name=id pairs or just IDs
-	for _, arg := range args {
-		parts := strings.SplitN(arg, "=", 2)
-		var name, subscriptionID string
-		if len(parts) == 2 {
-			name = parts[0]
-			subscriptionID = parts[1]
-		} else {
-			// Use the subscription ID as the name
-			name = arg
-			subscriptionID = arg
-		}
+	exists, err := mgr.HasAzureSubscription(name)
+	if err != nil {
+		log.Fatalf("Failed to check Azure config: %v", err)
+	}
 
-		exists, err := mgr.HasAzureSubscription(name)
-		if err != nil {
-			log.Fatalf("Failed to check Azure config: %v", err)
-		}
+	if err := mgr.AddAzureSubscription(name, subscriptionID); err != nil {
+		log.Fatalf("Failed to add Azure subscription: %v", err)
+	}
 
-		if err := mgr.AddAzureSubscription(name, subscriptionID); err != nil {
-			log.Fatalf("Failed to add Azure subscription: %v", err)
-		}
-
-		if exists {
-			log.Printf("✅ Updated Azure subscription '%s'", name)
-		} else {
-			log.Printf("✅ Added Azure subscription '%s' (ID: %s)", name, subscriptionID)
-		}
+	if exists {
+		log.Printf("✅ Updated Azure subscription '%s'", name)
+	} else {
+		log.Printf("✅ Added Azure subscription '%s' (ID: %s)", name, subscriptionID)
 	}
 
 	log.Println()
@@ -1957,7 +2009,7 @@ func listAzureSubscriptionIDs() {
 		log.Println("❌ No Azure subscriptions configured")
 		log.Println()
 		log.Println("💡 Add subscriptions with:")
-		log.Println("   hyve config azure add-subscription-ids name=<subscription-id>")
+		log.Println("   hyve config azure add-subscription-ids --name <name> --id <subscription-id>")
 		return
 	}
 
@@ -1969,8 +2021,85 @@ func listAzureSubscriptionIDs() {
 		log.Println()
 	}
 	log.Println("💡 Commands:")
-	log.Println("   hyve config azure add-subscription-ids name=<id>     # Add subscription")
+	log.Println("   hyve config azure add-subscription-ids --name <name> --id <id>  # Add subscription")
 	log.Println("   hyve config azure remove-subscription-ids <name>     # Remove subscription")
+}
+
+func listAzureResourceGroups(subscription string) {
+	repoPath := getRepoPath()
+	mgr := providerconfig.NewManager(repoPath)
+
+	rgs, err := mgr.ListAzureResourceGroups(subscription)
+	if err != nil {
+		log.Fatalf("Failed to list resource groups: %v", err)
+	}
+
+	if len(rgs) == 0 {
+		log.Printf("❌ No resource groups configured for subscription '%s'", subscription)
+		log.Println()
+		log.Printf("💡 Add one with: hyve config azure add-resource-group --subscription %s --name <name> --location <location>", subscription)
+		return
+	}
+
+	log.Printf("🔷 Resource Groups for subscription '%s' (%d):\n", subscription, len(rgs))
+	log.Println()
+	for _, rg := range rgs {
+		log.Printf("   %s", rg.Name)
+		log.Printf("      Location: %s", rg.Location)
+		log.Println()
+	}
+}
+
+func addAzureResourceGroup(subscription, name, location string) {
+	repoPath := getRepoPath()
+	mgr := providerconfig.NewManager(repoPath)
+
+	subscriptionID, err := mgr.GetAzureSubscriptionID(subscription)
+	if err != nil {
+		log.Fatalf("Failed to resolve subscription '%s': %v", subscription, err)
+	}
+
+	tenantID, clientID, clientSecret, err := mgr.GetAzureCredentials(subscription)
+	if err != nil {
+		log.Fatalf("Failed to load Azure credentials: %v", err)
+	}
+
+	if err := azureprovider.CreateResourceGroup(gocontext.Background(), subscriptionID, name, location, tenantID, clientID, clientSecret); err != nil {
+		log.Fatalf("Failed to create resource group in Azure: %v", err)
+	}
+
+	if err := mgr.AddAzureResourceGroup(subscription, name, location); err != nil {
+		log.Fatalf("Failed to save resource group to config: %v", err)
+	}
+
+	log.Printf("✅ Created resource group '%s' (location: %s) in subscription '%s'", name, location, subscription)
+	log.Println()
+	log.Println("💡 The configuration is stored in provider-configs/azure.yaml")
+}
+
+func deleteAzureResourceGroup(subscription, name string) {
+	repoPath := getRepoPath()
+	mgr := providerconfig.NewManager(repoPath)
+
+	subscriptionID, err := mgr.GetAzureSubscriptionID(subscription)
+	if err != nil {
+		log.Fatalf("Failed to resolve subscription '%s': %v", subscription, err)
+	}
+
+	tenantID, clientID, clientSecret, err := mgr.GetAzureCredentials(subscription)
+	if err != nil {
+		log.Fatalf("Failed to load Azure credentials: %v", err)
+	}
+
+	if err := azureprovider.DeleteResourceGroup(gocontext.Background(), subscriptionID, name, tenantID, clientID, clientSecret); err != nil {
+		log.Fatalf("Failed to delete resource group in Azure: %v", err)
+	}
+
+	if err := mgr.RemoveAzureResourceGroup(subscription, name); err != nil {
+		log.Fatalf("Failed to remove resource group from config: %v", err)
+	}
+
+	log.Printf("✅ Deleted resource group '%s' from subscription '%s'", name, subscription)
 }
 
 // Civo helper functions

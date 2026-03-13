@@ -9,6 +9,7 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/containerservice/armcontainerservice/v4"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources"
 
 	"hyve/internal/types"
 )
@@ -420,6 +421,60 @@ func (p *Provider) convertCluster(aksCluster *armcontainerservice.ManagedCluster
 		MasterIP:  fqdn,
 		CreatedAt: time.Now(),
 	}
+}
+
+func newResourceGroupsClient(subscriptionID, tenantID, clientID, clientSecret string) (*armresources.ResourceGroupsClient, error) {
+	if tenantID != "" && clientID != "" && clientSecret != "" {
+		spCred, err := azidentity.NewClientSecretCredential(tenantID, clientID, clientSecret, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create Azure service principal credentials: %w", err)
+		}
+		return armresources.NewResourceGroupsClient(subscriptionID, spCred, nil)
+	}
+
+	defaultCred, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Azure default credentials: %w", err)
+	}
+	return armresources.NewResourceGroupsClient(subscriptionID, defaultCred, nil)
+}
+
+// CreateResourceGroup creates an Azure resource group in the given subscription.
+func CreateResourceGroup(ctx context.Context, subscriptionID, resourceGroupName, location, tenantID, clientID, clientSecret string) error {
+	client, err := newResourceGroupsClient(subscriptionID, tenantID, clientID, clientSecret)
+	if err != nil {
+		return err
+	}
+
+	_, err = client.CreateOrUpdate(ctx, resourceGroupName, armresources.ResourceGroup{
+		Location: &location,
+	}, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create resource group '%s': %w", resourceGroupName, err)
+	}
+
+	log.Printf("Azure resource group '%s' created in '%s'", resourceGroupName, location)
+	return nil
+}
+
+// DeleteResourceGroup deletes an Azure resource group from the given subscription.
+func DeleteResourceGroup(ctx context.Context, subscriptionID, resourceGroupName, tenantID, clientID, clientSecret string) error {
+	client, err := newResourceGroupsClient(subscriptionID, tenantID, clientID, clientSecret)
+	if err != nil {
+		return err
+	}
+
+	poller, err := client.BeginDelete(ctx, resourceGroupName, nil)
+	if err != nil {
+		return fmt.Errorf("failed to delete resource group '%s': %w", resourceGroupName, err)
+	}
+
+	if _, err = poller.PollUntilDone(ctx, nil); err != nil {
+		return fmt.Errorf("failed to wait for resource group deletion: %w", err)
+	}
+
+	log.Printf("Azure resource group '%s' deleted", resourceGroupName)
+	return nil
 }
 
 // Helper functions

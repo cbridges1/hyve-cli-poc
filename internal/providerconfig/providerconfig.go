@@ -979,6 +979,79 @@ func (m *Manager) HasAzureSubscription(name string) (bool, error) {
 	return false, nil
 }
 
+// AddAzureResourceGroup adds a resource group to a named subscription
+func (m *Manager) AddAzureResourceGroup(subscriptionName, rgName, location string) error {
+	config, err := m.LoadAzureConfig()
+	if err != nil {
+		return err
+	}
+
+	for i, s := range config.Subscriptions {
+		if s.Name != subscriptionName {
+			continue
+		}
+		for j, rg := range s.ResourceGroups {
+			if rg.Name == rgName {
+				config.Subscriptions[i].ResourceGroups[j].Location = location
+				return m.SaveAzureConfig(config)
+			}
+		}
+		config.Subscriptions[i].ResourceGroups = append(config.Subscriptions[i].ResourceGroups, AzureResourceGroup{
+			Name:     rgName,
+			Location: location,
+		})
+		return m.SaveAzureConfig(config)
+	}
+
+	return fmt.Errorf("subscription '%s' not found", subscriptionName)
+}
+
+// ListAzureResourceGroups returns all resource groups for a named subscription
+func (m *Manager) ListAzureResourceGroups(subscriptionName string) ([]AzureResourceGroup, error) {
+	config, err := m.LoadAzureConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, s := range config.Subscriptions {
+		if s.Name == subscriptionName {
+			return s.ResourceGroups, nil
+		}
+	}
+
+	return nil, fmt.Errorf("subscription '%s' not found", subscriptionName)
+}
+
+// RemoveAzureResourceGroup removes a resource group from a named subscription
+func (m *Manager) RemoveAzureResourceGroup(subscriptionName, rgName string) error {
+	config, err := m.LoadAzureConfig()
+	if err != nil {
+		return err
+	}
+
+	for i, s := range config.Subscriptions {
+		if s.Name != subscriptionName {
+			continue
+		}
+		filtered := []AzureResourceGroup{}
+		found := false
+		for _, rg := range s.ResourceGroups {
+			if rg.Name != rgName {
+				filtered = append(filtered, rg)
+			} else {
+				found = true
+			}
+		}
+		if !found {
+			return fmt.Errorf("resource group '%s' not found in subscription '%s'", rgName, subscriptionName)
+		}
+		config.Subscriptions[i].ResourceGroups = filtered
+		return m.SaveAzureConfig(config)
+	}
+
+	return fmt.Errorf("subscription '%s' not found", subscriptionName)
+}
+
 // ========== Civo Functions ==========
 
 // LoadCivoConfig loads the Civo configuration from the repository
