@@ -254,6 +254,9 @@ func (p *Provider) CreateCluster(ctx context.Context, config *ClusterConfig) (*C
 
 	parameters := armcontainerservice.ManagedCluster{
 		Location: &p.region,
+		Identity: &armcontainerservice.ManagedClusterIdentity{
+			Type: ptr(armcontainerservice.ResourceIdentityTypeSystemAssigned),
+		},
 		Properties: &armcontainerservice.ManagedClusterProperties{
 			DNSPrefix:         &config.Name,
 			AgentPoolProfiles: agentPoolProfiles,
@@ -398,11 +401,6 @@ func (p *Provider) convertCluster(aksCluster *armcontainerservice.ManagedCluster
 		name = *aksCluster.Name
 	}
 
-	id := ""
-	if aksCluster.ID != nil {
-		id = *aksCluster.ID
-	}
-
 	status := "Unknown"
 	fqdn := ""
 	if aksCluster.Properties != nil {
@@ -415,7 +413,7 @@ func (p *Provider) convertCluster(aksCluster *armcontainerservice.ManagedCluster
 	}
 
 	return &Cluster{
-		ID:        id,
+		ID:        name,
 		Name:      name,
 		Status:    status,
 		MasterIP:  fqdn,
