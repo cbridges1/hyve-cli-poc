@@ -5,7 +5,6 @@ import (
 	"os"
 	"strings"
 
-	"hyve/internal/context"
 	"hyve/internal/credentials"
 	"hyve/internal/provider/aws"
 	"hyve/internal/provider/azure"
@@ -32,18 +31,7 @@ func (f *Factory) CreateProvider(providerName, apiKey, region string) (Provider,
 	case "civo":
 		token := apiKey
 		if token == "" {
-			// Load token from the local database using the current civo organization from context
-			credsMgr, err := credentials.NewManager()
-			if err == nil {
-				defer credsMgr.Close()
-				orgName := getCivoOrgFromContext()
-				if orgName != "" {
-					token, _ = credsMgr.GetCivoToken(orgName)
-				}
-			}
-		}
-		if token == "" {
-			return nil, fmt.Errorf("Civo API token not found. Run 'hyve config use civo <org-name>' then 'hyve config civo set-token' to store the token locally")
+			return nil, fmt.Errorf("Civo API token not found. Set the CIVO_TOKEN environment variable or pass the token directly")
 		}
 		civoProvider, err := civo.NewProvider(token, region)
 		if err != nil {
@@ -110,18 +98,15 @@ func (f *Factory) CreateProviderWithOptions(providerName string, opts ProviderOp
 	case "civo":
 		// Token is pre-resolved from provider-configs/civo.yaml (or local DB for local mode).
 		token := opts.APIKey
-		if token == "" {
+		if token == "" && opts.AccountName != "" {
 			credsMgr, err := credentials.NewManager()
 			if err == nil {
 				defer credsMgr.Close()
-				orgName := getCivoOrgFromContext()
-				if orgName != "" {
-					token, _ = credsMgr.GetCivoToken(orgName)
-				}
+				token, _ = credsMgr.GetCivoToken(opts.AccountName)
 			}
 		}
 		if token == "" {
-			return nil, fmt.Errorf("Civo API token not found. Set token in provider-configs/civo.yaml or run 'hyve config civo set-token'")
+			return nil, fmt.Errorf("Civo API token not found. Set token in provider-configs/civo.yaml or run 'hyve config civo set-token --org %s'", opts.AccountName)
 		}
 		civoProvider, err := civo.NewProvider(token, opts.Region)
 		if err != nil {
@@ -207,13 +192,4 @@ type ProviderOptions struct {
 // GetSupportedProviders returns list of supported providers
 func (f *Factory) GetSupportedProviders() []string {
 	return []string{"civo", "gcp", "aws", "azure"}
-}
-
-// getCivoOrgFromContext reads the current Civo organization name from context
-func getCivoOrgFromContext() string {
-	ctxMgr, err := context.NewManager()
-	if err != nil {
-		return ""
-	}
-	return ctxMgr.GetCivoOrganization()
 }

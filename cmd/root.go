@@ -6,7 +6,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"hyve/internal/context"
 	"hyve/internal/database"
 )
 
@@ -22,7 +21,6 @@ Supports cluster creation, modification, deletion, and reconciliation.`,
 		home := resolvedHyveHome()
 		if home != "" {
 			database.SetConfigDir(home)
-			context.SetHyveHome(home)
 		}
 		return nil
 	},

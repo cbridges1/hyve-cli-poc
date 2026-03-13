@@ -473,7 +473,7 @@ func (e *Executor) createProviderFromClusterDef(clusterDef *types.ClusterDefinit
 	switch strings.ToLower(providerName) {
 	case "civo":
 		opts.AccountName = clusterDef.Spec.CivoOrganization
-		opts.APIKey = config.NewManager().GetCivoToken()
+		opts.APIKey = config.NewManager().GetCivoToken(clusterDef.Spec.CivoOrganization)
 	case "aws":
 		opts.AccountName = clusterDef.Spec.AWSAccount
 	case "gcp":

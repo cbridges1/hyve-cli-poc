@@ -10,7 +10,6 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"hyve/internal/context"
 	"hyve/internal/credentials"
 	"hyve/internal/provider/aws"
 	azureprovider "hyve/internal/provider/azure"
@@ -164,12 +163,13 @@ The role is stored in provider-configs/aws.yaml in the current repository.
 The name can then be used as an alias when creating EKS clusters.
 
 Examples:
-  hyve config aws eks-role-add --name default-role --role-arn arn:aws:iam::123456789012:role/my-eks-cluster-role
+  hyve config aws eks-role-add --account prod --name default-role --role-arn arn:aws:iam::123456789012:role/my-eks-cluster-role
   hyve config aws eks-role-add --name prod-role --role-arn arn:aws:iam::123456789012:role/prod-eks-role`,
 	Run: func(cmd *cobra.Command, args []string) {
+		account, _ := cmd.Flags().GetString("account")
 		name, _ := cmd.Flags().GetString("name")
 		roleARN, _ := cmd.Flags().GetString("role-arn")
-		addAWSEKSRole(name, roleARN)
+		addAWSEKSRole(account, name, roleARN)
 	},
 }
 
@@ -179,10 +179,12 @@ var configAWSEKSRoleRemoveCmd = &cobra.Command{
 	Long: `Remove an EKS IAM role by its alias/name from the repository's provider configuration.
 
 Examples:
+  hyve config aws eks-role-remove --account prod default-role
   hyve config aws eks-role-remove default-role`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		removeAWSEKSRole(args[0])
+		account, _ := cmd.Flags().GetString("account")
+		removeAWSEKSRole(account, args[0])
 	},
 }
 
@@ -191,7 +193,8 @@ var configAWSEKSRoleListCmd = &cobra.Command{
 	Short: "List configured EKS IAM roles",
 	Long:  "Display all EKS IAM roles configured in the current repository with their aliases.",
 	Run: func(cmd *cobra.Command, args []string) {
-		listAWSEKSRoles()
+		account, _ := cmd.Flags().GetString("account")
+		listAWSEKSRoles(account)
 	},
 }
 
@@ -201,10 +204,12 @@ var configAWSEKSRoleGetCmd = &cobra.Command{
 	Long: `Display the EKS IAM role ARN associated with a given alias/name.
 
 Examples:
+  hyve config aws eks-role-get --account prod default-role
   hyve config aws eks-role-get default-role`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		getAWSEKSRole(args[0])
+		account, _ := cmd.Flags().GetString("account")
+		getAWSEKSRole(account, args[0])
 	},
 }
 
@@ -218,12 +223,13 @@ The role is stored in provider-configs/aws.yaml in the current repository.
 The name can then be used as an alias when creating EKS clusters.
 
 Examples:
-  hyve config aws node-role-add --name default-node-role --role-arn arn:aws:iam::123456789012:role/my-eks-node-role
+  hyve config aws node-role-add --account prod --name default-node-role --role-arn arn:aws:iam::123456789012:role/my-eks-node-role
   hyve config aws node-role-add --name prod-node-role --role-arn arn:aws:iam::123456789012:role/prod-eks-node-role`,
 	Run: func(cmd *cobra.Command, args []string) {
+		account, _ := cmd.Flags().GetString("account")
 		name, _ := cmd.Flags().GetString("name")
 		roleARN, _ := cmd.Flags().GetString("role-arn")
-		addAWSNodeRole(name, roleARN)
+		addAWSNodeRole(account, name, roleARN)
 	},
 }
 
@@ -233,10 +239,12 @@ var configAWSNodeRoleRemoveCmd = &cobra.Command{
 	Long: `Remove an EKS node IAM role by its alias/name from the repository's provider configuration.
 
 Examples:
+  hyve config aws node-role-remove --account prod default-node-role
   hyve config aws node-role-remove default-node-role`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		removeAWSNodeRole(args[0])
+		account, _ := cmd.Flags().GetString("account")
+		removeAWSNodeRole(account, args[0])
 	},
 }
 
@@ -245,7 +253,8 @@ var configAWSNodeRoleListCmd = &cobra.Command{
 	Short: "List configured EKS node IAM roles",
 	Long:  "Display all EKS node IAM roles configured in the current repository with their aliases.",
 	Run: func(cmd *cobra.Command, args []string) {
-		listAWSNodeRoles()
+		account, _ := cmd.Flags().GetString("account")
+		listAWSNodeRoles(account)
 	},
 }
 
@@ -255,10 +264,12 @@ var configAWSNodeRoleGetCmd = &cobra.Command{
 	Long: `Display the EKS node IAM role ARN associated with a given alias/name.
 
 Examples:
+  hyve config aws node-role-get --account prod default-node-role
   hyve config aws node-role-get default-node-role`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		getAWSNodeRole(args[0])
+		account, _ := cmd.Flags().GetString("account")
+		getAWSNodeRole(account, args[0])
 	},
 }
 
@@ -275,13 +286,14 @@ AmazonEC2ContainerRegistryReadOnly). The role ARN is then stored with the given 
 Requires AWS credentials configured via 'aws configure' or environment variables.
 
 Examples:
-  hyve config aws node-role-create --name default-node-role --role-name my-eks-node-role --region us-east-1
+  hyve config aws node-role-create --account prod --name default-node-role --role-name my-eks-node-role --region us-east-1
   hyve config aws node-role-create --name prod-node-role --role-name prod-eks-node-role --region us-west-2`,
 	Run: func(cmd *cobra.Command, args []string) {
+		account, _ := cmd.Flags().GetString("account")
 		name, _ := cmd.Flags().GetString("name")
 		roleName, _ := cmd.Flags().GetString("role-name")
 		region, _ := cmd.Flags().GetString("region")
-		createAWSNodeRole(name, roleName, region)
+		createAWSNodeRole(account, name, roleName, region)
 	},
 }
 
@@ -296,14 +308,15 @@ then removes the alias from the repository configuration.
 Use --config-only to remove only the configuration without deleting the AWS role.
 
 Examples:
-  hyve config aws node-role-delete default-node-role
+  hyve config aws node-role-delete --account prod default-node-role
   hyve config aws node-role-delete default-node-role --region us-east-1
   hyve config aws node-role-delete default-node-role --config-only`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		account, _ := cmd.Flags().GetString("account")
 		region, _ := cmd.Flags().GetString("region")
 		configOnly, _ := cmd.Flags().GetBool("config-only")
-		deleteAWSNodeRole(args[0], region, configOnly)
+		deleteAWSNodeRole(account, args[0], region, configOnly)
 	},
 }
 
@@ -317,12 +330,13 @@ The VPC is stored in provider-configs/aws.yaml in the current repository.
 The name can then be used as an alias when creating EKS clusters.
 
 Examples:
-  hyve config aws vpc-add --name default-vpc --id vpc-0123456789abcdef0
+  hyve config aws vpc-add --account prod --name default-vpc --id vpc-0123456789abcdef0
   hyve config aws vpc-add --name prod-vpc --id vpc-abcdef0123456789`,
 	Run: func(cmd *cobra.Command, args []string) {
+		account, _ := cmd.Flags().GetString("account")
 		name, _ := cmd.Flags().GetString("name")
 		vpcID, _ := cmd.Flags().GetString("id")
-		addAWSVPC(name, vpcID)
+		addAWSVPC(account, name, vpcID)
 	},
 }
 
@@ -332,10 +346,12 @@ var configAWSVPCRemoveCmd = &cobra.Command{
 	Long: `Remove a VPC by its alias/name from the repository's provider configuration.
 
 Examples:
+  hyve config aws vpc-remove --account prod default-vpc
   hyve config aws vpc-remove default-vpc`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		removeAWSVPC(args[0])
+		account, _ := cmd.Flags().GetString("account")
+		removeAWSVPC(account, args[0])
 	},
 }
 
@@ -344,7 +360,8 @@ var configAWSVPCListCmd = &cobra.Command{
 	Short: "List configured VPCs",
 	Long:  "Display all VPCs configured in the current repository with their aliases.",
 	Run: func(cmd *cobra.Command, args []string) {
-		listAWSVPCs()
+		account, _ := cmd.Flags().GetString("account")
+		listAWSVPCs(account)
 	},
 }
 
@@ -354,10 +371,12 @@ var configAWSVPCGetCmd = &cobra.Command{
 	Long: `Display the VPC ID associated with a given alias/name.
 
 Examples:
+  hyve config aws vpc-get --account prod default-vpc
   hyve config aws vpc-get default-vpc`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		getAWSVPC(args[0])
+		account, _ := cmd.Flags().GetString("account")
+		getAWSVPC(account, args[0])
 	},
 }
 
@@ -373,13 +392,14 @@ attaches the AmazonEKSClusterPolicy. The role ARN is then stored with the given 
 Requires AWS credentials configured via 'aws configure' or environment variables.
 
 Examples:
-  hyve config aws eks-role-create --name default-role --role-name my-eks-cluster-role --region us-east-1
+  hyve config aws eks-role-create --account prod --name default-role --role-name my-eks-cluster-role --region us-east-1
   hyve config aws eks-role-create --name prod-role --role-name prod-eks-role --region us-west-2`,
 	Run: func(cmd *cobra.Command, args []string) {
+		account, _ := cmd.Flags().GetString("account")
 		name, _ := cmd.Flags().GetString("name")
 		roleName, _ := cmd.Flags().GetString("role-name")
 		region, _ := cmd.Flags().GetString("region")
-		createAWSEKSRole(name, roleName, region)
+		createAWSEKSRole(account, name, roleName, region)
 	},
 }
 
@@ -394,14 +414,15 @@ then removes the alias from the repository configuration.
 Use --config-only to remove only the configuration without deleting the AWS role.
 
 Examples:
-  hyve config aws eks-role-delete default-role
+  hyve config aws eks-role-delete --account prod default-role
   hyve config aws eks-role-delete default-role --region us-east-1
   hyve config aws eks-role-delete default-role --config-only`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		account, _ := cmd.Flags().GetString("account")
 		region, _ := cmd.Flags().GetString("region")
 		configOnly, _ := cmd.Flags().GetBool("config-only")
-		deleteAWSEKSRole(args[0], region, configOnly)
+		deleteAWSEKSRole(account, args[0], region, configOnly)
 	},
 }
 
@@ -417,16 +438,17 @@ The VPC ID is then stored with the given alias.
 Requires AWS credentials configured via 'aws configure' or environment variables.
 
 Examples:
-  hyve config aws vpc-create --name default-vpc --region us-east-1
+  hyve config aws vpc-create --account prod --name default-vpc --region us-east-1
   hyve config aws vpc-create --name prod-vpc --region us-west-2 --cidr 10.1.0.0/16
   hyve config aws vpc-create --name dev-vpc --region us-east-1 --cidr 10.0.0.0/16 --subnets 10.0.1.0/24,10.0.2.0/24`,
 	Run: func(cmd *cobra.Command, args []string) {
+		account, _ := cmd.Flags().GetString("account")
 		name, _ := cmd.Flags().GetString("name")
 		region, _ := cmd.Flags().GetString("region")
 		cidr, _ := cmd.Flags().GetString("cidr")
 		subnets, _ := cmd.Flags().GetString("subnets")
 		enableDNS, _ := cmd.Flags().GetBool("enable-dns")
-		createAWSVPC(name, region, cidr, subnets, enableDNS)
+		createAWSVPC(account, name, region, cidr, subnets, enableDNS)
 	},
 }
 
@@ -441,69 +463,15 @@ then removes the alias from the repository configuration.
 Use --config-only to remove only the configuration without deleting the AWS VPC.
 
 Examples:
-  hyve config aws vpc-delete default-vpc
+  hyve config aws vpc-delete --account prod default-vpc
   hyve config aws vpc-delete default-vpc --region us-east-1
   hyve config aws vpc-delete default-vpc --config-only`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		account, _ := cmd.Flags().GetString("account")
 		region, _ := cmd.Flags().GetString("region")
 		configOnly, _ := cmd.Flags().GetBool("config-only")
-		deleteAWSVPC(args[0], region, configOnly)
-	},
-}
-
-// Context commands
-var configUseCmd = &cobra.Command{
-	Use:   "use [provider] [account]",
-	Short: "Set the current account/project/subscription for a provider",
-	Long: `Set the current context for a cloud provider. This determines which account's
-resources will be used by default when running commands.
-
-The context is stored locally in ~/.hyve/context.yaml and is NOT committed to Git.
-
-Providers:
-  aws   - Set the current AWS account
-  gcp   - Set the current GCP project
-  azure - Set the current Azure subscription
-  civo  - Set the current Civo organization
-
-Examples:
-  hyve config use aws prod
-  hyve config use gcp my-project
-  hyve config use azure my-subscription
-  hyve config use civo my-org`,
-	Args: cobra.ExactArgs(2),
-	Run: func(cmd *cobra.Command, args []string) {
-		setContext(args[0], args[1])
-	},
-}
-
-var configContextCmd = &cobra.Command{
-	Use:   "context",
-	Short: "Show current context for all providers",
-	Long: `Display the currently selected account/project/subscription for each provider.
-
-The context is stored locally in ~/.hyve/context.yaml and is NOT committed to Git.`,
-	Run: func(cmd *cobra.Command, args []string) {
-		showContext()
-	},
-}
-
-var configContextClearCmd = &cobra.Command{
-	Use:   "context-clear [provider]",
-	Short: "Clear the current context",
-	Long: `Clear the current context for a provider or all providers.
-
-Examples:
-  hyve config context-clear        # Clear all
-  hyve config context-clear aws    # Clear only AWS`,
-	Args: cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		if len(args) == 0 {
-			clearAllContext()
-		} else {
-			clearContext(args[0])
-		}
+		deleteAWSVPC(account, args[0], region, configOnly)
 	},
 }
 
@@ -658,42 +626,42 @@ var configCivoOrgGetCmd = &cobra.Command{
 
 var configCivoSetTokenCmd = &cobra.Command{
 	Use:   "set-token",
-	Short: "Store a Civo API token for the current organization",
+	Short: "Store a Civo API token for an organization",
 	Long: `Store an encrypted Civo API token in the local database.
 
-The token is stored under the name "<org>-token" where <org> is the current
-Civo organization set via 'hyve config use civo <org-name>'.
-
 Examples:
-  hyve config civo set-token
-  hyve config civo set-token --token YOUR_TOKEN_HERE`,
+  hyve config civo set-token --org my-org
+  hyve config civo set-token --org my-org --token YOUR_TOKEN_HERE`,
 	Run: func(cmd *cobra.Command, args []string) {
+		org, _ := cmd.Flags().GetString("org")
 		tokenFlag, _ := cmd.Flags().GetString("token")
-		setCivoToken(tokenFlag)
+		setCivoToken(org, tokenFlag)
 	},
 }
 
 var configCivoGetTokenCmd = &cobra.Command{
 	Use:   "get-token",
-	Short: "Retrieve the stored Civo API token for the current organization",
-	Long: `Display the decrypted Civo API token for the current organization.
+	Short: "Retrieve the stored Civo API token for an organization",
+	Long: `Display the decrypted Civo API token for an organization.
 
 Examples:
-  hyve config civo get-token`,
+  hyve config civo get-token --org my-org`,
 	Run: func(cmd *cobra.Command, args []string) {
-		getCivoToken()
+		org, _ := cmd.Flags().GetString("org")
+		getCivoToken(org)
 	},
 }
 
 var configCivoClearTokenCmd = &cobra.Command{
 	Use:   "clear-token",
-	Short: "Remove the stored Civo API token for the current organization",
-	Long: `Delete the Civo API token for the current organization.
+	Short: "Remove the stored Civo API token for an organization",
+	Long: `Delete the Civo API token for an organization.
 
 Examples:
-  hyve config civo clear-token`,
+  hyve config civo clear-token --org my-org`,
 	Run: func(cmd *cobra.Command, args []string) {
-		clearCivoToken()
+		org, _ := cmd.Flags().GetString("org")
+		clearCivoToken(org)
 	},
 }
 
@@ -721,68 +689,104 @@ func init() {
 	configAWSCmd.AddCommand(configAWSAccountGetCmd)
 
 	// AWS EKS Role subcommands
+	configAWSEKSRoleAddCmd.Flags().String("account", "", "AWS account name (required)")
 	configAWSEKSRoleAddCmd.Flags().String("name", "", "Friendly name/alias for the EKS role (required)")
 	configAWSEKSRoleAddCmd.Flags().String("role-arn", "", "IAM role ARN for EKS (required)")
+	configAWSEKSRoleAddCmd.MarkFlagRequired("account")
 	configAWSEKSRoleAddCmd.MarkFlagRequired("name")
 	configAWSEKSRoleAddCmd.MarkFlagRequired("role-arn")
 	configAWSCmd.AddCommand(configAWSEKSRoleAddCmd)
+	configAWSEKSRoleRemoveCmd.Flags().String("account", "", "AWS account name (required)")
+	configAWSEKSRoleRemoveCmd.MarkFlagRequired("account")
 	configAWSCmd.AddCommand(configAWSEKSRoleRemoveCmd)
+	configAWSEKSRoleListCmd.Flags().String("account", "", "AWS account name (required)")
+	configAWSEKSRoleListCmd.MarkFlagRequired("account")
 	configAWSCmd.AddCommand(configAWSEKSRoleListCmd)
+	configAWSEKSRoleGetCmd.Flags().String("account", "", "AWS account name (required)")
+	configAWSEKSRoleGetCmd.MarkFlagRequired("account")
 	configAWSCmd.AddCommand(configAWSEKSRoleGetCmd)
 
 	// AWS Node Role subcommands
+	configAWSNodeRoleAddCmd.Flags().String("account", "", "AWS account name (required)")
 	configAWSNodeRoleAddCmd.Flags().String("name", "", "Friendly name/alias for the node role (required)")
 	configAWSNodeRoleAddCmd.Flags().String("role-arn", "", "IAM role ARN for EKS nodes (required)")
+	configAWSNodeRoleAddCmd.MarkFlagRequired("account")
 	configAWSNodeRoleAddCmd.MarkFlagRequired("name")
 	configAWSNodeRoleAddCmd.MarkFlagRequired("role-arn")
 	configAWSCmd.AddCommand(configAWSNodeRoleAddCmd)
+	configAWSNodeRoleRemoveCmd.Flags().String("account", "", "AWS account name (required)")
+	configAWSNodeRoleRemoveCmd.MarkFlagRequired("account")
 	configAWSCmd.AddCommand(configAWSNodeRoleRemoveCmd)
+	configAWSNodeRoleListCmd.Flags().String("account", "", "AWS account name (required)")
+	configAWSNodeRoleListCmd.MarkFlagRequired("account")
 	configAWSCmd.AddCommand(configAWSNodeRoleListCmd)
+	configAWSNodeRoleGetCmd.Flags().String("account", "", "AWS account name (required)")
+	configAWSNodeRoleGetCmd.MarkFlagRequired("account")
 	configAWSCmd.AddCommand(configAWSNodeRoleGetCmd)
 
 	// AWS Node Role create/delete subcommands (actual AWS operations)
+	configAWSNodeRoleCreateCmd.Flags().String("account", "", "AWS account name (required)")
 	configAWSNodeRoleCreateCmd.Flags().String("name", "", "Friendly name/alias for the node role (required)")
 	configAWSNodeRoleCreateCmd.Flags().String("role-name", "", "IAM role name to create in AWS (required)")
 	configAWSNodeRoleCreateCmd.Flags().String("region", "us-east-1", "AWS region")
+	configAWSNodeRoleCreateCmd.MarkFlagRequired("account")
 	configAWSNodeRoleCreateCmd.MarkFlagRequired("name")
 	configAWSNodeRoleCreateCmd.MarkFlagRequired("role-name")
 	configAWSCmd.AddCommand(configAWSNodeRoleCreateCmd)
 
+	configAWSNodeRoleDeleteCmd.Flags().String("account", "", "AWS account name (required)")
+	configAWSNodeRoleDeleteCmd.MarkFlagRequired("account")
 	configAWSNodeRoleDeleteCmd.Flags().String("region", "us-east-1", "AWS region")
 	configAWSNodeRoleDeleteCmd.Flags().Bool("config-only", false, "Only remove from configuration, don't delete from AWS")
 	configAWSCmd.AddCommand(configAWSNodeRoleDeleteCmd)
 
 	// AWS VPC subcommands
+	configAWSVPCAddCmd.Flags().String("account", "", "AWS account name (required)")
 	configAWSVPCAddCmd.Flags().String("name", "", "Friendly name/alias for the VPC (required)")
 	configAWSVPCAddCmd.Flags().String("id", "", "VPC ID (required)")
+	configAWSVPCAddCmd.MarkFlagRequired("account")
 	configAWSVPCAddCmd.MarkFlagRequired("name")
 	configAWSVPCAddCmd.MarkFlagRequired("id")
 	configAWSCmd.AddCommand(configAWSVPCAddCmd)
+	configAWSVPCRemoveCmd.Flags().String("account", "", "AWS account name (required)")
+	configAWSVPCRemoveCmd.MarkFlagRequired("account")
 	configAWSCmd.AddCommand(configAWSVPCRemoveCmd)
+	configAWSVPCListCmd.Flags().String("account", "", "AWS account name (required)")
+	configAWSVPCListCmd.MarkFlagRequired("account")
 	configAWSCmd.AddCommand(configAWSVPCListCmd)
+	configAWSVPCGetCmd.Flags().String("account", "", "AWS account name (required)")
+	configAWSVPCGetCmd.MarkFlagRequired("account")
 	configAWSCmd.AddCommand(configAWSVPCGetCmd)
 
 	// AWS EKS Role create/delete subcommands (actual AWS operations)
+	configAWSEKSRoleCreateCmd.Flags().String("account", "", "AWS account name (required)")
 	configAWSEKSRoleCreateCmd.Flags().String("name", "", "Friendly name/alias for the EKS role (required)")
 	configAWSEKSRoleCreateCmd.Flags().String("role-name", "", "IAM role name to create in AWS (required)")
 	configAWSEKSRoleCreateCmd.Flags().String("region", "us-east-1", "AWS region")
+	configAWSEKSRoleCreateCmd.MarkFlagRequired("account")
 	configAWSEKSRoleCreateCmd.MarkFlagRequired("name")
 	configAWSEKSRoleCreateCmd.MarkFlagRequired("role-name")
 	configAWSCmd.AddCommand(configAWSEKSRoleCreateCmd)
 
+	configAWSEKSRoleDeleteCmd.Flags().String("account", "", "AWS account name (required)")
+	configAWSEKSRoleDeleteCmd.MarkFlagRequired("account")
 	configAWSEKSRoleDeleteCmd.Flags().String("region", "us-east-1", "AWS region")
 	configAWSEKSRoleDeleteCmd.Flags().Bool("config-only", false, "Only remove from configuration, don't delete from AWS")
 	configAWSCmd.AddCommand(configAWSEKSRoleDeleteCmd)
 
 	// AWS VPC create/delete subcommands (actual AWS operations)
+	configAWSVPCCreateCmd.Flags().String("account", "", "AWS account name (required)")
 	configAWSVPCCreateCmd.Flags().String("name", "", "Friendly name/alias for the VPC (required)")
 	configAWSVPCCreateCmd.Flags().String("region", "us-east-1", "AWS region")
 	configAWSVPCCreateCmd.Flags().String("cidr", "10.0.0.0/16", "CIDR block for the VPC")
 	configAWSVPCCreateCmd.Flags().String("subnets", "", "Comma-separated subnet CIDRs to create (e.g., 10.0.1.0/24,10.0.2.0/24)")
 	configAWSVPCCreateCmd.Flags().Bool("enable-dns", true, "Enable DNS support and hostnames")
+	configAWSVPCCreateCmd.MarkFlagRequired("account")
 	configAWSVPCCreateCmd.MarkFlagRequired("name")
 	configAWSCmd.AddCommand(configAWSVPCCreateCmd)
 
+	configAWSVPCDeleteCmd.Flags().String("account", "", "AWS account name (required)")
+	configAWSVPCDeleteCmd.MarkFlagRequired("account")
 	configAWSVPCDeleteCmd.Flags().String("region", "us-east-1", "AWS region")
 	configAWSVPCDeleteCmd.Flags().Bool("config-only", false, "Only remove from configuration, don't delete from AWS")
 	configAWSCmd.AddCommand(configAWSVPCDeleteCmd)
@@ -820,179 +824,23 @@ func init() {
 	configCivoCmd.AddCommand(configCivoOrgRemoveCmd)
 	configCivoCmd.AddCommand(configCivoOrgListCmd)
 	configCivoCmd.AddCommand(configCivoOrgGetCmd)
+	configCivoSetTokenCmd.Flags().String("org", "", "Civo organization name (required)")
 	configCivoSetTokenCmd.Flags().StringP("token", "t", "", "API token (if not provided, will prompt securely)")
+	configCivoSetTokenCmd.MarkFlagRequired("org")
 	configCivoCmd.AddCommand(configCivoSetTokenCmd)
+	configCivoGetTokenCmd.Flags().String("org", "", "Civo organization name (required)")
+	configCivoGetTokenCmd.MarkFlagRequired("org")
 	configCivoCmd.AddCommand(configCivoGetTokenCmd)
+	configCivoClearTokenCmd.Flags().String("org", "", "Civo organization name (required)")
+	configCivoClearTokenCmd.MarkFlagRequired("org")
 	configCivoCmd.AddCommand(configCivoClearTokenCmd)
 	configCmd.AddCommand(configGCPCmd)
 	configCmd.AddCommand(configAWSCmd)
 	configCmd.AddCommand(configAzureCmd)
 	configCmd.AddCommand(configCivoCmd)
-	configCmd.AddCommand(configUseCmd)
-	configCmd.AddCommand(configContextCmd)
-	configCmd.AddCommand(configContextClearCmd)
 }
 
-// Context helper functions
-func setContext(provider, account string) {
-	ctxMgr, err := context.NewManager()
-	if err != nil {
-		log.Fatalf("Failed to create context manager: %v", err)
-	}
-
-	// Validate the account exists in config
-	repoPath := getRepoPath()
-	pcMgr := providerconfig.NewManager(repoPath)
-
-	switch provider {
-	case "aws":
-		exists, err := pcMgr.HasAWSAccount(account)
-		if err != nil {
-			log.Fatalf("Failed to check AWS account: %v", err)
-		}
-		if !exists {
-			log.Fatalf("AWS account '%s' not found. Add it with: hyve config aws account-add --name %s --id <account-id>", account, account)
-		}
-	case "gcp":
-		exists, err := pcMgr.HasGCPProject(account)
-		if err != nil {
-			log.Fatalf("Failed to check GCP project: %v", err)
-		}
-		if !exists {
-			log.Fatalf("GCP project '%s' not found. Add it with: hyve config gcp add-project --name %s --id <project-id>", account, account)
-		}
-	case "azure":
-		exists, err := pcMgr.HasAzureSubscription(account)
-		if err != nil {
-			log.Fatalf("Failed to check Azure subscription: %v", err)
-		}
-		if !exists {
-			log.Fatalf("Azure subscription '%s' not found. Add it with: hyve config azure subscription-add --name %s --id <subscription-id>", account, account)
-		}
-	case "civo":
-		exists, err := pcMgr.HasCivoOrganization(account)
-		if err != nil {
-			log.Fatalf("Failed to check Civo organization: %v", err)
-		}
-		if !exists {
-			log.Fatalf("Civo organization '%s' not found. Add it with: hyve config civo org-add --name %s --id <org-id>", account, account)
-		}
-	default:
-		log.Fatalf("Unknown provider: %s. Valid providers: aws, gcp, azure, civo", provider)
-	}
-
-	if err := ctxMgr.SetCurrentAccount(provider, account); err != nil {
-		log.Fatalf("Failed to set context: %v", err)
-	}
-
-	log.Printf("✅ Set current %s account to '%s'", provider, account)
-	log.Println()
-	log.Println("💡 Context is stored locally in ~/.hyve/context.yaml")
-}
-
-func showContext() {
-	ctxMgr, err := context.NewManager()
-	if err != nil {
-		log.Fatalf("Failed to create context manager: %v", err)
-	}
-
-	ctx := ctxMgr.GetContext()
-
-	log.Println("🔧 Current Context:")
-	log.Println()
-
-	if ctx.AWS.Account != "" {
-		log.Printf("   AWS:   %s", ctx.AWS.Account)
-	} else {
-		log.Println("   AWS:   (not set)")
-	}
-
-	if ctx.GCP.Account != "" {
-		log.Printf("   GCP:   %s", ctx.GCP.Account)
-	} else {
-		log.Println("   GCP:   (not set)")
-	}
-
-	if ctx.Azure.Account != "" {
-		log.Printf("   Azure: %s", ctx.Azure.Account)
-	} else {
-		log.Println("   Azure: (not set)")
-	}
-
-	if ctx.Civo.Account != "" {
-		log.Printf("   Civo:  %s", ctx.Civo.Account)
-	} else {
-		log.Println("   Civo:  (not set)")
-	}
-
-	log.Println()
-	log.Println("💡 Set context with: hyve config use <provider> <account>")
-}
-
-func clearContext(provider string) {
-	ctxMgr, err := context.NewManager()
-	if err != nil {
-		log.Fatalf("Failed to create context manager: %v", err)
-	}
-
-	if err := ctxMgr.ClearProvider(provider); err != nil {
-		log.Fatalf("Failed to clear context: %v", err)
-	}
-
-	log.Printf("✅ Cleared %s context", provider)
-}
-
-func clearAllContext() {
-	ctxMgr, err := context.NewManager()
-	if err != nil {
-		log.Fatalf("Failed to create context manager: %v", err)
-	}
-
-	if err := ctxMgr.Clear(); err != nil {
-		log.Fatalf("Failed to clear context: %v", err)
-	}
-
-	log.Println("✅ Cleared all context")
-}
-
-// getCurrentAWSAccount returns the current AWS account from context or fatally exits
-func getCurrentAWSAccount() string {
-	ctxMgr, err := context.NewManager()
-	if err != nil {
-		log.Fatalf("Failed to create context manager: %v", err)
-	}
-
-	account := ctxMgr.GetAWSAccount()
-	if account == "" {
-		log.Fatalf("❌ No AWS account selected.\n\n" +
-			"Set the current account with:\n" +
-			"  hyve config use aws <account-name>\n\n" +
-			"Or list available accounts:\n" +
-			"  hyve config aws account-list")
-	}
-
-	return account
-}
-
-// getCivoOrgFromContext returns the current Civo organization name or fatally exits
-func getCivoOrgFromContext() string {
-	ctxMgr, err := context.NewManager()
-	if err != nil {
-		log.Fatalf("Failed to create context manager: %v", err)
-	}
-	orgName := ctxMgr.GetCivoOrganization()
-	if orgName == "" {
-		log.Fatalf("❌ No Civo organization selected.\n\n" +
-			"Set the current organization with:\n" +
-			"  hyve config use civo <org-name>\n\n" +
-			"Or add an organization first:\n" +
-			"  hyve config civo org-add --name <name> --id <org-id>")
-	}
-	return orgName
-}
-
-func setCivoToken(token string) {
-	orgName := getCivoOrgFromContext()
+func setCivoToken(orgName, token string) {
 
 	credsMgr, err := credentials.NewManager()
 	if err != nil {
@@ -1026,8 +874,7 @@ func setCivoToken(token string) {
 	log.Println("💡 Hyve will now use this token automatically for Civo operations")
 }
 
-func getCivoToken() {
-	orgName := getCivoOrgFromContext()
+func getCivoToken(orgName string) {
 
 	credsMgr, err := credentials.NewManager()
 	if err != nil {
@@ -1051,8 +898,7 @@ func getCivoToken() {
 	fmt.Println(token)
 }
 
-func clearCivoToken() {
-	orgName := getCivoOrgFromContext()
+func clearCivoToken(orgName string) {
 
 	credsMgr, err := credentials.NewManager()
 	if err != nil {
@@ -1301,15 +1147,13 @@ func getAWSAccount(name string) {
 }
 
 // AWS EKS Role helper functions
-func addAWSEKSRole(name, roleARN string) {
+func addAWSEKSRole(accountName, name, roleARN string) {
 	if name == "" {
 		log.Fatal("Role name is required (--name)")
 	}
 	if roleARN == "" {
 		log.Fatal("Role ARN is required (--role-arn)")
 	}
-
-	accountName := getCurrentAWSAccount()
 	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
@@ -1333,8 +1177,7 @@ func addAWSEKSRole(name, roleARN string) {
 	log.Println("💡 The configuration is stored in provider-configs/aws.yaml")
 }
 
-func removeAWSEKSRole(name string) {
-	accountName := getCurrentAWSAccount()
+func removeAWSEKSRole(accountName, name string) {
 	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
@@ -1350,8 +1193,7 @@ func removeAWSEKSRole(name string) {
 	log.Printf("✅ Removed EKS role '%s' from account '%s' (ARN: %s)", name, accountName, roleARN)
 }
 
-func listAWSEKSRoles() {
-	accountName := getCurrentAWSAccount()
+func listAWSEKSRoles(accountName string) {
 	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
@@ -1381,8 +1223,7 @@ func listAWSEKSRoles() {
 	log.Println("   hyve config aws eks-role-get <name>                          # Get role ARN")
 }
 
-func getAWSEKSRole(name string) {
-	accountName := getCurrentAWSAccount()
+func getAWSEKSRole(accountName, name string) {
 	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
@@ -1395,15 +1236,13 @@ func getAWSEKSRole(name string) {
 }
 
 // AWS Node Role helper functions
-func addAWSNodeRole(name, roleARN string) {
+func addAWSNodeRole(accountName, name, roleARN string) {
 	if name == "" {
 		log.Fatal("Role name is required (--name)")
 	}
 	if roleARN == "" {
 		log.Fatal("Role ARN is required (--role-arn)")
 	}
-
-	accountName := getCurrentAWSAccount()
 	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
@@ -1427,8 +1266,7 @@ func addAWSNodeRole(name, roleARN string) {
 	log.Println("💡 The configuration is stored in provider-configs/aws.yaml")
 }
 
-func removeAWSNodeRole(name string) {
-	accountName := getCurrentAWSAccount()
+func removeAWSNodeRole(accountName, name string) {
 	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
@@ -1444,8 +1282,7 @@ func removeAWSNodeRole(name string) {
 	log.Printf("✅ Removed node role '%s' from account '%s' (ARN: %s)", name, accountName, roleARN)
 }
 
-func listAWSNodeRoles() {
-	accountName := getCurrentAWSAccount()
+func listAWSNodeRoles(accountName string) {
 	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
@@ -1475,8 +1312,7 @@ func listAWSNodeRoles() {
 	log.Println("   hyve config aws node-role-get <name>                          # Get role ARN")
 }
 
-func getAWSNodeRole(name string) {
-	accountName := getCurrentAWSAccount()
+func getAWSNodeRole(accountName, name string) {
 	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
@@ -1489,7 +1325,7 @@ func getAWSNodeRole(name string) {
 }
 
 // AWS Node Role create/delete helper functions (actual AWS operations)
-func createAWSNodeRole(name, roleName, region string) {
+func createAWSNodeRole(accountName, name, roleName, region string) {
 	if name == "" {
 		log.Fatal("Role alias name is required (--name)")
 	}
@@ -1499,8 +1335,6 @@ func createAWSNodeRole(name, roleName, region string) {
 	if region == "" {
 		region = "us-east-1"
 	}
-
-	accountName := getCurrentAWSAccount()
 	repoPath := getRepoPath()
 	configMgr := providerconfig.NewManager(repoPath)
 
@@ -1544,12 +1378,10 @@ func createAWSNodeRole(name, roleName, region string) {
 	log.Printf("💡 Use this role when creating EKS clusters with: --node-role-name %s", name)
 }
 
-func deleteAWSNodeRole(name, region string, configOnly bool) {
+func deleteAWSNodeRole(accountName, name, region string, configOnly bool) {
 	if region == "" {
 		region = "us-east-1"
 	}
-
-	accountName := getCurrentAWSAccount()
 	repoPath := getRepoPath()
 	configMgr := providerconfig.NewManager(repoPath)
 
@@ -1603,15 +1435,13 @@ func deleteAWSNodeRole(name, region string, configOnly bool) {
 }
 
 // AWS VPC helper functions
-func addAWSVPC(name, vpcID string) {
+func addAWSVPC(accountName, name, vpcID string) {
 	if name == "" {
 		log.Fatal("VPC name is required (--name)")
 	}
 	if vpcID == "" {
 		log.Fatal("VPC ID is required (--id)")
 	}
-
-	accountName := getCurrentAWSAccount()
 	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
@@ -1635,8 +1465,7 @@ func addAWSVPC(name, vpcID string) {
 	log.Println("💡 The configuration is stored in provider-configs/aws.yaml")
 }
 
-func removeAWSVPC(name string) {
-	accountName := getCurrentAWSAccount()
+func removeAWSVPC(accountName, name string) {
 	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
@@ -1652,8 +1481,7 @@ func removeAWSVPC(name string) {
 	log.Printf("✅ Removed VPC '%s' from account '%s' (ID: %s)", name, accountName, vpcID)
 }
 
-func listAWSVPCs() {
-	accountName := getCurrentAWSAccount()
+func listAWSVPCs(accountName string) {
 	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
@@ -1683,8 +1511,7 @@ func listAWSVPCs() {
 	log.Println("   hyve config aws vpc-get <name>                       # Get VPC ID")
 }
 
-func getAWSVPC(name string) {
-	accountName := getCurrentAWSAccount()
+func getAWSVPC(accountName, name string) {
 	repoPath := getRepoPath()
 	mgr := providerconfig.NewManager(repoPath)
 
@@ -1697,7 +1524,7 @@ func getAWSVPC(name string) {
 }
 
 // AWS EKS Role create/delete helper functions (actual AWS operations)
-func createAWSEKSRole(name, roleName, region string) {
+func createAWSEKSRole(accountName, name, roleName, region string) {
 	if name == "" {
 		log.Fatal("Role alias name is required (--name)")
 	}
@@ -1707,8 +1534,6 @@ func createAWSEKSRole(name, roleName, region string) {
 	if region == "" {
 		region = "us-east-1"
 	}
-
-	accountName := getCurrentAWSAccount()
 	repoPath := getRepoPath()
 	configMgr := providerconfig.NewManager(repoPath)
 
@@ -1752,12 +1577,10 @@ func createAWSEKSRole(name, roleName, region string) {
 	log.Printf("💡 Use this role when creating EKS clusters with: --eks-role %s", name)
 }
 
-func deleteAWSEKSRole(name, region string, configOnly bool) {
+func deleteAWSEKSRole(accountName, name, region string, configOnly bool) {
 	if region == "" {
 		region = "us-east-1"
 	}
-
-	accountName := getCurrentAWSAccount()
 	repoPath := getRepoPath()
 	configMgr := providerconfig.NewManager(repoPath)
 
@@ -1821,7 +1644,7 @@ func extractRoleNameFromARN(arn string) string {
 }
 
 // AWS VPC create/delete helper functions (actual AWS operations)
-func createAWSVPC(name, region, cidr, subnets string, enableDNS bool) {
+func createAWSVPC(accountName, name, region, cidr, subnets string, enableDNS bool) {
 	if name == "" {
 		log.Fatal("VPC alias name is required (--name)")
 	}
@@ -1831,8 +1654,6 @@ func createAWSVPC(name, region, cidr, subnets string, enableDNS bool) {
 	if cidr == "" {
 		cidr = "10.0.0.0/16"
 	}
-
-	accountName := getCurrentAWSAccount()
 	repoPath := getRepoPath()
 	configMgr := providerconfig.NewManager(repoPath)
 
@@ -1907,12 +1728,10 @@ func createAWSVPC(name, region, cidr, subnets string, enableDNS bool) {
 	log.Printf("💡 Use this VPC when creating EKS clusters with: --vpc %s", name)
 }
 
-func deleteAWSVPC(name, region string, configOnly bool) {
+func deleteAWSVPC(accountName, name, region string, configOnly bool) {
 	if region == "" {
 		region = "us-east-1"
 	}
-
-	accountName := getCurrentAWSAccount()
 	repoPath := getRepoPath()
 	configMgr := providerconfig.NewManager(repoPath)
 

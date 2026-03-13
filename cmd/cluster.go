@@ -14,7 +14,6 @@ import (
 
 	"hyve/internal/cluster"
 	"hyve/internal/config"
-	"hyve/internal/context"
 	"hyve/internal/credentials"
 	"hyve/internal/provider"
 	"hyve/internal/providerconfig"
@@ -97,8 +96,7 @@ Supported cloud providers:
   - gcp     Google Cloud Platform (GKE)
   - azure   Microsoft Azure (AKS)
 
-The command uses the current context (account/project/subscription) by default.
-Use --account-name, --project-name, --subscription-name, or --org-name to override.`,
+Use --account-name, --project-name, --subscription-name, or --org-name to specify the account.`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		clusterName := args[0]
@@ -127,86 +125,32 @@ Use --account-name, --project-name, --subscription-name, or --org-name to overri
 		// Normalize provider to lowercase
 		providerName = strings.ToLower(providerName)
 
-		// Get context manager for current account lookups
-		ctxMgr, err := context.NewManager()
-		if err != nil {
-			log.Fatalf("Failed to create context manager: %v", err)
-		}
-
-		// Resolve account/project from context if not provided via flag
+		// Validate required account/project flags per provider
 		switch providerName {
 		case "aws":
 			if accountName == "" {
-				accountName = ctxMgr.GetAWSAccount()
-				if accountName == "" {
-					cmds := context.GetSwitchCommands("aws", "")
-					log.Fatalf("❌ No AWS account selected.\n\n"+
-						"Set the current account with:\n"+
-						"  hyve config use aws <account-name>\n\n"+
-						"Or specify an account with the --account-name flag:\n"+
-						"  hyve cluster add %s --provider aws --account-name <name> ...\n\n"+
-						"Check current AWS CLI credentials:\n"+
-						"  %s", clusterName, cmds.CheckCommand)
-				}
-				log.Printf("Using current AWS account context: %s", accountName)
+				log.Fatalf("AWS provider requires --account-name flag. Use 'hyve config aws account-list' to see available accounts.")
 			}
-			// Validate AWS-specific flags
 			if vpcName == "" {
-				log.Fatalf("AWS provider requires --vpc-name flag. Use 'hyve config aws vpc-list' to see available VPCs.")
+				log.Fatalf("AWS provider requires --vpc-name flag. Use 'hyve config aws vpc-list --account %s' to see available VPCs.", accountName)
 			}
 			if eksRoleName == "" {
-				log.Fatalf("AWS provider requires --eks-role-name flag. Use 'hyve config aws eks-role-list' to see available roles.")
+				log.Fatalf("AWS provider requires --eks-role-name flag. Use 'hyve config aws eks-role-list --account %s' to see available roles.", accountName)
 			}
 			if nodeRoleName == "" {
-				log.Fatalf("AWS provider requires --node-role-name flag. Use 'hyve config aws node-role-list' to see available roles.")
+				log.Fatalf("AWS provider requires --node-role-name flag. Use 'hyve config aws node-role-list --account %s' to see available roles.", accountName)
 			}
-
 		case "gcp":
 			if projectName == "" {
-				projectName = ctxMgr.GetGCPProject()
-				if projectName == "" {
-					cmds := context.GetSwitchCommands("gcp", "")
-					log.Fatalf("❌ No GCP project selected.\n\n"+
-						"Set the current project with:\n"+
-						"  hyve config use gcp <project-name>\n\n"+
-						"Or specify a project with the --project-name flag:\n"+
-						"  hyve cluster add %s --provider gcp --project-name <name> ...\n\n"+
-						"Check current GCP project:\n"+
-						"  %s", clusterName, cmds.CheckCommand)
-				}
-				log.Printf("Using current GCP project context: %s", projectName)
+				log.Fatalf("GCP provider requires --project-name flag. Use 'hyve config gcp list-projects' to see available projects.")
 			}
-
 		case "azure":
 			if subscriptionName == "" {
-				subscriptionName = ctxMgr.GetAzureSubscription()
-				if subscriptionName == "" {
-					cmds := context.GetSwitchCommands("azure", "")
-					log.Fatalf("❌ No Azure subscription selected.\n\n"+
-						"Set the current subscription with:\n"+
-						"  hyve config use azure <subscription-name>\n\n"+
-						"Or specify a subscription with the --subscription-name flag:\n"+
-						"  hyve cluster add %s --provider azure --subscription-name <name> ...\n\n"+
-						"Check current Azure subscription:\n"+
-						"  %s", clusterName, cmds.CheckCommand)
-				}
-				log.Printf("Using current Azure subscription context: %s", subscriptionName)
+				log.Fatalf("Azure provider requires --subscription-name flag. Use 'hyve config azure list-subscription-ids' to see available subscriptions.")
 			}
-
 		case "civo":
 			if orgName == "" {
-				orgName = ctxMgr.GetCivoOrganization()
-				if orgName == "" {
-					cmds := context.GetSwitchCommands("civo", "")
-					log.Fatalf("❌ No Civo organization selected.\n\n"+
-						"Set the current organization with:\n"+
-						"  hyve config use civo <org-name>\n\n"+
-						"Or specify an organization with the --org-name flag:\n"+
-						"  hyve cluster add %s --provider civo --org-name <name> ...\n\n"+
-						"Check current Civo API key:\n"+
-						"  %s", clusterName, cmds.CheckCommand)
-				}
-				log.Printf("Using current Civo organization context: %s", orgName)
+				log.Fatalf("Civo provider requires --org-name flag. Use 'hyve config civo org-list' to see available organizations.")
 			}
 		}
 
@@ -331,10 +275,10 @@ func init() {
 	addCmd.Flags().StringP("cluster-type", "t", "k3s", "Type of Kubernetes cluster")
 
 	// Provider account/project override flags (uses current context if not specified)
-	addCmd.Flags().String("account-name", "", "AWS account name (overrides current context)")
-	addCmd.Flags().String("project-name", "", "GCP project name (overrides current context)")
-	addCmd.Flags().String("subscription-name", "", "Azure subscription name (overrides current context)")
-	addCmd.Flags().String("org-name", "", "Civo organization name (overrides current context)")
+	addCmd.Flags().String("account-name", "", "AWS account name (required for AWS provider)")
+	addCmd.Flags().String("project-name", "", "GCP project name (required for GCP provider)")
+	addCmd.Flags().String("subscription-name", "", "Azure subscription name (required for Azure provider)")
+	addCmd.Flags().String("org-name", "", "Civo organization name (required for Civo provider)")
 
 	// AWS-specific flags
 	addCmd.Flags().String("vpc-name", "", "AWS VPC name alias (required for AWS provider)")
@@ -633,7 +577,7 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 
 	log.Printf("Exporting cluster information...")
 	configMgr := config.NewManager()
-	if apiKey := configMgr.GetCivoToken(); apiKey != "" {
+	if apiKey := configMgr.GetCivoToken(clusterDef.Spec.CivoOrganization); apiKey != "" {
 		err := exportClusterInfo(ctx, apiKey, clusterDef)
 		if err != nil {
 			log.Printf("Warning: Failed to export cluster info: %v", err)
@@ -712,7 +656,7 @@ func modifyClusterFromCLI(cmd *cobra.Command, clusterName string) {
 
 	log.Printf("Exporting cluster information...")
 	configMgr := config.NewManager()
-	if apiKey := configMgr.GetCivoToken(); apiKey != "" {
+	if apiKey := configMgr.GetCivoToken(clusterDef.Spec.CivoOrganization); apiKey != "" {
 		err := exportClusterInfo(ctx, apiKey, clusterDef)
 		if err != nil {
 			log.Printf("Warning: Failed to export cluster info: %v", err)
@@ -872,7 +816,7 @@ func createProviderForClusterDef(clusterDef types.ClusterDefinition) (provider.P
 	// Handle Civo-specific configuration
 	if providerName == "civo" {
 		configMgr := config.NewManager()
-		apiKey := configMgr.GetCivoToken()
+		apiKey := configMgr.GetCivoToken(clusterDef.Spec.CivoOrganization)
 		if apiKey == "" {
 			return nil, fmt.Errorf("Civo API token not found. Please run 'hyve config set-token civo' or set CIVO_TOKEN environment variable")
 		}
@@ -954,7 +898,7 @@ func forceDeleteClusterFromCloud(clusterName, region, providerName, projectName 
 	// Handle Civo-specific configuration
 	if providerName == "civo" {
 		configMgr := config.NewManager()
-		apiKey := configMgr.GetCivoToken()
+		apiKey := configMgr.GetCivoToken(projectName)
 		if apiKey == "" {
 			log.Fatalf("Civo API token not found. Please run 'hyve config set-token civo' or set CIVO_TOKEN environment variable")
 		}

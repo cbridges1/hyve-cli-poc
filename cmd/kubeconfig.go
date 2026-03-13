@@ -155,7 +155,7 @@ func createProviderForCluster(factory *provider.Factory, clusterDef types.Cluste
 	// Handle Civo-specific configuration
 	if providerName == "civo" {
 		configMgr := config.NewManager()
-		opts.APIKey = configMgr.GetCivoToken()
+		opts.APIKey = configMgr.GetCivoToken(clusterDef.Spec.CivoOrganization)
 		if opts.APIKey == "" {
 			return nil, fmt.Errorf("CIVO API token not found. Please run 'hyve config set-token civo' or set CIVO_TOKEN environment variable")
 		}
