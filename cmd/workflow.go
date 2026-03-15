@@ -104,15 +104,15 @@ var workflowValidateCmd = &cobra.Command{
 }
 
 func init() {
-	workflowCreateCmd.Flags().Bool("template", false, "Create from default template")
+	workflowCreateCmd.Flags().BoolP("template", "t", false, "Create from default template")
 	workflowCreateCmd.Flags().StringP("description", "d", "", "Workflow description")
 	workflowCreateCmd.Flags().StringP("file", "f", "", "Create workflow from existing YAML file")
 
 	workflowRunCmd.Flags().StringP("cluster", "c", "", "Cluster to run workflow on")
-	workflowRunCmd.Flags().Bool("logs", true, "Show execution logs")
-	workflowRunCmd.Flags().Bool("output", false, "Show step outputs")
+	workflowRunCmd.Flags().BoolP("logs", "l", true, "Show execution logs")
+	workflowRunCmd.Flags().BoolP("output", "o", false, "Show step outputs")
 
-	workflowDeleteCmd.Flags().Bool("force", false, "Delete without confirmation")
+	workflowDeleteCmd.Flags().BoolP("force", "f", false, "Delete without confirmation")
 
 	workflowCmd.AddCommand(workflowCreateCmd)
 	workflowCmd.AddCommand(workflowListCmd)

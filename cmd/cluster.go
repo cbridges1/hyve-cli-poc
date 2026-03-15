@@ -275,23 +275,23 @@ func init() {
 	addCmd.Flags().StringP("cluster-type", "t", "k3s", "Type of Kubernetes cluster")
 
 	// Provider account/project override flags (uses current context if not specified)
-	addCmd.Flags().String("account-name", "", "AWS account name (required for AWS provider)")
+	addCmd.Flags().StringP("account-name", "a", "", "AWS account name (required for AWS provider)")
 	addCmd.Flags().String("project-name", "", "GCP project name (required for GCP provider)")
-	addCmd.Flags().String("subscription-name", "", "Azure subscription name (required for Azure provider)")
-	addCmd.Flags().String("org-name", "", "Civo organization name (required for Civo provider)")
+	addCmd.Flags().StringP("subscription-name", "s", "", "Azure subscription name (required for Azure provider)")
+	addCmd.Flags().StringP("org-name", "o", "", "Civo organization name (required for Civo provider)")
 
 	// AWS-specific flags
-	addCmd.Flags().String("vpc-name", "", "AWS VPC name alias (required for AWS provider)")
-	addCmd.Flags().String("eks-role-name", "", "AWS EKS IAM role name alias (required for AWS provider)")
+	addCmd.Flags().StringP("vpc-name", "v", "", "AWS VPC name alias (required for AWS provider)")
+	addCmd.Flags().StringP("eks-role-name", "e", "", "AWS EKS IAM role name alias (required for AWS provider)")
 	addCmd.Flags().String("node-role-name", "", "AWS EKS node IAM role name alias (required for AWS provider)")
 
-	addCmd.Flags().StringArray("node-group", nil, `Node group spec (repeatable): name=workers,type=t3.medium,count=3[,min=1,max=5,disk=50,spot=true,mode=System]`)
+	addCmd.Flags().StringArrayP("node-group", "g", nil, `Node group spec (repeatable): name=workers,type=t3.medium,count=3[,min=1,max=5,disk=50,spot=true,mode=System]`)
 
 	modifyCmd.Flags().StringP("region", "r", "", "Region for the cluster")
 	modifyCmd.Flags().StringP("provider", "p", "", "Cloud provider")
 	modifyCmd.Flags().StringSliceP("nodes", "n", nil, "Node sizes")
 	modifyCmd.Flags().StringP("cluster-type", "t", "", "Type of Kubernetes cluster")
-	modifyCmd.Flags().StringArray("node-group", nil, `Node group spec (repeatable): name=workers,type=t3.medium,count=3[,min=1,max=5,disk=50,spot=true,mode=System]`)
+	modifyCmd.Flags().StringArrayP("node-group", "g", nil, `Node group spec (repeatable): name=workers,type=t3.medium,count=3[,min=1,max=5,disk=50,spot=true,mode=System]`)
 
 	deleteCmd.Flags().Bool("force-cloud", false, "With --force: delete from cloud even if no configuration file exists")
 	deleteCmd.Flags().Bool("force", false, "Delete cluster from cloud immediately before removing configuration (bypasses CI/CD)")

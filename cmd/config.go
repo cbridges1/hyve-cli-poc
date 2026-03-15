@@ -713,8 +713,8 @@ Examples:
 func init() {
 
 	// GCP subcommands
-	configGCPAddProjectCmd.Flags().String("name", "", "Friendly name/alias for the project (required)")
-	configGCPAddProjectCmd.Flags().String("id", "", "GCP project ID (required)")
+	configGCPAddProjectCmd.Flags().StringP("name", "n", "", "Friendly name/alias for the project (required)")
+	configGCPAddProjectCmd.Flags().StringP("id", "i", "", "GCP project ID (required)")
 	configGCPAddProjectCmd.MarkFlagRequired("name")
 	configGCPAddProjectCmd.MarkFlagRequired("id")
 
@@ -722,8 +722,8 @@ func init() {
 	configGCPCmd.AddCommand(configGCPProjectCmd)
 
 	// AWS Account subcommands
-	configAWSAccountAddCmd.Flags().String("name", "", "Friendly name/alias for the account (required)")
-	configAWSAccountAddCmd.Flags().String("id", "", "AWS account ID (required)")
+	configAWSAccountAddCmd.Flags().StringP("name", "n", "", "Friendly name/alias for the account (required)")
+	configAWSAccountAddCmd.Flags().StringP("id", "i", "", "AWS account ID (required)")
 	configAWSAccountAddCmd.MarkFlagRequired("name")
 	configAWSAccountAddCmd.MarkFlagRequired("id")
 
@@ -731,125 +731,125 @@ func init() {
 	configAWSCmd.AddCommand(configAWSAccountCmd)
 
 	// AWS EKS Role subcommands
-	configAWSEKSRoleAddCmd.Flags().String("account", "", "AWS account name (required)")
-	configAWSEKSRoleAddCmd.Flags().String("name", "", "Friendly name/alias for the EKS role (required)")
-	configAWSEKSRoleAddCmd.Flags().String("role-arn", "", "IAM role ARN for EKS (required)")
+	configAWSEKSRoleAddCmd.Flags().StringP("account", "a", "", "AWS account name (required)")
+	configAWSEKSRoleAddCmd.Flags().StringP("name", "n", "", "Friendly name/alias for the EKS role (required)")
+	configAWSEKSRoleAddCmd.Flags().StringP("role-arn", "r", "", "IAM role ARN for EKS (required)")
 	configAWSEKSRoleAddCmd.MarkFlagRequired("account")
 	configAWSEKSRoleAddCmd.MarkFlagRequired("name")
 	configAWSEKSRoleAddCmd.MarkFlagRequired("role-arn")
 
-	configAWSEKSRoleRemoveCmd.Flags().String("account", "", "AWS account name (required)")
+	configAWSEKSRoleRemoveCmd.Flags().StringP("account", "a", "", "AWS account name (required)")
 	configAWSEKSRoleRemoveCmd.MarkFlagRequired("account")
 
-	configAWSEKSRoleListCmd.Flags().String("account", "", "AWS account name (required)")
+	configAWSEKSRoleListCmd.Flags().StringP("account", "a", "", "AWS account name (required)")
 	configAWSEKSRoleListCmd.MarkFlagRequired("account")
 
-	configAWSEKSRoleGetCmd.Flags().String("account", "", "AWS account name (required)")
+	configAWSEKSRoleGetCmd.Flags().StringP("account", "a", "", "AWS account name (required)")
 	configAWSEKSRoleGetCmd.MarkFlagRequired("account")
 
-	configAWSEKSRoleCreateCmd.Flags().String("account", "", "AWS account name (required)")
-	configAWSEKSRoleCreateCmd.Flags().String("name", "", "Friendly name/alias for the EKS role (required)")
+	configAWSEKSRoleCreateCmd.Flags().StringP("account", "a", "", "AWS account name (required)")
+	configAWSEKSRoleCreateCmd.Flags().StringP("name", "n", "", "Friendly name/alias for the EKS role (required)")
 	configAWSEKSRoleCreateCmd.Flags().String("role-name", "", "IAM role name to create in AWS (required)")
-	configAWSEKSRoleCreateCmd.Flags().String("region", "us-east-1", "AWS region")
+	configAWSEKSRoleCreateCmd.Flags().StringP("region", "r", "us-east-1", "AWS region")
 	configAWSEKSRoleCreateCmd.MarkFlagRequired("account")
 	configAWSEKSRoleCreateCmd.MarkFlagRequired("name")
 	configAWSEKSRoleCreateCmd.MarkFlagRequired("role-name")
 
-	configAWSEKSRoleDeleteCmd.Flags().String("account", "", "AWS account name (required)")
+	configAWSEKSRoleDeleteCmd.Flags().StringP("account", "a", "", "AWS account name (required)")
 	configAWSEKSRoleDeleteCmd.MarkFlagRequired("account")
-	configAWSEKSRoleDeleteCmd.Flags().String("region", "us-east-1", "AWS region")
+	configAWSEKSRoleDeleteCmd.Flags().StringP("region", "r", "us-east-1", "AWS region")
 	configAWSEKSRoleDeleteCmd.Flags().Bool("config-only", false, "Only remove from configuration, don't delete from AWS")
 
 	configAWSEKSRoleCmd.AddCommand(configAWSEKSRoleAddCmd, configAWSEKSRoleRemoveCmd, configAWSEKSRoleListCmd, configAWSEKSRoleGetCmd, configAWSEKSRoleCreateCmd, configAWSEKSRoleDeleteCmd)
 	configAWSCmd.AddCommand(configAWSEKSRoleCmd)
 
 	// AWS Node Role subcommands
-	configAWSNodeRoleAddCmd.Flags().String("account", "", "AWS account name (required)")
-	configAWSNodeRoleAddCmd.Flags().String("name", "", "Friendly name/alias for the node role (required)")
-	configAWSNodeRoleAddCmd.Flags().String("role-arn", "", "IAM role ARN for EKS nodes (required)")
+	configAWSNodeRoleAddCmd.Flags().StringP("account", "a", "", "AWS account name (required)")
+	configAWSNodeRoleAddCmd.Flags().StringP("name", "n", "", "Friendly name/alias for the node role (required)")
+	configAWSNodeRoleAddCmd.Flags().StringP("role-arn", "r", "", "IAM role ARN for EKS nodes (required)")
 	configAWSNodeRoleAddCmd.MarkFlagRequired("account")
 	configAWSNodeRoleAddCmd.MarkFlagRequired("name")
 	configAWSNodeRoleAddCmd.MarkFlagRequired("role-arn")
 
-	configAWSNodeRoleRemoveCmd.Flags().String("account", "", "AWS account name (required)")
+	configAWSNodeRoleRemoveCmd.Flags().StringP("account", "a", "", "AWS account name (required)")
 	configAWSNodeRoleRemoveCmd.MarkFlagRequired("account")
 
-	configAWSNodeRoleListCmd.Flags().String("account", "", "AWS account name (required)")
+	configAWSNodeRoleListCmd.Flags().StringP("account", "a", "", "AWS account name (required)")
 	configAWSNodeRoleListCmd.MarkFlagRequired("account")
 
-	configAWSNodeRoleGetCmd.Flags().String("account", "", "AWS account name (required)")
+	configAWSNodeRoleGetCmd.Flags().StringP("account", "a", "", "AWS account name (required)")
 	configAWSNodeRoleGetCmd.MarkFlagRequired("account")
 
-	configAWSNodeRoleCreateCmd.Flags().String("account", "", "AWS account name (required)")
-	configAWSNodeRoleCreateCmd.Flags().String("name", "", "Friendly name/alias for the node role (required)")
+	configAWSNodeRoleCreateCmd.Flags().StringP("account", "a", "", "AWS account name (required)")
+	configAWSNodeRoleCreateCmd.Flags().StringP("name", "n", "", "Friendly name/alias for the node role (required)")
 	configAWSNodeRoleCreateCmd.Flags().String("role-name", "", "IAM role name to create in AWS (required)")
-	configAWSNodeRoleCreateCmd.Flags().String("region", "us-east-1", "AWS region")
+	configAWSNodeRoleCreateCmd.Flags().StringP("region", "r", "us-east-1", "AWS region")
 	configAWSNodeRoleCreateCmd.MarkFlagRequired("account")
 	configAWSNodeRoleCreateCmd.MarkFlagRequired("name")
 	configAWSNodeRoleCreateCmd.MarkFlagRequired("role-name")
 
-	configAWSNodeRoleDeleteCmd.Flags().String("account", "", "AWS account name (required)")
+	configAWSNodeRoleDeleteCmd.Flags().StringP("account", "a", "", "AWS account name (required)")
 	configAWSNodeRoleDeleteCmd.MarkFlagRequired("account")
-	configAWSNodeRoleDeleteCmd.Flags().String("region", "us-east-1", "AWS region")
+	configAWSNodeRoleDeleteCmd.Flags().StringP("region", "r", "us-east-1", "AWS region")
 	configAWSNodeRoleDeleteCmd.Flags().Bool("config-only", false, "Only remove from configuration, don't delete from AWS")
 
 	configAWSNodeRoleCmd.AddCommand(configAWSNodeRoleAddCmd, configAWSNodeRoleRemoveCmd, configAWSNodeRoleListCmd, configAWSNodeRoleGetCmd, configAWSNodeRoleCreateCmd, configAWSNodeRoleDeleteCmd)
 	configAWSCmd.AddCommand(configAWSNodeRoleCmd)
 
 	// AWS VPC subcommands
-	configAWSVPCAddCmd.Flags().String("account", "", "AWS account name (required)")
-	configAWSVPCAddCmd.Flags().String("name", "", "Friendly name/alias for the VPC (required)")
-	configAWSVPCAddCmd.Flags().String("id", "", "VPC ID (required)")
+	configAWSVPCAddCmd.Flags().StringP("account", "a", "", "AWS account name (required)")
+	configAWSVPCAddCmd.Flags().StringP("name", "n", "", "Friendly name/alias for the VPC (required)")
+	configAWSVPCAddCmd.Flags().StringP("id", "i", "", "VPC ID (required)")
 	configAWSVPCAddCmd.MarkFlagRequired("account")
 	configAWSVPCAddCmd.MarkFlagRequired("name")
 	configAWSVPCAddCmd.MarkFlagRequired("id")
 
-	configAWSVPCRemoveCmd.Flags().String("account", "", "AWS account name (required)")
+	configAWSVPCRemoveCmd.Flags().StringP("account", "a", "", "AWS account name (required)")
 	configAWSVPCRemoveCmd.MarkFlagRequired("account")
 
-	configAWSVPCListCmd.Flags().String("account", "", "AWS account name (required)")
+	configAWSVPCListCmd.Flags().StringP("account", "a", "", "AWS account name (required)")
 	configAWSVPCListCmd.MarkFlagRequired("account")
 
-	configAWSVPCGetCmd.Flags().String("account", "", "AWS account name (required)")
+	configAWSVPCGetCmd.Flags().StringP("account", "a", "", "AWS account name (required)")
 	configAWSVPCGetCmd.MarkFlagRequired("account")
 
-	configAWSVPCCreateCmd.Flags().String("account", "", "AWS account name (required)")
-	configAWSVPCCreateCmd.Flags().String("name", "", "Friendly name/alias for the VPC (required)")
-	configAWSVPCCreateCmd.Flags().String("region", "us-east-1", "AWS region")
-	configAWSVPCCreateCmd.Flags().String("cidr", "10.0.0.0/16", "CIDR block for the VPC")
-	configAWSVPCCreateCmd.Flags().String("subnets", "", "Comma-separated subnet CIDRs to create (e.g., 10.0.1.0/24,10.0.2.0/24)")
+	configAWSVPCCreateCmd.Flags().StringP("account", "a", "", "AWS account name (required)")
+	configAWSVPCCreateCmd.Flags().StringP("name", "n", "", "Friendly name/alias for the VPC (required)")
+	configAWSVPCCreateCmd.Flags().StringP("region", "r", "us-east-1", "AWS region")
+	configAWSVPCCreateCmd.Flags().StringP("cidr", "c", "10.0.0.0/16", "CIDR block for the VPC")
+	configAWSVPCCreateCmd.Flags().StringP("subnets", "s", "", "Comma-separated subnet CIDRs to create (e.g., 10.0.1.0/24,10.0.2.0/24)")
 	configAWSVPCCreateCmd.Flags().Bool("enable-dns", true, "Enable DNS support and hostnames")
 	configAWSVPCCreateCmd.MarkFlagRequired("account")
 	configAWSVPCCreateCmd.MarkFlagRequired("name")
 
-	configAWSVPCDeleteCmd.Flags().String("account", "", "AWS account name (required)")
+	configAWSVPCDeleteCmd.Flags().StringP("account", "a", "", "AWS account name (required)")
 	configAWSVPCDeleteCmd.MarkFlagRequired("account")
-	configAWSVPCDeleteCmd.Flags().String("region", "us-east-1", "AWS region")
+	configAWSVPCDeleteCmd.Flags().StringP("region", "r", "us-east-1", "AWS region")
 	configAWSVPCDeleteCmd.Flags().Bool("config-only", false, "Only remove from configuration, don't delete from AWS")
 
 	configAWSVPCCmd.AddCommand(configAWSVPCAddCmd, configAWSVPCRemoveCmd, configAWSVPCListCmd, configAWSVPCGetCmd, configAWSVPCCreateCmd, configAWSVPCDeleteCmd)
 	configAWSCmd.AddCommand(configAWSVPCCmd)
 
 	// Azure subcommands
-	configAzureAddSubscriptionIDsCmd.Flags().String("name", "", "Friendly name/alias for the subscription (required)")
-	configAzureAddSubscriptionIDsCmd.Flags().String("id", "", "Azure subscription ID (required)")
+	configAzureAddSubscriptionIDsCmd.Flags().StringP("name", "n", "", "Friendly name/alias for the subscription (required)")
+	configAzureAddSubscriptionIDsCmd.Flags().StringP("id", "i", "", "Azure subscription ID (required)")
 	configAzureAddSubscriptionIDsCmd.MarkFlagRequired("name")
 	configAzureAddSubscriptionIDsCmd.MarkFlagRequired("id")
 
 	configAzureSubscriptionCmd.AddCommand(configAzureAddSubscriptionIDsCmd, configAzureRemoveSubscriptionIDsCmd, configAzureListSubscriptionIDsCmd)
 
-	configAzureAddResourceGroupCmd.Flags().String("subscription", "", "Subscription name to add the resource group to (required)")
-	configAzureAddResourceGroupCmd.Flags().String("name", "", "Resource group name (required)")
-	configAzureAddResourceGroupCmd.Flags().String("location", "", "Azure region/location for the resource group (required)")
+	configAzureAddResourceGroupCmd.Flags().StringP("subscription", "s", "", "Subscription name to add the resource group to (required)")
+	configAzureAddResourceGroupCmd.Flags().StringP("name", "n", "", "Resource group name (required)")
+	configAzureAddResourceGroupCmd.Flags().StringP("location", "l", "", "Azure region/location for the resource group (required)")
 	configAzureAddResourceGroupCmd.MarkFlagRequired("subscription")
 	configAzureAddResourceGroupCmd.MarkFlagRequired("name")
 	configAzureAddResourceGroupCmd.MarkFlagRequired("location")
 
-	configAzureListResourceGroupsCmd.Flags().String("subscription", "", "Subscription name to list resource groups for (required)")
+	configAzureListResourceGroupsCmd.Flags().StringP("subscription", "s", "", "Subscription name to list resource groups for (required)")
 	configAzureListResourceGroupsCmd.MarkFlagRequired("subscription")
 
-	configAzureDeleteResourceGroupCmd.Flags().String("subscription", "", "Subscription name to remove the resource group from (required)")
-	configAzureDeleteResourceGroupCmd.Flags().String("name", "", "Resource group name to remove (required)")
+	configAzureDeleteResourceGroupCmd.Flags().StringP("subscription", "s", "", "Subscription name to remove the resource group from (required)")
+	configAzureDeleteResourceGroupCmd.Flags().StringP("name", "n", "", "Resource group name to remove (required)")
 	configAzureDeleteResourceGroupCmd.MarkFlagRequired("subscription")
 	configAzureDeleteResourceGroupCmd.MarkFlagRequired("name")
 
@@ -858,22 +858,22 @@ func init() {
 	configAzureCmd.AddCommand(configAzureSubscriptionCmd, configAzureResourceGroupCmd)
 
 	// Civo subcommands
-	configCivoOrgAddCmd.Flags().String("name", "", "Friendly name/alias for the organization (required)")
-	configCivoOrgAddCmd.Flags().String("id", "", "Civo organization ID (required)")
+	configCivoOrgAddCmd.Flags().StringP("name", "n", "", "Friendly name/alias for the organization (required)")
+	configCivoOrgAddCmd.Flags().StringP("id", "i", "", "Civo organization ID (required)")
 	configCivoOrgAddCmd.MarkFlagRequired("name")
 	configCivoOrgAddCmd.MarkFlagRequired("id")
 
 	configCivoOrgCmd.AddCommand(configCivoOrgAddCmd, configCivoOrgRemoveCmd, configCivoOrgListCmd, configCivoOrgGetCmd)
 	configCivoCmd.AddCommand(configCivoOrgCmd)
 
-	configCivoSetTokenCmd.Flags().String("org", "", "Civo organization name (required)")
+	configCivoSetTokenCmd.Flags().StringP("org", "o", "", "Civo organization name (required)")
 	configCivoSetTokenCmd.Flags().StringP("token", "t", "", "API token (if not provided, will prompt securely)")
 	configCivoSetTokenCmd.MarkFlagRequired("org")
 
-	configCivoGetTokenCmd.Flags().String("org", "", "Civo organization name (required)")
+	configCivoGetTokenCmd.Flags().StringP("org", "o", "", "Civo organization name (required)")
 	configCivoGetTokenCmd.MarkFlagRequired("org")
 
-	configCivoClearTokenCmd.Flags().String("org", "", "Civo organization name (required)")
+	configCivoClearTokenCmd.Flags().StringP("org", "o", "", "Civo organization name (required)")
 	configCivoClearTokenCmd.MarkFlagRequired("org")
 
 	configCivoTokenCmd.AddCommand(configCivoSetTokenCmd, configCivoGetTokenCmd, configCivoClearTokenCmd)
