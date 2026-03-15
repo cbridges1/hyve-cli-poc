@@ -139,7 +139,7 @@ func (v *RequirementValidator) validateSecret(secret SecretRequirement) error {
 		suggestions := []string{}
 		switch secret.Provider {
 		case "civo":
-			suggestions = append(suggestions, "hyve config civo set-token")
+			suggestions = append(suggestions, "hyve config civo token set")
 		case "aws":
 			suggestions = append(suggestions, "aws configure")
 		case "gcp":

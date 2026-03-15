@@ -106,7 +106,7 @@ func (f *Factory) CreateProviderWithOptions(providerName string, opts ProviderOp
 			}
 		}
 		if token == "" {
-			return nil, fmt.Errorf("Civo API token not found. Set token in provider-configs/civo.yaml or run 'hyve config civo set-token --org %s'", opts.AccountName)
+			return nil, fmt.Errorf("Civo API token not found. Set token in provider-configs/civo.yaml or run 'hyve config civo token set --org %s'", opts.AccountName)
 		}
 		civoProvider, err := civo.NewProvider(token, opts.Region)
 		if err != nil {

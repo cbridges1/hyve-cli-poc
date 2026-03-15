@@ -129,28 +129,28 @@ Use --account-name, --project-name, --subscription-name, or --org-name to specif
 		switch providerName {
 		case "aws":
 			if accountName == "" {
-				log.Fatalf("AWS provider requires --account-name flag. Use 'hyve config aws account-list' to see available accounts.")
+				log.Fatalf("AWS provider requires --account-name flag. Use 'hyve config aws account list' to see available accounts.")
 			}
 			if vpcName == "" {
-				log.Fatalf("AWS provider requires --vpc-name flag. Use 'hyve config aws vpc-list --account %s' to see available VPCs.", accountName)
+				log.Fatalf("AWS provider requires --vpc-name flag. Use 'hyve config aws vpc list --account %s' to see available VPCs.", accountName)
 			}
 			if eksRoleName == "" {
-				log.Fatalf("AWS provider requires --eks-role-name flag. Use 'hyve config aws eks-role-list --account %s' to see available roles.", accountName)
+				log.Fatalf("AWS provider requires --eks-role-name flag. Use 'hyve config aws eks-role list --account %s' to see available roles.", accountName)
 			}
 			if nodeRoleName == "" {
-				log.Fatalf("AWS provider requires --node-role-name flag. Use 'hyve config aws node-role-list --account %s' to see available roles.", accountName)
+				log.Fatalf("AWS provider requires --node-role-name flag. Use 'hyve config aws node-role list --account %s' to see available roles.", accountName)
 			}
 		case "gcp":
 			if projectName == "" {
-				log.Fatalf("GCP provider requires --project-name flag. Use 'hyve config gcp list-projects' to see available projects.")
+				log.Fatalf("GCP provider requires --project-name flag. Use 'hyve config gcp project list' to see available projects.")
 			}
 		case "azure":
 			if subscriptionName == "" {
-				log.Fatalf("Azure provider requires --subscription-name flag. Use 'hyve config azure list-subscription-ids' to see available subscriptions.")
+				log.Fatalf("Azure provider requires --subscription-name flag. Use 'hyve config azure subscription list' to see available subscriptions.")
 			}
 		case "civo":
 			if orgName == "" {
-				log.Fatalf("Civo provider requires --org-name flag. Use 'hyve config civo org-list' to see available organizations.")
+				log.Fatalf("Civo provider requires --org-name flag. Use 'hyve config civo org list' to see available organizations.")
 			}
 		}
 
@@ -251,7 +251,7 @@ Note: This command does not remove configuration files or run reconciliation.`,
 
 		// Validate project-name is provided for GCP provider
 		if providerName == "gcp" && projectName == "" {
-			log.Fatalf("GCP provider requires --project-name flag. Use 'hyve config gcp list-projects' to see available projects.")
+			log.Fatalf("GCP provider requires --project-name flag. Use 'hyve config gcp project list' to see available projects.")
 		}
 
 		forceDeleteClusterFromCloud(clusterName, region, providerName, projectName)
@@ -456,7 +456,7 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 		gcpProjectID, err = pcMgr.GetGCPProjectID(projectName)
 		if err != nil {
 			log.Fatalf("GCP project alias '%s' not found in repository configuration.\n"+
-				"Use 'hyve config gcp add-project --name %s --id <project-id>' to add it.", projectName, projectName)
+				"Use 'hyve config gcp project add --name %s --id <project-id>' to add it.", projectName, projectName)
 		}
 		log.Printf("Using GCP project '%s' (ID: %s)", projectName, gcpProjectID)
 	}
@@ -468,7 +468,7 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 		awsAccountID, err = pcMgr.GetAWSAccountID(accountName)
 		if err != nil {
 			log.Fatalf("AWS account alias '%s' not found in repository configuration.\n"+
-				"Use 'hyve config aws account-add --name %s --id <account-id>' to add it.", accountName, accountName)
+				"Use 'hyve config aws account add --name %s --id <account-id>' to add it.", accountName, accountName)
 		}
 		log.Printf("Using AWS account '%s' (ID: %s)", accountName, awsAccountID)
 
@@ -478,8 +478,8 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 			if err != nil {
 				log.Fatalf("AWS VPC alias '%s' not found in account '%s'.\n"+
 					"Use 'hyve config use aws %s' to set the account, then:\n"+
-					"  hyve config aws vpc-add --name %s --id <vpc-id>\n"+
-					"Or use 'hyve config aws vpc-create --name %s --region %s' to create one.", vpcName, accountName, accountName, vpcName, vpcName, region)
+					"  hyve config aws vpc add --name %s --id <vpc-id>\n"+
+					"Or use 'hyve config aws vpc create --name %s --region %s' to create one.", vpcName, accountName, accountName, vpcName, vpcName, region)
 			}
 			log.Printf("Using AWS VPC '%s' (ID: %s)", vpcName, awsVPCID)
 		}
@@ -490,8 +490,8 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 			if err != nil {
 				log.Fatalf("AWS EKS role alias '%s' not found in account '%s'.\n"+
 					"Use 'hyve config use aws %s' to set the account, then:\n"+
-					"  hyve config aws eks-role-add --name %s --role-arn <arn>\n"+
-					"Or use 'hyve config aws eks-role-create --name %s --role-name <name> --region %s' to create one.", eksRoleName, accountName, accountName, eksRoleName, eksRoleName, region)
+					"  hyve config aws eks-role add --name %s --role-arn <arn>\n"+
+					"Or use 'hyve config aws eks-role create --name %s --role-name <name> --region %s' to create one.", eksRoleName, accountName, accountName, eksRoleName, eksRoleName, region)
 			}
 			log.Printf("Using AWS EKS role '%s' (ARN: %s)", eksRoleName, awsEKSRoleARN)
 		}
@@ -502,8 +502,8 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 			if err != nil {
 				log.Fatalf("AWS node role alias '%s' not found in account '%s'.\n"+
 					"Use 'hyve config use aws %s' to set the account, then:\n"+
-					"  hyve config aws node-role-add --name %s --role-arn <arn>\n"+
-					"Or use 'hyve config aws node-role-create --name %s --role-name <name> --region %s' to create one.", nodeRoleName, accountName, accountName, nodeRoleName, nodeRoleName, region)
+					"  hyve config aws node-role add --name %s --role-arn <arn>\n"+
+					"Or use 'hyve config aws node-role create --name %s --role-name <name> --region %s' to create one.", nodeRoleName, accountName, accountName, nodeRoleName, nodeRoleName, region)
 			}
 			log.Printf("Using AWS node role '%s' (ARN: %s)", nodeRoleName, awsNodeRoleARN)
 		}
@@ -821,7 +821,7 @@ func createProviderForClusterDef(clusterDef types.ClusterDefinition) (provider.P
 			apiKey = os.Getenv("CIVO_TOKEN")
 		}
 		if apiKey == "" {
-			return nil, fmt.Errorf("Civo API token not found. Please run 'hyve config civo set-token --org %s' or set CIVO_TOKEN environment variable", clusterDef.Spec.CivoOrganization)
+			return nil, fmt.Errorf("Civo API token not found. Please run 'hyve config civo token set --org %s' or set CIVO_TOKEN environment variable", clusterDef.Spec.CivoOrganization)
 		}
 		opts.APIKey = apiKey
 	}
@@ -907,7 +907,7 @@ func forceDeleteClusterFromCloud(clusterName, region, providerName, projectName 
 			apiKey = os.Getenv("CIVO_TOKEN")
 		}
 		if apiKey == "" {
-			log.Fatalf("Civo API token not found. Please run 'hyve config civo set-token --org %s' or set CIVO_TOKEN environment variable", projectName)
+			log.Fatalf("Civo API token not found. Please run 'hyve config civo token set --org %s' or set CIVO_TOKEN environment variable", projectName)
 		}
 		opts.APIKey = apiKey
 	}
@@ -927,7 +927,7 @@ func forceDeleteClusterFromCloud(clusterName, region, providerName, projectName 
 		projectID, err := pcMgr.GetGCPProjectID(projectName)
 		if err != nil {
 			log.Fatalf("GCP project alias '%s' not found in repository configuration.\n"+
-				"Use 'hyve config gcp add-project --name %s --id <project-id>' to add it.", projectName, projectName)
+				"Use 'hyve config gcp project add --name %s --id <project-id>' to add it.", projectName, projectName)
 		}
 		opts.ProjectID = projectID
 		log.Printf("Using GCP project '%s' (ID: %s)", projectName, projectID)

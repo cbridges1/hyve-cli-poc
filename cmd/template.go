@@ -448,24 +448,24 @@ func executeTemplate(templateName, clusterName, org, account, vpcName, eksRole, 
 	switch strings.ToLower(tmpl.Spec.Provider) {
 	case "civo":
 		clusterDef.Spec.CivoOrganization = resolve(org, clusterDef.Spec.CivoOrganization,
-			"org", "Use 'hyve config civo org-list' to see available organizations.")
+			"org", "Use 'hyve config civo org list' to see available organizations.")
 	case "aws":
 		clusterDef.Spec.AWSAccount = resolve(account, clusterDef.Spec.AWSAccount,
-			"account", "Use 'hyve config aws account-list' to see available accounts.")
+			"account", "Use 'hyve config aws account list' to see available accounts.")
 		clusterDef.Spec.AWSVPCName = resolve(vpcName, clusterDef.Spec.AWSVPCName,
-			"vpc-name", fmt.Sprintf("Use 'hyve config aws vpc-list --account %s'.", clusterDef.Spec.AWSAccount))
+			"vpc-name", fmt.Sprintf("Use 'hyve config aws vpc list --account %s'.", clusterDef.Spec.AWSAccount))
 		clusterDef.Spec.AWSEKSRole = resolve(eksRole, clusterDef.Spec.AWSEKSRole,
-			"eks-role", fmt.Sprintf("Use 'hyve config aws eks-role-list --account %s'.", clusterDef.Spec.AWSAccount))
+			"eks-role", fmt.Sprintf("Use 'hyve config aws eks-role list --account %s'.", clusterDef.Spec.AWSAccount))
 		clusterDef.Spec.AWSNodeRole = resolve(nodeRole, clusterDef.Spec.AWSNodeRole,
-			"node-role", fmt.Sprintf("Use 'hyve config aws node-role-list --account %s'.", clusterDef.Spec.AWSAccount))
+			"node-role", fmt.Sprintf("Use 'hyve config aws node-role list --account %s'.", clusterDef.Spec.AWSAccount))
 	case "azure":
 		clusterDef.Spec.AzureSubscription = resolve(subscription, clusterDef.Spec.AzureSubscription,
-			"subscription", "Use 'hyve config azure list-subscription-ids' to see available subscriptions.")
+			"subscription", "Use 'hyve config azure subscription list' to see available subscriptions.")
 		clusterDef.Spec.AzureResourceGroup = resolve(resourceGroup, clusterDef.Spec.AzureResourceGroup,
 			"resource-group", "")
 	case "gcp":
 		clusterDef.Spec.GCPProject = resolve(project, clusterDef.Spec.GCPProject,
-			"project", "Use 'hyve config gcp list-projects' to see available projects.")
+			"project", "Use 'hyve config gcp project list' to see available projects.")
 	}
 
 	log.Println("📋 Template Details:")

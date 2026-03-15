@@ -208,7 +208,7 @@ func (d *DB) migrateFromCredentialsDB() error {
 	// We intentionally do NOT migrate encrypted credentials or tokens
 	// because the encryption keys have changed with the database consolidation.
 	// Users will need to re-enter their credentials with:
-	//   hyve config set-token civo
+	//   hyve config civo token set --org <org-name>
 	//   hyve config set-credentials
 	return nil
 }
