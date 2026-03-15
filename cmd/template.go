@@ -75,6 +75,16 @@ var templateExecuteCmd = &cobra.Command{
 	Short: "Create a cluster from a template",
 	Long: `Execute a cluster template to create a new cluster.
 
+The provider type in the template determines which account flag is required:
+  --org         Civo organization name    (required for civo)
+  --account     AWS account alias         (required for aws)
+  --vpc-name    AWS VPC alias             (required for aws)
+  --eks-role    AWS EKS cluster role alias (required for aws)
+  --node-role   AWS node role alias        (required for aws)
+  --subscription  Azure subscription alias  (required for azure)
+  --resource-group Azure resource group    (required for azure)
+  --project     GCP project alias          (required for gcp)
+
 This command:
   1. Creates a cluster based on the template specifications
   2. Waits for the cluster to become ready
@@ -83,7 +93,15 @@ This command:
 	Run: func(cmd *cobra.Command, args []string) {
 		templateName := args[0]
 		clusterName := args[1]
-		executeTemplate(templateName, clusterName)
+		org, _ := cmd.Flags().GetString("org")
+		account, _ := cmd.Flags().GetString("account")
+		vpcName, _ := cmd.Flags().GetString("vpc-name")
+		eksRole, _ := cmd.Flags().GetString("eks-role")
+		nodeRole, _ := cmd.Flags().GetString("node-role")
+		subscription, _ := cmd.Flags().GetString("subscription")
+		resourceGroup, _ := cmd.Flags().GetString("resource-group")
+		project, _ := cmd.Flags().GetString("project")
+		executeTemplate(templateName, clusterName, org, account, vpcName, eksRole, nodeRole, subscription, resourceGroup, project)
 	},
 }
 
@@ -141,6 +159,15 @@ func init() {
 	templateCreateCmd.Flags().StringP("cluster-type", "t", "k3s", "Kubernetes cluster type")
 	templateCreateCmd.Flags().String("on-created", "", "Workflows to run after cluster creation (comma-separated)")
 	templateCreateCmd.Flags().String("on-destroy", "", "Workflows to run before cluster destruction (comma-separated)")
+
+	templateExecuteCmd.Flags().String("org", "", "Civo organization name (required for civo provider)")
+	templateExecuteCmd.Flags().String("account", "", "AWS account alias (required for aws provider)")
+	templateExecuteCmd.Flags().String("vpc-name", "", "AWS VPC alias (required for aws provider)")
+	templateExecuteCmd.Flags().String("eks-role", "", "AWS EKS cluster role alias (required for aws provider)")
+	templateExecuteCmd.Flags().String("node-role", "", "AWS node role alias (required for aws provider)")
+	templateExecuteCmd.Flags().String("subscription", "", "Azure subscription alias (required for azure provider)")
+	templateExecuteCmd.Flags().String("resource-group", "", "Azure resource group name (required for azure provider)")
+	templateExecuteCmd.Flags().String("project", "", "GCP project alias (required for gcp provider)")
 
 	templateCmd.AddCommand(templateCreateCmd)
 	templateCmd.AddCommand(templateListCmd)
@@ -374,7 +401,7 @@ func showTemplate(name string) {
 	log.Println(string(data))
 }
 
-func executeTemplate(templateName, clusterName string) {
+func executeTemplate(templateName, clusterName, org, account, vpcName, eksRole, nodeRole, subscription, resourceGroup, project string) {
 	ctx := context.Background()
 	syncRepoState(ctx)
 
@@ -405,6 +432,42 @@ func executeTemplate(templateName, clusterName string) {
 		log.Fatalf("Failed to execute template: %v", err)
 	}
 
+	// Apply provider-specific account flags: a flag overrides the template value;
+	// if neither the template nor the flag supplies a value, execution fails.
+	resolve := func(flagVal, templateVal, flag, hint string) string {
+		if flagVal != "" {
+			return flagVal
+		}
+		if templateVal != "" {
+			return templateVal
+		}
+		log.Fatalf("Missing required value: set %s in the template or pass --%s. %s", flag, flag, hint)
+		return ""
+	}
+
+	switch strings.ToLower(tmpl.Spec.Provider) {
+	case "civo":
+		clusterDef.Spec.CivoOrganization = resolve(org, clusterDef.Spec.CivoOrganization,
+			"org", "Use 'hyve config civo org-list' to see available organizations.")
+	case "aws":
+		clusterDef.Spec.AWSAccount = resolve(account, clusterDef.Spec.AWSAccount,
+			"account", "Use 'hyve config aws account-list' to see available accounts.")
+		clusterDef.Spec.AWSVPCName = resolve(vpcName, clusterDef.Spec.AWSVPCName,
+			"vpc-name", fmt.Sprintf("Use 'hyve config aws vpc-list --account %s'.", clusterDef.Spec.AWSAccount))
+		clusterDef.Spec.AWSEKSRole = resolve(eksRole, clusterDef.Spec.AWSEKSRole,
+			"eks-role", fmt.Sprintf("Use 'hyve config aws eks-role-list --account %s'.", clusterDef.Spec.AWSAccount))
+		clusterDef.Spec.AWSNodeRole = resolve(nodeRole, clusterDef.Spec.AWSNodeRole,
+			"node-role", fmt.Sprintf("Use 'hyve config aws node-role-list --account %s'.", clusterDef.Spec.AWSAccount))
+	case "azure":
+		clusterDef.Spec.AzureSubscription = resolve(subscription, clusterDef.Spec.AzureSubscription,
+			"subscription", "Use 'hyve config azure list-subscription-ids' to see available subscriptions.")
+		clusterDef.Spec.AzureResourceGroup = resolve(resourceGroup, clusterDef.Spec.AzureResourceGroup,
+			"resource-group", "")
+	case "gcp":
+		clusterDef.Spec.GCPProject = resolve(project, clusterDef.Spec.GCPProject,
+			"project", "Use 'hyve config gcp list-projects' to see available projects.")
+	}
+
 	log.Println("📋 Template Details:")
 	log.Printf("  Provider: %s", tmpl.Spec.Provider)
 	log.Printf("  Region: %s", tmpl.Spec.Region)
@@ -417,7 +480,7 @@ func executeTemplate(templateName, clusterName string) {
 		log.Printf("  OnDestroy Workflows: %s", strings.Join(tmpl.Spec.Workflows.OnDestroy, ", "))
 	}
 
-	// Resolve AWS aliases to actual IDs/ARNs before writing the cluster definition
+	// Resolve AWS aliases to actual IDs/ARNs before writing the cluster definition.
 	if strings.ToLower(clusterDef.Spec.Provider) == "aws" && clusterDef.Spec.AWSAccount != "" {
 		pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
 		accountName := clusterDef.Spec.AWSAccount

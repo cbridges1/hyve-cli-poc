@@ -137,7 +137,10 @@ func (m *Manager) DeleteTemplate(name string) error {
 	return nil
 }
 
-// ConvertToClusterDefinition converts a template to a cluster definition
+// ConvertToClusterDefinition converts a template to a cluster definition.
+// Provider-specific account fields are carried over from the template when present.
+// The caller may override any of these by assigning to the returned ClusterDefinition
+// before use (e.g. from CLI flags passed to `template execute`).
 func (m *Manager) ConvertToClusterDefinition(template *Template, clusterName string) *types.ClusterDefinition {
 	return &types.ClusterDefinition{
 		APIVersion: "v1",

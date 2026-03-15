@@ -14,7 +14,10 @@ type TemplateWorkflowsSpec struct {
 	OnDestroy []string `yaml:"onDestroy,omitempty"` // Workflows to run before cluster destruction
 }
 
-// TemplateSpec represents the template specification
+// TemplateSpec represents the template specification.
+// Provider-specific account fields are optional in the template; if omitted they
+// must be supplied via the corresponding flag when running `template execute`.
+// A flag value always overrides the template value when both are present.
 type TemplateSpec struct {
 	Provider    string            `yaml:"provider"`
 	Region      string            `yaml:"region"`
