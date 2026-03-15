@@ -170,6 +170,8 @@ func (m *Manager) ConvertToClusterDefinition(template *Template, clusterName str
 			AzureResourceGroup: template.Spec.AzureResourceGroup,
 			// GCP-specific alias names
 			GCPProject: template.Spec.GCPProject,
+			// Civo-specific alias names
+			CivoOrganization: template.Spec.CivoOrganization,
 		},
 	}
 }

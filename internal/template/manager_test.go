@@ -304,6 +304,48 @@ func TestTemplateWithWorkflows(t *testing.T) {
 	assert.Equal(t, []string{"cleanup"}, retrieved.Spec.Workflows.OnDestroy)
 }
 
+func TestConvertToClusterDefinition_CivoOrganization(t *testing.T) {
+	manager, _ := setupTemplateTest(t)
+
+	template := &Template{
+		Metadata: TemplateMetadata{Name: "civo-org-template"},
+		Spec: TemplateSpec{
+			Provider:         "civo",
+			Region:           "NYC1",
+			ClusterType:      "k3s",
+			CivoOrganization: "my-org",
+		},
+	}
+
+	clusterDef := manager.ConvertToClusterDefinition(template, "my-cluster")
+	require.NotNil(t, clusterDef)
+
+	assert.Equal(t, "my-org", clusterDef.Spec.CivoOrganization)
+}
+
+func TestTemplateWithCivoOrganization_YAMLRoundtrip(t *testing.T) {
+	manager, _ := setupTemplateTest(t)
+
+	template := &Template{
+		Metadata: TemplateMetadata{Name: "civo-org-yaml-template"},
+		Spec: TemplateSpec{
+			Provider:         "civo",
+			Region:           "NYC1",
+			ClusterType:      "k3s",
+			Nodes:            []string{"g4s.kube.small"},
+			CivoOrganization: "prod-org",
+		},
+	}
+
+	err := manager.CreateTemplate(template)
+	require.NoError(t, err)
+
+	retrieved, err := manager.GetTemplate("civo-org-yaml-template")
+	require.NoError(t, err)
+
+	assert.Equal(t, "prod-org", retrieved.Spec.CivoOrganization)
+}
+
 func TestConvertToClusterDefinition_AzureFields(t *testing.T) {
 	manager, _ := setupTemplateTest(t)
 

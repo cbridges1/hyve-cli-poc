@@ -40,6 +40,9 @@ type TemplateSpec struct {
 
 	// GCP-specific configuration (alias names defined in provider-configs/gcp.yaml)
 	GCPProject string `yaml:"gcpProject,omitempty"` // GCP project alias
+
+	// Civo-specific configuration
+	CivoOrganization string `yaml:"civoOrganization,omitempty"` // Civo organization alias
 }
 
 // Template represents a complete cluster template definition

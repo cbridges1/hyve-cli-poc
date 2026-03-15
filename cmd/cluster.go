@@ -818,7 +818,10 @@ func createProviderForClusterDef(clusterDef types.ClusterDefinition) (provider.P
 		configMgr := config.NewManager()
 		apiKey := configMgr.GetCivoToken(clusterDef.Spec.CivoOrganization)
 		if apiKey == "" {
-			return nil, fmt.Errorf("Civo API token not found. Please run 'hyve config set-token civo' or set CIVO_TOKEN environment variable")
+			apiKey = os.Getenv("CIVO_TOKEN")
+		}
+		if apiKey == "" {
+			return nil, fmt.Errorf("Civo API token not found. Please run 'hyve config civo set-token --org %s' or set CIVO_TOKEN environment variable", clusterDef.Spec.CivoOrganization)
 		}
 		opts.APIKey = apiKey
 	}
@@ -901,7 +904,10 @@ func forceDeleteClusterFromCloud(clusterName, region, providerName, projectName 
 		configMgr := config.NewManager()
 		apiKey := configMgr.GetCivoToken(projectName)
 		if apiKey == "" {
-			log.Fatalf("Civo API token not found. Please run 'hyve config set-token civo' or set CIVO_TOKEN environment variable")
+			apiKey = os.Getenv("CIVO_TOKEN")
+		}
+		if apiKey == "" {
+			log.Fatalf("Civo API token not found. Please run 'hyve config civo set-token --org %s' or set CIVO_TOKEN environment variable", projectName)
 		}
 		opts.APIKey = apiKey
 	}
