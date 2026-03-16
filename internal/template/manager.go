@@ -73,15 +73,46 @@ func (m *Manager) CreateTemplate(template *Template) error {
 	return nil
 }
 
-// GetTemplate reads a template from disk
-func (m *Manager) GetTemplate(name string) (*Template, error) {
-	templatePath := m.GetTemplatePath(name)
-
-	data, err := os.ReadFile(templatePath)
+// findTemplateFile scans the templates directory and returns the file path
+// of the template whose metadata.name matches the given name.
+func (m *Manager) findTemplateFile(name string) (string, error) {
+	entries, err := os.ReadDir(m.templatesDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("template '%s' not found", name)
+			return "", fmt.Errorf("template '%s' not found", name)
 		}
+		return "", fmt.Errorf("failed to read templates directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
+			continue
+		}
+		path := filepath.Join(m.templatesDir, entry.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var t Template
+		if err := yaml.Unmarshal(data, &t); err != nil {
+			continue
+		}
+		if t.Metadata.Name == name {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("template '%s' not found", name)
+}
+
+// GetTemplate reads a template from disk by metadata.name.
+func (m *Manager) GetTemplate(name string) (*Template, error) {
+	path, err := m.findTemplateFile(name)
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
 		return nil, fmt.Errorf("failed to read template: %w", err)
 	}
 
@@ -110,27 +141,28 @@ func (m *Manager) ListTemplates() ([]*Template, error) {
 			continue
 		}
 
-		name := strings.TrimSuffix(entry.Name(), ".yaml")
-		template, err := m.GetTemplate(name)
+		data, err := os.ReadFile(filepath.Join(m.templatesDir, entry.Name()))
 		if err != nil {
-			continue // Skip invalid templates
+			continue
 		}
-
-		templates = append(templates, template)
+		var t Template
+		if err := yaml.Unmarshal(data, &t); err != nil {
+			continue
+		}
+		templates = append(templates, &t)
 	}
 
 	return templates, nil
 }
 
-// DeleteTemplate deletes a template file
+// DeleteTemplate deletes a template file by metadata.name.
 func (m *Manager) DeleteTemplate(name string) error {
-	templatePath := m.GetTemplatePath(name)
-
-	if _, err := os.Stat(templatePath); os.IsNotExist(err) {
-		return fmt.Errorf("template '%s' not found", name)
+	path, err := m.findTemplateFile(name)
+	if err != nil {
+		return err
 	}
 
-	if err := os.Remove(templatePath); err != nil {
+	if err := os.Remove(path); err != nil {
 		return fmt.Errorf("failed to delete template: %w", err)
 	}
 
