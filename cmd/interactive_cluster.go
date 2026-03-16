@@ -106,17 +106,28 @@ func interactiveClusterAdd() error {
 				Title("Node sizes (comma-separated)").
 				Placeholder("g4s.kube.medium").
 				Value(&nodesStr),
-			huh.NewSelect[string]().
-				Title("Cluster type").
-				Options(
-					huh.NewOption("k3s (default)", ""),
-					huh.NewOption("talos", "talos"),
-				).
-				Value(&clusterType),
 		),
 	).Run()
 	if err != nil {
 		return err
+	}
+
+	// Cluster type is only applicable to Civo
+	if providerName == "civo" {
+		err = newForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Cluster type").
+					Options(
+						huh.NewOption("k3s (default)", ""),
+						huh.NewOption("talos", "talos"),
+					).
+					Value(&clusterType),
+			),
+		).Run()
+		if err != nil {
+			return err
+		}
 	}
 
 	// Provider-specific fields — use selects populated from config

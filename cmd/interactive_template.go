@@ -83,23 +83,40 @@ func interactiveTemplateCreate() error {
 				).
 				Value(&provider),
 		),
-		huh.NewGroup(
-			huh.NewInput().Title("Region").Placeholder("us-east-1").Value(&region),
-			huh.NewInput().Title("Node sizes (comma-separated)").Placeholder("g4s.kube.medium").Value(&nodesSizes),
-			huh.NewSelect[string]().
-				Title("Cluster type").
-				Options(
-					huh.NewOption("k3s (default)", ""),
-					huh.NewOption("talos", "talos"),
-				).
-				Value(&clusterType),
-		),
 	).Run()
 	if err != nil {
 		return err
 	}
 	if provider == "back" {
 		return errBack
+	}
+
+	err = newForm(
+		huh.NewGroup(
+			huh.NewInput().Title("Region").Placeholder("us-east-1").Value(&region),
+			huh.NewInput().Title("Node sizes (comma-separated)").Placeholder("g4s.kube.medium").Value(&nodesSizes),
+		),
+	).Run()
+	if err != nil {
+		return err
+	}
+
+	// Cluster type is only applicable to Civo
+	if provider == "civo" {
+		err = newForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Cluster type").
+					Options(
+						huh.NewOption("k3s (default)", ""),
+						huh.NewOption("talos", "talos"),
+					).
+					Value(&clusterType),
+			),
+		).Run()
+		if err != nil {
+			return err
+		}
 	}
 
 	createTemplate(name, description, provider, region, nodesSizes, clusterType, "", "")

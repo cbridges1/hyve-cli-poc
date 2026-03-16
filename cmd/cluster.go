@@ -106,6 +106,14 @@ Use --account-name, --project-name, --subscription-name, or --org-name to specif
 		nodes, _ := cmd.Flags().GetStringSlice("nodes")
 		clusterType, _ := cmd.Flags().GetString("cluster-type")
 
+		// cluster-type is only meaningful for the Civo provider
+		if strings.ToLower(providerName) != "civo" {
+			if cmd.Flags().Changed("cluster-type") {
+				log.Printf("⚠️  --cluster-type is only supported for the Civo provider and will be ignored for '%s'", providerName)
+			}
+			clusterType = ""
+		}
+
 		// Provider-specific account/project override flags
 		accountName, _ := cmd.Flags().GetString("account-name")
 		projectName, _ := cmd.Flags().GetString("project-name")
@@ -619,8 +627,12 @@ func modifyClusterFromCLI(cmd *cobra.Command, clusterName string) {
 		clusterDef.Spec.Nodes = nodes
 	}
 	if cmd.Flags().Changed("cluster-type") {
-		clusterType, _ := cmd.Flags().GetString("cluster-type")
-		clusterDef.Spec.ClusterType = clusterType
+		if clusterDef.Spec.Provider != "civo" {
+			log.Printf("⚠️  --cluster-type is only supported for the Civo provider and will be ignored for '%s'", clusterDef.Spec.Provider)
+		} else {
+			clusterType, _ := cmd.Flags().GetString("cluster-type")
+			clusterDef.Spec.ClusterType = clusterType
+		}
 	}
 	if cmd.Flags().Changed("node-group") {
 		nodeGroupStrs, _ := cmd.Flags().GetStringArray("node-group")

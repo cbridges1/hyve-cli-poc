@@ -178,6 +178,14 @@ func init() {
 }
 
 func createTemplate(name, description, provider, region, nodesSizes, clusterType string, onCreatedStr, onDestroyStr string) {
+	// cluster-type is only meaningful for Civo
+	if strings.ToLower(provider) != "civo" {
+		if clusterType != "" && clusterType != "k3s" {
+			log.Printf("⚠️  cluster-type is only supported for the Civo provider and will be ignored for '%s'", provider)
+		}
+		clusterType = ""
+	}
+
 	ctx := context.Background()
 	syncRepoState(ctx)
 
