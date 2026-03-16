@@ -97,10 +97,11 @@ func interactiveClusterAdd() error {
 		return errBack
 	}
 
-	if err := selectOrInput("Region", "us-east-1", regionOptionsForProvider(providerName), &region); err != nil {
+	ctx := gocontext.Background()
+	if err := selectFromGroups("Region", fetchRegionGroups(ctx, providerName), "us-east-1", &region); err != nil {
 		return err
 	}
-	if err := selectOrInput("Node size", "g4s.kube.medium", nodeOptionsForProvider(providerName), &nodesStr); err != nil {
+	if err := selectFromGroups("Node size", fetchNodeGroups(ctx, providerName, region), "g4s.kube.medium", &nodesStr); err != nil {
 		return err
 	}
 
@@ -193,10 +194,11 @@ func interactiveClusterModify() error {
 		}
 	}
 
-	if err := selectOrInputOptional("New region", regionOptionsForProvider(providerForModify), &region); err != nil {
+	ctx2 := gocontext.Background()
+	if err := selectFromGroupsOptional("New region", fetchRegionGroups(ctx2, providerForModify), &region); err != nil {
 		return err
 	}
-	if err := selectOrInputOptional("New node size", nodeOptionsForProvider(providerForModify), &nodesStr); err != nil {
+	if err := selectFromGroupsOptional("New node size", fetchNodeGroups(ctx2, providerForModify, region), &nodesStr); err != nil {
 		return err
 	}
 
@@ -281,7 +283,8 @@ func interactiveClusterForceDelete() error {
 	}
 
 	var region, projectName string
-	if err := selectOrInput("Region", "us-east-1", regionOptionsForProvider(providerName), &region); err != nil {
+	ctxFD := gocontext.Background()
+	if err := selectFromGroups("Region", fetchRegionGroups(ctxFD, providerName), "us-east-1", &region); err != nil {
 		return err
 	}
 

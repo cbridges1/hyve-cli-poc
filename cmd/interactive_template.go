@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/charmbracelet/huh"
@@ -91,10 +92,11 @@ func interactiveTemplateCreate() error {
 		return errBack
 	}
 
-	if err := selectOrInput("Region", "us-east-1", regionOptionsForProvider(provider), &region); err != nil {
+	ctx := context.Background()
+	if err := selectFromGroups("Region", fetchRegionGroups(ctx, provider), "us-east-1", &region); err != nil {
 		return err
 	}
-	if err := selectOrInput("Node size", "g4s.kube.medium", nodeOptionsForProvider(provider), &nodesSizes); err != nil {
+	if err := selectFromGroups("Node size", fetchNodeGroups(ctx, provider, region), "g4s.kube.medium", &nodesSizes); err != nil {
 		return err
 	}
 
