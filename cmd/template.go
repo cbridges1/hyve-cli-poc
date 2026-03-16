@@ -46,7 +46,18 @@ and workflows to execute upon cluster creation or destruction.`,
 		onCreatedWorkflows, _ := cmd.Flags().GetString("on-created")
 		onDestroyWorkflows, _ := cmd.Flags().GetString("on-destroy")
 
-		createTemplate(templateName, description, provider, region, nodes, clusterType, onCreatedWorkflows, onDestroyWorkflows)
+		var nodeGroups []types.NodeGroup
+		if ngStrs, _ := cmd.Flags().GetStringArray("node-group"); len(ngStrs) > 0 {
+			for _, s := range ngStrs {
+				ng, err := parseNodeGroup(s)
+				if err != nil {
+					log.Fatalf("Invalid --node-group value '%s': %v", s, err)
+				}
+				nodeGroups = append(nodeGroups, ng)
+			}
+		}
+
+		createTemplate(templateName, description, provider, region, nodes, clusterType, nodeGroups, onCreatedWorkflows, onDestroyWorkflows)
 	},
 }
 
@@ -155,7 +166,8 @@ func init() {
 	templateCreateCmd.Flags().StringP("description", "d", "", "Template description")
 	templateCreateCmd.Flags().StringP("provider", "p", "civo", "Cloud provider")
 	templateCreateCmd.Flags().StringP("region", "r", "PHX1", "Region")
-	templateCreateCmd.Flags().StringP("nodes", "n", "g4s.kube.small", "Node sizes (comma-separated)")
+	templateCreateCmd.Flags().StringP("nodes", "n", "g4s.kube.small", "Node sizes (comma-separated, Civo only)")
+	templateCreateCmd.Flags().StringArrayP("node-group", "g", nil, `Node group spec (repeatable): name=workers,type=t3.medium,count=3[,min=1,max=5,disk=50,spot=true,mode=System]`)
 	templateCreateCmd.Flags().StringP("cluster-type", "t", "k3s", "Kubernetes cluster type")
 	templateCreateCmd.Flags().StringP("on-created", "c", "", "Workflows to run after cluster creation (comma-separated)")
 	templateCreateCmd.Flags().String("on-destroy", "", "Workflows to run before cluster destruction (comma-separated)")
@@ -177,7 +189,7 @@ func init() {
 	templateCmd.AddCommand(templateValidateCmd)
 }
 
-func createTemplate(name, description, provider, region, nodesSizes, clusterType string, onCreatedStr, onDestroyStr string) {
+func createTemplate(name, description, provider, region, nodesSizes, clusterType string, nodeGroups []types.NodeGroup, onCreatedStr, onDestroyStr string) {
 	// cluster-type is only meaningful for Civo
 	if strings.ToLower(provider) != "civo" {
 		if clusterType != "" && clusterType != "k3s" {
@@ -241,6 +253,7 @@ func createTemplate(name, description, provider, region, nodesSizes, clusterType
 			Provider:    provider,
 			Region:      region,
 			Nodes:       nodes,
+			NodeGroups:  nodeGroups,
 			ClusterType: clusterType,
 			Workflows: template.TemplateWorkflowsSpec{
 				OnCreated: onCreatedWorkflows,

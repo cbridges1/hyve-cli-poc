@@ -3,9 +3,11 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/huh"
+	"hyve/internal/types"
 )
 
 func runInteractiveTemplate() error {
@@ -103,6 +105,51 @@ func interactiveTemplateCreate() error {
 		return err
 	}
 
+	// For non-Civo providers collect node group details (count, name, scaling).
+	// Civo uses the flat node size list; AWS/GCP/Azure need node groups with counts.
+	var nodeGroups []types.NodeGroup
+	if provider != "civo" {
+		var ngName, ngCountStr, ngMinStr, ngMaxStr string
+		ngName = "default"
+		ngCountStr = "1"
+		err = newForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Node group name").
+					Placeholder("default").
+					Value(&ngName),
+				huh.NewInput().
+					Title("Node count").
+					Placeholder("1").
+					Value(&ngCountStr),
+				huh.NewInput().
+					Title("Min count (leave blank to match count)").
+					Value(&ngMinStr),
+				huh.NewInput().
+					Title("Max count (leave blank to match count)").
+					Value(&ngMaxStr),
+			),
+		).Run()
+		if err != nil {
+			return err
+		}
+		count, _ := strconv.Atoi(ngCountStr)
+		if count < 1 {
+			count = 1
+		}
+		min, _ := strconv.Atoi(ngMinStr)
+		max, _ := strconv.Atoi(ngMaxStr)
+		ng := types.NodeGroup{
+			Name:         ngName,
+			InstanceType: nodesSizes,
+			Count:        count,
+			MinCount:     min,
+			MaxCount:     max,
+		}
+		nodeGroups = append(nodeGroups, ng)
+		nodesSizes = "" // NodeGroups takes precedence; clear the flat nodes field
+	}
+
 	// Cluster type is only applicable to Civo
 	if provider == "civo" {
 		err = newForm(
@@ -149,7 +196,7 @@ func interactiveTemplateCreate() error {
 
 	onCreatedStr := strings.Join(onCreatedNames, ",")
 	onDestroyStr := strings.Join(onDestroyNames, ",")
-	createTemplate(name, description, provider, region, nodesSizes, clusterType, onCreatedStr, onDestroyStr)
+	createTemplate(name, description, provider, region, nodesSizes, clusterType, nodeGroups, onCreatedStr, onDestroyStr)
 	return nil
 }
 
@@ -160,16 +207,79 @@ func interactiveTemplateExecute() error {
 	}
 
 	var clusterName string
-	err := newForm(
+	if err := newForm(
 		huh.NewGroup(
 			huh.NewInput().Title("New cluster name").Value(&clusterName),
 		),
-	).Run()
-	if err != nil {
+	).Run(); err != nil {
 		return err
 	}
 
-	executeTemplate(templateName, clusterName, "", "", "", "", "", "", "", "")
+	// Load the template to determine which account fields are already set.
+	// For any missing required fields, prompt the user.
+	var org, account, vpcName, eksRole, nodeRole, subscription, resourceGroup, project string
+
+	if tmpl := fetchTemplate(templateName); tmpl != nil {
+		switch strings.ToLower(tmpl.Spec.Provider) {
+		case "civo":
+			org = tmpl.Spec.CivoOrganization
+			if org == "" {
+				if err := selectFromList("Civo organization", fetchCivoOrgNames(), &org); err != nil && err != errBack {
+					return err
+				}
+			}
+
+		case "aws":
+			account = tmpl.Spec.AWSAccount
+			if account == "" {
+				if err := selectFromList("AWS account alias", fetchAWSAccountNames(), &account); err != nil && err != errBack {
+					return err
+				}
+			}
+			vpcName = tmpl.Spec.AWSVPCName
+			if vpcName == "" {
+				if err := selectFromList("VPC alias", fetchAWSVPCNames(account), &vpcName); err != nil && err != errBack {
+					return err
+				}
+			}
+			eksRole = tmpl.Spec.AWSEKSRole
+			if eksRole == "" {
+				if err := selectFromList("EKS role alias", fetchAWSEKSRoleNames(account), &eksRole); err != nil && err != errBack {
+					return err
+				}
+			}
+			nodeRole = tmpl.Spec.AWSNodeRole
+			if nodeRole == "" {
+				if err := selectFromList("Node role alias", fetchAWSNodeRoleNames(account), &nodeRole); err != nil && err != errBack {
+					return err
+				}
+			}
+
+		case "gcp":
+			project = tmpl.Spec.GCPProject
+			if project == "" {
+				if err := selectFromList("GCP project alias", fetchGCPProjectNames(), &project); err != nil && err != errBack {
+					return err
+				}
+			}
+
+		case "azure":
+			subscription = tmpl.Spec.AzureSubscription
+			if subscription == "" {
+				if err := selectFromList("Azure subscription alias", fetchAzureSubscriptionNames(), &subscription); err != nil && err != errBack {
+					return err
+				}
+			}
+			resourceGroup = tmpl.Spec.AzureResourceGroup
+			if resourceGroup == "" {
+				if err := selectFromList("Azure resource group", fetchAzureResourceGroupNames(subscription), &resourceGroup); err != nil && err != errBack {
+					return err
+				}
+			}
+		}
+	}
+
+	executeTemplate(templateName, clusterName, org, account, vpcName, eksRole, nodeRole, subscription, resourceGroup, project)
 	return nil
 }
 

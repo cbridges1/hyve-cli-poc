@@ -69,6 +69,24 @@ func fetchTemplateNames() []string {
 	return names
 }
 
+func fetchTemplate(name string) *template.Template {
+	repoMgr, err := repository.NewManager()
+	if err != nil {
+		return nil
+	}
+	defer repoMgr.Close()
+	repo, err := repoMgr.GetCurrentRepository()
+	if err != nil {
+		return nil
+	}
+	mgr := template.NewManager(repo.LocalPath)
+	tmpl, err := mgr.GetTemplate(name)
+	if err != nil {
+		return nil
+	}
+	return tmpl
+}
+
 func fetchGitRepoNames() []string {
 	repoMgr, err := repository.NewManager()
 	if err != nil {
