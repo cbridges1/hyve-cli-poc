@@ -5,6 +5,7 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/containerservice/armcontainerservice/v4"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"hyve/internal/types"
 )
@@ -153,4 +154,83 @@ func TestClusterConfig_MinCountFloor(t *testing.T) {
 		minCount = 1
 	}
 	assert.Equal(t, int32(1), minCount)
+}
+
+// --- resourceGroupFromID ---
+
+func TestResourceGroupFromID_Standard(t *testing.T) {
+	id := "/subscriptions/abc-123/resourceGroups/my-rg/providers/Microsoft.ContainerService/managedClusters/my-cluster"
+	assert.Equal(t, "my-rg", resourceGroupFromID(id))
+}
+
+func TestResourceGroupFromID_CaseInsensitive(t *testing.T) {
+	id := "/subscriptions/abc/RESOURCEGROUPS/prod-rg/providers/Microsoft.ContainerService/managedClusters/c"
+	assert.Equal(t, "prod-rg", resourceGroupFromID(id))
+}
+
+func TestResourceGroupFromID_Empty(t *testing.T) {
+	assert.Equal(t, "", resourceGroupFromID(""))
+}
+
+func TestResourceGroupFromID_NoResourceGroupSegment(t *testing.T) {
+	assert.Equal(t, "", resourceGroupFromID("/subscriptions/abc/providers/Microsoft.ContainerService/managedClusters/c"))
+}
+
+func TestResourceGroupFromID_TrailingSlash(t *testing.T) {
+	id := "/subscriptions/abc/resourceGroups/trailing-rg/"
+	assert.Equal(t, "trailing-rg", resourceGroupFromID(id))
+}
+
+// --- GetClusterInfo NodeGroups extraction (inline logic, no HTTP) ---
+
+func TestAgentPoolProfiles_NodeGroupExtraction(t *testing.T) {
+	name1, name2 := "system", "user"
+	size1, size2 := "Standard_DS2_v2", "Standard_D4s_v3"
+	count1, count2 := int32(2), int32(3)
+	minCount, maxCount := int32(1), int32(5)
+	autoScale := true
+
+	profiles := []*armcontainerservice.ManagedClusterAgentPoolProfile{
+		{Name: &name1, VMSize: &size1, Count: &count1},
+		{Name: &name2, VMSize: &size2, Count: &count2, EnableAutoScaling: &autoScale, MinCount: &minCount, MaxCount: &maxCount},
+	}
+
+	var nodeGroups []types.NodeGroup
+	for _, pool := range profiles {
+		if pool == nil {
+			continue
+		}
+		poolName, vmSize := "", ""
+		if pool.Name != nil {
+			poolName = *pool.Name
+		}
+		if pool.VMSize != nil {
+			vmSize = *pool.VMSize
+		}
+		count, min, max := 0, 0, 0
+		if pool.Count != nil {
+			count = int(*pool.Count)
+		}
+		if pool.MinCount != nil {
+			min = int(*pool.MinCount)
+		}
+		if pool.MaxCount != nil {
+			max = int(*pool.MaxCount)
+		}
+		nodeGroups = append(nodeGroups, types.NodeGroup{Name: poolName, InstanceType: vmSize, Count: count, MinCount: min, MaxCount: max})
+	}
+
+	require.Len(t, nodeGroups, 2)
+
+	assert.Equal(t, "system", nodeGroups[0].Name)
+	assert.Equal(t, "Standard_DS2_v2", nodeGroups[0].InstanceType)
+	assert.Equal(t, 2, nodeGroups[0].Count)
+	assert.Equal(t, 0, nodeGroups[0].MinCount)
+	assert.Equal(t, 0, nodeGroups[0].MaxCount)
+
+	assert.Equal(t, "user", nodeGroups[1].Name)
+	assert.Equal(t, "Standard_D4s_v3", nodeGroups[1].InstanceType)
+	assert.Equal(t, 3, nodeGroups[1].Count)
+	assert.Equal(t, 1, nodeGroups[1].MinCount)
+	assert.Equal(t, 5, nodeGroups[1].MaxCount)
 }
