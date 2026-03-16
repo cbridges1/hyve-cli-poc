@@ -91,13 +91,10 @@ func interactiveTemplateCreate() error {
 		return errBack
 	}
 
-	err = newForm(
-		huh.NewGroup(
-			huh.NewInput().Title("Region").Placeholder("us-east-1").Value(&region),
-			huh.NewInput().Title("Node sizes (comma-separated)").Placeholder("g4s.kube.medium").Value(&nodesSizes),
-		),
-	).Run()
-	if err != nil {
+	if err := selectOrInput("Region", "us-east-1", regionOptionsForProvider(provider), &region); err != nil {
+		return err
+	}
+	if err := selectOrInput("Node size", "g4s.kube.medium", nodeOptionsForProvider(provider), &nodesSizes); err != nil {
 		return err
 	}
 

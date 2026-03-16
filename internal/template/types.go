@@ -54,4 +54,7 @@ type Template struct {
 	Kind       string           `yaml:"kind"`
 	Metadata   TemplateMetadata `yaml:"metadata"`
 	Spec       TemplateSpec     `yaml:"spec"`
+	// Filename is the on-disk filename (e.g. "my-template.yaml"). It is
+	// populated at runtime by the manager and never written to the YAML file.
+	Filename string `yaml:"-"`
 }

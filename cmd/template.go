@@ -315,7 +315,7 @@ func listTemplates() {
 
 	log.Printf("📋 Available templates (%d):\n", len(templates))
 	for _, tmpl := range templates {
-		log.Printf("  %s", tmpl.Metadata.Name)
+		log.Printf("  %s  (file: %s)", tmpl.Metadata.Name, tmpl.Filename)
 		if tmpl.Metadata.Description != "" {
 			log.Printf("    Description: %s", tmpl.Metadata.Description)
 		}

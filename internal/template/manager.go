@@ -149,6 +149,7 @@ func (m *Manager) ListTemplates() ([]*Template, error) {
 		if err := yaml.Unmarshal(data, &t); err != nil {
 			continue
 		}
+		t.Filename = entry.Name()
 		templates = append(templates, &t)
 	}
 

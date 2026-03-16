@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	gocontext "context"
 	"fmt"
 	"strings"
 
@@ -96,19 +97,10 @@ func interactiveClusterAdd() error {
 		return errBack
 	}
 
-	err = newForm(
-		huh.NewGroup(
-			huh.NewInput().
-				Title("Region").
-				Placeholder("us-east-1").
-				Value(&region),
-			huh.NewInput().
-				Title("Node sizes (comma-separated)").
-				Placeholder("g4s.kube.medium").
-				Value(&nodesStr),
-		),
-	).Run()
-	if err != nil {
+	if err := selectOrInput("Region", "us-east-1", regionOptionsForProvider(providerName), &region); err != nil {
+		return err
+	}
+	if err := selectOrInput("Node size", "g4s.kube.medium", nodeOptionsForProvider(providerName), &nodesStr); err != nil {
 		return err
 	}
 
@@ -188,18 +180,23 @@ func interactiveClusterModify() error {
 		return err
 	}
 
-	var region, nodesStr string
-	err := newForm(
-		huh.NewGroup(
-			huh.NewInput().
-				Title("New region (leave blank to keep current)").
-				Value(&region),
-			huh.NewInput().
-				Title("New node sizes, comma-separated (leave blank to keep current)").
-				Value(&nodesStr),
-		),
-	).Run()
-	if err != nil {
+	// Determine provider from existing cluster definition so we can offer the right lists.
+	var region, nodesStr, providerForModify string
+	sm, _ := createStateManager(gocontext.Background())
+	if sm != nil {
+		defs, _ := sm.LoadClusterDefinitions()
+		for _, d := range defs {
+			if d.Metadata.Name == clusterName {
+				providerForModify = d.Spec.Provider
+				break
+			}
+		}
+	}
+
+	if err := selectOrInputOptional("New region", regionOptionsForProvider(providerForModify), &region); err != nil {
+		return err
+	}
+	if err := selectOrInputOptional("New node size", nodeOptionsForProvider(providerForModify), &nodesStr); err != nil {
 		return err
 	}
 
@@ -284,12 +281,7 @@ func interactiveClusterForceDelete() error {
 	}
 
 	var region, projectName string
-	err = newForm(
-		huh.NewGroup(
-			huh.NewInput().Title("Region").Value(&region),
-		),
-	).Run()
-	if err != nil {
+	if err := selectOrInput("Region", "us-east-1", regionOptionsForProvider(providerName), &region); err != nil {
 		return err
 	}
 
