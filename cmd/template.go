@@ -611,17 +611,21 @@ func executeTemplate(templateName, clusterName, org, account, vpcName, eksRole, 
 		log.Printf("⚠️  Warning: Failed to get cluster info: %v", err)
 		log.Println("Workflows may fail without valid kubeconfig")
 	} else {
-		// Save kubeconfig to database
-		kubeconfigMgr, err := kubeconfig.NewManager(currentRepo.Name)
-		if err != nil {
-			log.Printf("⚠️  Warning: Failed to create kubeconfig manager: %v", err)
+		if clusterInfo.Kubeconfig == "" {
+			log.Printf("⚠️  Warning: Kubeconfig not yet available for cluster '%s', skipping storage", clusterName)
 		} else {
-			defer kubeconfigMgr.Close()
-
-			if _, err := kubeconfigMgr.StoreKubeconfig(clusterName, clusterInfo.Kubeconfig); err != nil {
-				log.Printf("⚠️  Warning: Failed to store kubeconfig: %v", err)
+			// Save kubeconfig to database
+			kubeconfigMgr, err := kubeconfig.NewManager(currentRepo.Name)
+			if err != nil {
+				log.Printf("⚠️  Warning: Failed to create kubeconfig manager: %v", err)
 			} else {
-				log.Printf("✅ Kubeconfig synced and stored for cluster '%s'", clusterName)
+				defer kubeconfigMgr.Close()
+
+				if _, err := kubeconfigMgr.StoreKubeconfig(clusterName, clusterInfo.Kubeconfig); err != nil {
+					log.Printf("⚠️  Warning: Failed to store kubeconfig: %v", err)
+				} else {
+					log.Printf("✅ Kubeconfig synced and stored for cluster '%s'", clusterName)
+				}
 			}
 		}
 	}

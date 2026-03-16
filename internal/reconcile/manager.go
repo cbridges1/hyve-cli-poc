@@ -510,16 +510,24 @@ func (r *Reconciler) syncKubeconfigs(ctx context.Context, clusterDefs []types.Cl
 	}
 	defer kubeconfigMgr.Close()
 
-	// Group clusters by region to minimize provider creation
+	// Collect all active cluster names for orphan cleanup after syncing.
+	activeClusterNames := make([]string, 0, len(clusterDefs))
+	for _, cd := range clusterDefs {
+		activeClusterNames = append(activeClusterNames, cd.Metadata.Name)
+	}
+
+	// Group clusters by region so each cluster gets a provider with the right credentials.
 	regionClusters := make(map[string][]types.ClusterDefinition)
 	for _, clusterDef := range clusterDefs {
 		region := clusterDef.Metadata.Region
 		regionClusters[region] = append(regionClusters[region], clusterDef)
 	}
 
-	// Sync kubeconfigs for each region
+	// Sync kubeconfigs for each cluster individually (different credentials per cluster).
+	// Use SyncSingleKubeconfig so cleanup is NOT called per-iteration — calling
+	// CleanupOrphanedKubeconfigs with a single name inside a loop would delete every
+	// other cluster's kubeconfig before its iteration runs.
 	for region, clusters := range regionClusters {
-		// Sync kubeconfig for each cluster individually to handle different project IDs
 		for _, clusterDef := range clusters {
 			prov, err := r.createProviderForCluster(clusterDef)
 			if err != nil {
@@ -528,15 +536,17 @@ func (r *Reconciler) syncKubeconfigs(ctx context.Context, clusterDefs []types.Cl
 				continue
 			}
 
-			// Create syncer and sync kubeconfig for this cluster
 			syncer := kubeconfig.NewSyncer(kubeconfigMgr, prov)
-			err = syncer.SyncKubeconfigs(ctx, []types.ClusterDefinition{clusterDef})
-			if err != nil {
+			if err := syncer.SyncSingleKubeconfig(ctx, clusterDef.Metadata.Name); err != nil {
 				log.Printf("Failed to sync kubeconfig for cluster %s in region %s: %v",
 					clusterDef.Metadata.Name, region, err)
-				continue
 			}
 		}
+	}
+
+	// Clean up kubeconfigs for clusters no longer in the desired state.
+	if err := kubeconfigMgr.CleanupOrphanedKubeconfigs(activeClusterNames); err != nil {
+		log.Printf("Failed to cleanup orphaned kubeconfigs: %v", err)
 	}
 
 	return nil

@@ -993,6 +993,9 @@ func forceDeleteClusterFromCloud(clusterName, region, providerName, projectName 
 		}
 		opts.ProjectID = projectID
 		log.Printf("Using GCP project '%s' (ID: %s)", projectName, projectID)
+		// GKE's list/get API with a specific region misses zonal clusters. The
+		// wildcard "-" searches all zones and regions in a single API call.
+		regions = []string{"-"}
 	}
 
 	providerFactory := provider.NewFactory()

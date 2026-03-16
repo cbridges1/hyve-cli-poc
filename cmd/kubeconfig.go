@@ -185,6 +185,7 @@ func createProviderForCluster(factory *provider.Factory, clusterDef types.Cluste
 
 	// Handle Azure-specific configuration
 	if providerName == "azure" {
+		opts.AzureResourceGroup = clusterDef.Spec.AzureResourceGroup
 		if clusterDef.Spec.AzureSubscriptionID != "" {
 			opts.AzureSubscriptionID = clusterDef.Spec.AzureSubscriptionID
 		} else if clusterDef.Spec.AzureSubscription != "" {
@@ -227,23 +228,31 @@ func syncKubeconfigs() {
 	providerFactory := provider.NewFactory()
 	successCount := 0
 
-	// Sync kubeconfigs for each cluster using the appropriate provider
+	// Collect all active cluster names for a single orphan-cleanup pass at the end.
+	// Calling SyncKubeconfigs (which runs CleanupOrphanedKubeconfigs internally) once
+	// per cluster would delete every other cluster's kubeconfig on each iteration.
+	activeClusterNames := make([]string, 0, len(clusterDefs))
+	for _, cd := range clusterDefs {
+		activeClusterNames = append(activeClusterNames, cd.Metadata.Name)
+	}
+
 	for _, clusterDef := range clusterDefs {
-		// Create provider with appropriate options for this cluster
 		prov, err := createProviderForCluster(providerFactory, clusterDef)
 		if err != nil {
 			log.Printf("Failed to create provider for cluster %s: %v", clusterDef.Metadata.Name, err)
 			continue
 		}
 
-		// Create syncer for this cluster
 		syncer := kubeconfig.NewSyncer(kubeconfigMgr, prov)
-		err = syncer.SyncKubeconfigs(ctx, []types.ClusterDefinition{clusterDef})
-		if err != nil {
+		if err := syncer.SyncSingleKubeconfig(ctx, clusterDef.Metadata.Name); err != nil {
 			log.Printf("Failed to sync kubeconfig for cluster %s: %v", clusterDef.Metadata.Name, err)
 			continue
 		}
 		successCount++
+	}
+
+	if err := kubeconfigMgr.CleanupOrphanedKubeconfigs(activeClusterNames); err != nil {
+		log.Printf("Failed to cleanup orphaned kubeconfigs: %v", err)
 	}
 
 	log.Printf("✅ Kubeconfig sync completed: %d/%d clusters synced successfully", successCount, len(clusterDefs))

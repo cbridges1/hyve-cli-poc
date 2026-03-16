@@ -632,6 +632,9 @@ func fetchCloudClusterNames(ctx context.Context, providerName, region, accountAl
 			opts.GCPCredentialsJSON = credJSON
 		}
 		opts.AccountName = accountAlias
+		// GKE's list API with a specific region only returns regional clusters.
+		// The wildcard "-" returns all clusters across every zone and region.
+		opts.Region = "-"
 
 	case "azure":
 		if pcm != nil && accountAlias != "" {

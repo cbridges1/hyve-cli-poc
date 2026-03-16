@@ -251,12 +251,14 @@ func (p *Provider) WaitForClusterReady(ctx context.Context, clusterID string) er
 
 		log.Printf("Cluster status: %s, waiting...", cluster.Status)
 
-		if cluster.Status == "ACTIVE" {
-			break
-		}
-
 		if cluster.Status == "FAILED" {
 			return fmt.Errorf("cluster creation failed")
+		}
+
+		// Wait for both ACTIVE status and a non-empty kubeconfig. The Civo API
+		// may briefly report ACTIVE before the kubeconfig is available.
+		if cluster.Status == "ACTIVE" && cluster.KubeConfig != "" {
+			break
 		}
 
 		time.Sleep(30 * time.Second)

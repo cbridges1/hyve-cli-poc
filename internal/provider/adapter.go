@@ -599,10 +599,16 @@ func convertFirewallRules(rules []FirewallRule) []civo.FirewallRule {
 // GCP conversion functions
 
 func convertGCPCluster(c *gcp.Cluster) *Cluster {
+	// GKE uses "RUNNING" for a healthy cluster; normalize to the canonical "ACTIVE"
+	// used throughout Hyve so status checks behave uniformly across providers.
+	status := c.Status
+	if status == "RUNNING" {
+		status = "ACTIVE"
+	}
 	return &Cluster{
 		ID:         c.ID,
 		Name:       c.Name,
-		Status:     c.Status,
+		Status:     status,
 		FirewallID: c.FirewallID,
 		MasterIP:   c.MasterIP,
 		KubeConfig: c.KubeConfig,
@@ -695,10 +701,16 @@ func convertFirewallRulesToAWS(rules []FirewallRule) []aws.FirewallRule {
 // Azure conversion functions
 
 func convertAzureCluster(c *azure.Cluster) *Cluster {
+	// AKS ProvisioningState is "Succeeded" for a running cluster; normalize to
+	// the canonical "ACTIVE" used throughout Hyve.
+	status := c.Status
+	if status == "Succeeded" {
+		status = "ACTIVE"
+	}
 	return &Cluster{
 		ID:         c.ID,
 		Name:       c.Name,
-		Status:     c.Status,
+		Status:     status,
 		FirewallID: c.FirewallID,
 		MasterIP:   c.MasterIP,
 		KubeConfig: c.KubeConfig,
