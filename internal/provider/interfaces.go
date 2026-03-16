@@ -72,6 +72,7 @@ type ClusterInfo struct {
 	Kubeconfig string
 	Status     string
 	ID         string
+	NodeGroups []types.NodeGroup
 }
 
 // ClusterProvider interface defines the operations a cloud provider must implement

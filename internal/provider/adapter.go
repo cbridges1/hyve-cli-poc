@@ -345,6 +345,7 @@ func (a *ProviderAdapter) GetClusterInfo(ctx context.Context, name string) (*Clu
 			Kubeconfig: awsInfo.Kubeconfig,
 			Status:     awsInfo.Status,
 			ID:         awsInfo.ID,
+			NodeGroups: awsInfo.NodeGroups,
 		}, nil
 	}
 	if a.azure != nil {
@@ -359,6 +360,7 @@ func (a *ProviderAdapter) GetClusterInfo(ctx context.Context, name string) (*Clu
 			Kubeconfig: azureInfo.Kubeconfig,
 			Status:     azureInfo.Status,
 			ID:         azureInfo.ID,
+			NodeGroups: azureInfo.NodeGroups,
 		}, nil
 	}
 	if a.gcp != nil {
@@ -373,6 +375,7 @@ func (a *ProviderAdapter) GetClusterInfo(ctx context.Context, name string) (*Clu
 			Kubeconfig: gcpInfo.Kubeconfig,
 			Status:     gcpInfo.Status,
 			ID:         gcpInfo.ID,
+			NodeGroups: gcpInfo.NodeGroups,
 		}, nil
 	}
 
@@ -388,6 +391,7 @@ func (a *ProviderAdapter) GetClusterInfo(ctx context.Context, name string) (*Clu
 		Kubeconfig: civoInfo.Kubeconfig,
 		Status:     civoInfo.Status,
 		ID:         civoInfo.ID,
+		NodeGroups: civoInfo.NodeGroups,
 	}, nil
 }
 

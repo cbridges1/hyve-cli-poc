@@ -1184,6 +1184,30 @@ func importClusterFromCLI(clusterName, region, providerName string, nodes []stri
 		}
 	}
 
+	// If no node groups were explicitly provided, query the cloud provider for
+	// the live node pool configuration so the imported definition is complete.
+	if len(nodeGroups) == 0 && len(nodes) == 0 {
+		tempDef := types.ClusterDefinition{
+			Metadata: types.ClusterMetadata{Name: clusterName, Region: region},
+			Spec: types.ClusterSpec{
+				Provider:           providerName,
+				CivoOrganization:   orgName,
+				AWSAccount:         accountName,
+				AWSAccountID:       awsAccountID,
+				GCPProject:         projectName,
+				GCPProjectID:       gcpProjectID,
+				AzureSubscription:  subscriptionName,
+				AzureResourceGroup: resolveAzureResourceGroup(pcMgr, subscriptionName),
+			},
+		}
+		if prov, provErr := createProviderForClusterDef(tempDef); provErr == nil {
+			if info, infoErr := prov.GetClusterInfo(ctx, clusterName); infoErr == nil && len(info.NodeGroups) > 0 {
+				nodeGroups = info.NodeGroups
+				log.Printf("📋 Detected %d node group(s) from cloud provider", len(nodeGroups))
+			}
+		}
+	}
+
 	clusterDef := types.ClusterDefinition{
 		APIVersion: "v1",
 		Kind:       "Cluster",
@@ -1221,6 +1245,19 @@ func importClusterFromCLI(clusterName, region, providerName string, nodes []stri
 
 	commitStateChanges(ctx, stateMgr, fmt.Sprintf("Import cluster %s", clusterName))
 	log.Printf("✅ Cluster '%s' imported into hyve repository (cloud cluster untouched)", clusterName)
+}
+
+// resolveAzureResourceGroup returns the first configured resource group for a
+// subscription alias, or empty string if none is found (best-effort).
+func resolveAzureResourceGroup(pcMgr *providerconfig.Manager, subscriptionName string) string {
+	if subscriptionName == "" || pcMgr == nil {
+		return ""
+	}
+	rgs, err := pcMgr.ListAzureResourceGroups(subscriptionName)
+	if err != nil || len(rgs) == 0 {
+		return ""
+	}
+	return rgs[0].Name
 }
 
 // releaseClusterFromCLI removes a cluster from the hyve repository without

@@ -78,6 +78,7 @@ type ClusterInfo struct {
 	Kubeconfig string
 	Status     string
 	ID         string
+	NodeGroups []types.NodeGroup
 }
 
 // Provider implements the provider interfaces for Civo
@@ -283,6 +284,15 @@ func (p *Provider) GetClusterInfo(ctx context.Context, name string) (*ClusterInf
 		return nil, fmt.Errorf("failed to get cluster details for %s: %w", name, err)
 	}
 
+	var nodeGroups []types.NodeGroup
+	for _, pool := range clusterDetails.Pools {
+		nodeGroups = append(nodeGroups, types.NodeGroup{
+			Name:         pool.ID,
+			InstanceType: pool.Size,
+			Count:        pool.Count,
+		})
+	}
+
 	info := &ClusterInfo{
 		Name:       cluster.Name,
 		IPAddress:  clusterDetails.MasterIP,
@@ -290,6 +300,7 @@ func (p *Provider) GetClusterInfo(ctx context.Context, name string) (*ClusterInf
 		Kubeconfig: clusterDetails.KubeConfig,
 		Status:     cluster.Status,
 		ID:         cluster.ID,
+		NodeGroups: nodeGroups,
 	}
 
 	return info, nil

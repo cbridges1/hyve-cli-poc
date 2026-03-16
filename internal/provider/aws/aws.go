@@ -90,6 +90,7 @@ type ClusterInfo struct {
 	Kubeconfig string
 	Status     string
 	ID         string
+	NodeGroups []types.NodeGroup
 }
 
 // Provider implements the provider interfaces for AWS
@@ -1309,6 +1310,45 @@ func (p *Provider) GetClusterInfo(ctx context.Context, name string) (*ClusterInf
 		kubeconfig = p.generateEKSKubeconfig(name, endpoint, *cluster.CertificateAuthority.Data)
 	}
 
+	// Fetch node groups
+	var nodeGroups []types.NodeGroup
+	listNG, err := p.eksClient.ListNodegroups(ctx, &eks.ListNodegroupsInput{ClusterName: cluster.Name})
+	if err == nil {
+		for _, ngName := range listNG.Nodegroups {
+			ngResp, err := p.eksClient.DescribeNodegroup(ctx, &eks.DescribeNodegroupInput{
+				ClusterName:   cluster.Name,
+				NodegroupName: aws.String(ngName),
+			})
+			if err != nil || ngResp.Nodegroup == nil {
+				continue
+			}
+			ng := ngResp.Nodegroup
+			instanceType := ""
+			if len(ng.InstanceTypes) > 0 {
+				instanceType = ng.InstanceTypes[0]
+			}
+			count, min, max := 0, 0, 0
+			if ng.ScalingConfig != nil {
+				if ng.ScalingConfig.DesiredSize != nil {
+					count = int(*ng.ScalingConfig.DesiredSize)
+				}
+				if ng.ScalingConfig.MinSize != nil {
+					min = int(*ng.ScalingConfig.MinSize)
+				}
+				if ng.ScalingConfig.MaxSize != nil {
+					max = int(*ng.ScalingConfig.MaxSize)
+				}
+			}
+			nodeGroups = append(nodeGroups, types.NodeGroup{
+				Name:         ngName,
+				InstanceType: instanceType,
+				Count:        count,
+				MinCount:     min,
+				MaxCount:     max,
+			})
+		}
+	}
+
 	return &ClusterInfo{
 		Name:       *cluster.Name,
 		IPAddress:  endpoint,
@@ -1316,6 +1356,7 @@ func (p *Provider) GetClusterInfo(ctx context.Context, name string) (*ClusterInf
 		Kubeconfig: kubeconfig,
 		Status:     string(cluster.Status),
 		ID:         *cluster.Name,
+		NodeGroups: nodeGroups,
 	}, nil
 }
 

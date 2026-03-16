@@ -73,6 +73,7 @@ type ClusterInfo struct {
 	Kubeconfig string
 	Status     string
 	ID         string
+	NodeGroups []types.NodeGroup
 }
 
 // Provider implements the provider interfaces for Azure
@@ -127,19 +128,38 @@ func (p *Provider) Region() string {
 	return p.region
 }
 
-// ListClusters lists all clusters
+// ListClusters lists all clusters. When no resource group is configured it
+// falls back to listing all AKS clusters in the subscription so that import
+// and other discovery flows work without requiring a resource group.
 func (p *Provider) ListClusters(ctx context.Context) ([]*Cluster, error) {
-	pager := p.aksClient.NewListByResourceGroupPager(p.resourceGroupName, nil)
+	type pageResult struct {
+		Value []*armcontainerservice.ManagedCluster
+	}
 
 	var clusters []*Cluster
-	for pager.More() {
-		page, err := pager.NextPage(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to list AKS clusters: %w", err)
-		}
 
-		for _, cluster := range page.Value {
-			clusters = append(clusters, p.convertCluster(cluster))
+	if p.resourceGroupName != "" {
+		pager := p.aksClient.NewListByResourceGroupPager(p.resourceGroupName, nil)
+		for pager.More() {
+			page, err := pager.NextPage(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("failed to list AKS clusters: %w", err)
+			}
+			for _, cluster := range page.Value {
+				clusters = append(clusters, p.convertCluster(cluster))
+			}
+		}
+	} else {
+		// No resource group — list all clusters in the subscription.
+		pager := p.aksClient.NewListPager(nil)
+		for pager.More() {
+			page, err := pager.NextPage(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("failed to list AKS clusters: %w", err)
+			}
+			for _, cluster := range page.Value {
+				clusters = append(clusters, p.convertCluster(cluster))
+			}
 		}
 	}
 
@@ -366,6 +386,40 @@ func (p *Provider) GetClusterInfo(ctx context.Context, name string) (*ClusterInf
 		kubeconfig = string(credResp.Kubeconfigs[0].Value)
 	}
 
+	var nodeGroups []types.NodeGroup
+	if cluster.Properties != nil {
+		for _, pool := range cluster.Properties.AgentPoolProfiles {
+			if pool == nil {
+				continue
+			}
+			name := ""
+			if pool.Name != nil {
+				name = *pool.Name
+			}
+			vmSize := ""
+			if pool.VMSize != nil {
+				vmSize = *pool.VMSize
+			}
+			count, min, max := 0, 0, 0
+			if pool.Count != nil {
+				count = int(*pool.Count)
+			}
+			if pool.MinCount != nil {
+				min = int(*pool.MinCount)
+			}
+			if pool.MaxCount != nil {
+				max = int(*pool.MaxCount)
+			}
+			nodeGroups = append(nodeGroups, types.NodeGroup{
+				Name:         name,
+				InstanceType: vmSize,
+				Count:        count,
+				MinCount:     min,
+				MaxCount:     max,
+			})
+		}
+	}
+
 	return &ClusterInfo{
 		Name:       clusterName,
 		IPAddress:  fqdn,
@@ -373,6 +427,7 @@ func (p *Provider) GetClusterInfo(ctx context.Context, name string) (*ClusterInf
 		Kubeconfig: kubeconfig,
 		Status:     status,
 		ID:         clusterName,
+		NodeGroups: nodeGroups,
 	}, nil
 }
 

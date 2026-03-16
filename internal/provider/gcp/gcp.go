@@ -73,6 +73,7 @@ type ClusterInfo struct {
 	Kubeconfig string
 	Status     string
 	ID         string
+	NodeGroups []types.NodeGroup
 }
 
 // Provider implements the provider interfaces for GCP
@@ -399,12 +400,49 @@ func (p *Provider) GetClusterInfo(ctx context.Context, name string) (*ClusterInf
 		return nil, fmt.Errorf("cluster %s not found", name)
 	}
 
+	// Fetch the raw GKE cluster to extract node pool details.
+	// Use the cluster's actual location (set by convertClusterWithLocation) so
+	// both zonal and regional clusters are found correctly.
+	location := p.region
+	if cluster.Location != "" {
+		location = cluster.Location
+	}
+	clusterPath := fmt.Sprintf("projects/%s/locations/%s/clusters/%s", p.projectID, location, name)
+	rawCluster, rawErr := p.containerService.Projects.Locations.Clusters.Get(clusterPath).Context(ctx).Do()
+
+	var nodeGroups []types.NodeGroup
+	if rawErr == nil && rawCluster != nil {
+		for _, np := range rawCluster.NodePools {
+			if np == nil {
+				continue
+			}
+			instanceType := ""
+			if np.Config != nil {
+				instanceType = np.Config.MachineType
+			}
+			count := int(np.InitialNodeCount)
+			min, max := 0, 0
+			if np.Autoscaling != nil && np.Autoscaling.Enabled {
+				min = int(np.Autoscaling.MinNodeCount)
+				max = int(np.Autoscaling.MaxNodeCount)
+			}
+			nodeGroups = append(nodeGroups, types.NodeGroup{
+				Name:         np.Name,
+				InstanceType: instanceType,
+				Count:        count,
+				MinCount:     min,
+				MaxCount:     max,
+			})
+		}
+	}
+
 	return &ClusterInfo{
 		Name:       cluster.Name,
 		IPAddress:  cluster.MasterIP,
 		AccessPort: "443",
 		Status:     cluster.Status,
 		ID:         cluster.ID,
+		NodeGroups: nodeGroups,
 	}, nil
 }
 
