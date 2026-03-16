@@ -66,4 +66,5 @@ func init() {
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(workflowCmd)
 	rootCmd.AddCommand(templateCmd)
+	rootCmd.AddCommand(interactiveCmd)
 }
