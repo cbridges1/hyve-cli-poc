@@ -129,69 +129,17 @@ func interactiveTemplateExecute() error {
 		return err
 	}
 
-	var (
-		clusterName   string
-		providerName  string
-		org           string
-		account       string
-		vpcName       string
-		eksRole       string
-		nodeRole      string
-		subscription  string
-		resourceGroup string
-		project       string
-	)
-
+	var clusterName string
 	err := newForm(
 		huh.NewGroup(
 			huh.NewInput().Title("New cluster name").Value(&clusterName),
-			huh.NewSelect[string]().
-				Title("Cloud provider").
-				Options(
-					huh.NewOption("Civo", "civo"),
-					huh.NewOption("AWS (EKS)", "aws"),
-					huh.NewOption("GCP (GKE)", "gcp"),
-					huh.NewOption("Azure (AKS)", "azure"),
-				).
-				Value(&providerName),
 		),
 	).Run()
 	if err != nil {
 		return err
 	}
 
-	switch providerName {
-	case "civo":
-		if err := selectFromList("Civo organization", fetchCivoOrgNames(), &org); err != nil {
-			return err
-		}
-	case "aws":
-		if err := selectFromList("AWS account alias", fetchAWSAccountNames(), &account); err != nil {
-			return err
-		}
-		if err := selectFromList("VPC alias", fetchAWSVPCNames(account), &vpcName); err != nil {
-			return err
-		}
-		if err := selectFromList("EKS role alias", fetchAWSEKSRoleNames(account), &eksRole); err != nil {
-			return err
-		}
-		if err := selectFromList("Node role alias", fetchAWSNodeRoleNames(account), &nodeRole); err != nil {
-			return err
-		}
-	case "gcp":
-		if err := selectFromList("GCP project alias", fetchGCPProjectNames(), &project); err != nil {
-			return err
-		}
-	case "azure":
-		if err := selectFromList("Azure subscription alias", fetchAzureSubscriptionNames(), &subscription); err != nil {
-			return err
-		}
-		if err := selectFromList("Resource group", fetchAzureResourceGroupNames(subscription), &resourceGroup); err != nil {
-			return err
-		}
-	}
-
-	executeTemplate(templateName, clusterName, org, account, vpcName, eksRole, nodeRole, subscription, resourceGroup, project)
+	executeTemplate(templateName, clusterName, "", "", "", "", "", "", "", "")
 	return nil
 }
 
