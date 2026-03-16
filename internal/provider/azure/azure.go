@@ -176,15 +176,52 @@ func (p *Provider) GetCluster(ctx context.Context, clusterID string) (*Cluster, 
 	return p.convertCluster(&resp.ManagedCluster), nil
 }
 
-// FindClusterByName finds a cluster by name
+// FindClusterByName finds a cluster by name. It first tries a direct Get using
+// the configured resource group (fast path). On any failure it falls through to
+// a subscription-wide scan, which also handles the case where resourceGroupName
+// is empty or points to the wrong resource group. When the cluster is found via
+// the subscription-wide scan, p.resourceGroupName is updated from the cluster's
+// ARM ID so that DeleteCluster / GetClusterInfo work without extra parameters.
 func (p *Provider) FindClusterByName(ctx context.Context, name string) (*Cluster, error) {
-	resp, err := p.aksClient.Get(ctx, p.resourceGroupName, name, nil)
-	if err != nil {
-		// Check if it's a not found error
-		return nil, nil
+	if p.resourceGroupName != "" {
+		resp, err := p.aksClient.Get(ctx, p.resourceGroupName, name, nil)
+		if err == nil {
+			return p.convertCluster(&resp.ManagedCluster), nil
+		}
+		// Fast path failed — fall through to subscription-wide scan below.
 	}
 
-	return p.convertCluster(&resp.ManagedCluster), nil
+	// Scan all clusters in the subscription.
+	pager := p.aksClient.NewListPager(nil)
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			return nil, nil
+		}
+		for _, c := range page.Value {
+			if c.Name != nil && *c.Name == name {
+				// Extract the resource group from the ARM resource ID so
+				// DeleteCluster and GetClusterInfo work after this call.
+				if c.ID != nil {
+					p.resourceGroupName = resourceGroupFromID(*c.ID)
+				}
+				return p.convertCluster(c), nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+// resourceGroupFromID parses the resource group name from an Azure ARM resource ID.
+// Example ID: /subscriptions/{sub}/resourceGroups/{rg}/providers/.../clusters/{name}
+func resourceGroupFromID(id string) string {
+	parts := strings.Split(id, "/")
+	for i, p := range parts {
+		if strings.EqualFold(p, "resourceGroups") && i+1 < len(parts) {
+			return parts[i+1]
+		}
+	}
+	return ""
 }
 
 // agentPoolMode converts a mode string to the AKS enum value
@@ -356,6 +393,13 @@ func (p *Provider) WaitForClusterReady(ctx context.Context, clusterID string) er
 
 // GetClusterInfo gets cluster information for export
 func (p *Provider) GetClusterInfo(ctx context.Context, name string) (*ClusterInfo, error) {
+	// Ensure resourceGroupName is resolved; FindClusterByName does a
+	// subscription-wide scan and sets p.resourceGroupName when necessary.
+	if p.resourceGroupName == "" {
+		if _, err := p.FindClusterByName(ctx, name); err != nil || p.resourceGroupName == "" {
+			return nil, fmt.Errorf("cluster %s not found in subscription", name)
+		}
+	}
 	resp, err := p.aksClient.Get(ctx, p.resourceGroupName, name, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get AKS cluster info: %w", err)

@@ -726,7 +726,11 @@ func modifyClusterFromCLI(cmd *cobra.Command, clusterName string) {
 	}
 }
 
-func deleteClusterFromCLI(clusterName string, forceCloud bool, force bool) {
+// deleteClusterFromCLI deletes a cluster. When deleteFromCloud is true the
+// cluster is removed from the cloud provider BEFORE the YAML is touched and
+// BEFORE reconciliation runs, guaranteeing the cloud resource is gone first.
+// allowNoConfig permits cloud deletion even when no YAML exists (--force-cloud).
+func deleteClusterFromCLI(clusterName string, allowNoConfig bool, deleteFromCloud bool) {
 	ctx := gocontext.Background()
 	stateMgr, stateDir := createStateManager(ctx)
 	filePath := filepath.Join(stateDir, clusterName+".yaml")
@@ -735,10 +739,10 @@ func deleteClusterFromCLI(clusterName string, forceCloud bool, force bool) {
 	configExists := false
 
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		if force && forceCloud {
-			// --force --force-cloud: allow cloud deletion even without a config file
+		if deleteFromCloud && allowNoConfig {
+			// --force --force-cloud: allow cloud deletion even without a config file.
 			log.Printf("⚠️ Configuration file not found, but --force --force-cloud specified")
-			clusterDef.Metadata.Region = "PHX1" // Default region
+			clusterDef.Metadata.Name = clusterName
 		} else {
 			log.Fatalf("Cluster %s configuration does not exist. Use --force --force-cloud to delete from cloud provider anyway.", clusterName)
 		}
@@ -753,22 +757,21 @@ func deleteClusterFromCLI(clusterName string, forceCloud bool, force bool) {
 		}
 	}
 
-	if force {
-		// Force path: delete the cluster from the cloud immediately, then clean up YAML.
-		log.Printf("🗑️ Force-deleting cluster '%s' from cloud provider...", clusterName)
+	// Step 1: delete from cloud FIRST so the resource is gone before we touch
+	// git state or run reconciliation.
+	if deleteFromCloud {
+		log.Printf("🗑️ Deleting cluster '%s' from cloud provider...", clusterName)
 		if err := deleteClusterExplicitly(ctx, clusterDef); err != nil {
-			log.Fatalf("❌ Failed to delete cluster %s from cloud provider: %v\n\n"+
+			log.Fatalf("❌ Failed to delete cluster '%s' from cloud provider: %v\n\n"+
 				"Configuration file was NOT removed to prevent orphaned cluster state.\n"+
 				"Please resolve the issue and try again.", clusterName, err)
 		}
+		log.Printf("✅ Cloud cluster '%s' deleted", clusterName)
 	} else {
-		// Default path: remove the YAML and let reconciliation handle cloud deletion.
-		// In CI/CD mode the push triggers the pipeline; with strictDelete enabled the
-		// pipeline (or local reconcile) will delete the orphaned cloud cluster.
-		log.Printf("📝 Removing cluster YAML and reconciling — cloud deletion will be handled by reconciliation")
+		log.Printf("📝 Removing cluster YAML — cloud deletion will be handled by reconciliation")
 	}
 
-	// Remove configuration file if it exists
+	// Step 2: remove the YAML from git state.
 	if configExists {
 		if err := os.Remove(filePath); err != nil {
 			log.Fatalf("Failed to delete cluster definition file: %v", err)
@@ -780,9 +783,12 @@ func deleteClusterFromCLI(clusterName string, forceCloud bool, force bool) {
 		log.Printf("📝 No configuration file to remove")
 	}
 
-	// Remove kubeconfig from ~/.kube/config and from Hyve's database
+	// Step 3: clean up stored kubeconfig.
 	cleanupClusterKubeconfig(clusterName)
 
+	// Step 4: reconcile. When deleteFromCloud=true the cluster is already gone
+	// from the cloud so reconciliation is a no-op for this cluster; it still
+	// ensures any remaining desired state is applied.
 	runReconciliation("")
 }
 
@@ -937,7 +943,11 @@ func createProviderForClusterDef(clusterDef types.ClusterDefinition) (provider.P
 }
 
 // forceDeleteClusterFromCloud deletes a cluster by name from the cloud provider across multiple regions
-func forceDeleteClusterFromCloud(clusterName, region, providerName, projectName string) {
+func forceDeleteClusterFromCloud(clusterName, region, providerName, projectName string, accountAlias ...string) {
+	alias := ""
+	if len(accountAlias) > 0 {
+		alias = accountAlias[0]
+	}
 	ctx := gocontext.Background()
 
 	regions := []string{region}
@@ -974,19 +984,24 @@ func forceDeleteClusterFromCloud(clusterName, region, providerName, projectName 
 		opts.APIKey = apiKey
 	}
 
+	// Resolve provider config manager for alias lookups
+	var fdPcMgr *providerconfig.Manager
+	{
+		fdRepoMgr, err := repository.NewManager()
+		if err == nil {
+			defer fdRepoMgr.Close()
+			if fdCurrentRepo, err := fdRepoMgr.GetCurrentRepository(); err == nil {
+				fdPcMgr = providerconfig.NewManager(fdCurrentRepo.LocalPath)
+			}
+		}
+	}
+
 	// Handle GCP-specific configuration
 	if providerName == "gcp" && projectName != "" {
-		fdRepoMgr, err := repository.NewManager()
-		if err != nil {
-			log.Fatalf("Failed to create repository manager: %v", err)
+		if fdPcMgr == nil {
+			log.Fatalf("Failed to load repository configuration for GCP project lookup")
 		}
-		defer fdRepoMgr.Close()
-		fdCurrentRepo, err := fdRepoMgr.GetCurrentRepository()
-		if err != nil {
-			log.Fatalf("Failed to get current repository: %v", err)
-		}
-		pcMgr := providerconfig.NewManager(fdCurrentRepo.LocalPath)
-		projectID, err := pcMgr.GetGCPProjectID(projectName)
+		projectID, err := fdPcMgr.GetGCPProjectID(projectName)
 		if err != nil {
 			log.Fatalf("GCP project alias '%s' not found in repository configuration.\n"+
 				"Use 'hyve config gcp project add --name %s --id <project-id>' to add it.", projectName, projectName)
@@ -996,6 +1011,32 @@ func forceDeleteClusterFromCloud(clusterName, region, providerName, projectName 
 		// GKE's list/get API with a specific region misses zonal clusters. The
 		// wildcard "-" searches all zones and regions in a single API call.
 		regions = []string{"-"}
+	}
+
+	// Handle AWS-specific configuration
+	if providerName == "aws" && alias != "" && fdPcMgr != nil {
+		keyID, secret, tok, err := fdPcMgr.GetAWSCredentials(alias)
+		if err == nil {
+			opts.AccessKeyID = keyID
+			opts.SecretAccessKey = secret
+			opts.SessionToken = tok
+		}
+		opts.AccountName = alias
+	}
+
+	// Handle Azure-specific configuration
+	if providerName == "azure" && alias != "" && fdPcMgr != nil {
+		subID, _ := fdPcMgr.GetAzureSubscriptionID(alias)
+		tenantID, clientID, clientSecret, err := fdPcMgr.GetAzureCredentials(alias)
+		if err == nil {
+			opts.AzureTenantID = tenantID
+			opts.AzureClientID = clientID
+			opts.AzureClientSecret = clientSecret
+		}
+		opts.AzureSubscriptionID = subID
+		opts.AccountName = alias
+		// Leave AzureResourceGroup empty — FindClusterByName will auto-detect
+		// it from the cluster's ARM ID by doing a subscription-wide list.
 	}
 
 	providerFactory := provider.NewFactory()

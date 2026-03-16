@@ -264,7 +264,9 @@ func interactiveClusterDelete() error {
 		return nil
 	}
 
-	deleteClusterFromCLI(clusterName, forceCloud, false)
+	// forceCloud = user chose "Yes — delete from cloud now"
+	// allowNoConfig=false: the cluster was selected from the local list so a config always exists
+	deleteClusterFromCLI(clusterName, false, forceCloud)
 	return nil
 }
 
@@ -292,16 +294,33 @@ func interactiveClusterForceDelete() error {
 		return err
 	}
 
-	var region, projectName string
-	ctxFD := gocontext.Background()
-	if err := selectFromGroups("Region", fetchRegionGroups(ctxFD, providerName, ""), "us-east-1", &region); err != nil {
-		return err
-	}
-
-	if providerName == "gcp" {
+	// Account / org / project / subscription selection
+	var accountAlias, projectName string
+	switch providerName {
+	case "civo":
+		if err := selectFromList("Civo organization", fetchCivoOrgNames(), &accountAlias); err != nil {
+			return err
+		}
+		projectName = accountAlias // used for token lookup in forceDeleteClusterFromCloud
+	case "aws":
+		if err := selectFromList("AWS account alias", fetchAWSAccountNames(), &accountAlias); err != nil {
+			return err
+		}
+	case "gcp":
 		if err := selectFromList("GCP project alias", fetchGCPProjectNames(), &projectName); err != nil {
 			return err
 		}
+		accountAlias = projectName
+	case "azure":
+		if err := selectFromList("Azure subscription alias", fetchAzureSubscriptionNames(), &accountAlias); err != nil {
+			return err
+		}
+	}
+
+	ctxFD := gocontext.Background()
+	var region string
+	if err := selectFromGroups("Region", fetchRegionGroups(ctxFD, providerName, accountAlias), "us-east-1", &region); err != nil {
+		return err
 	}
 
 	var confirm bool
@@ -321,7 +340,7 @@ func interactiveClusterForceDelete() error {
 		return nil
 	}
 
-	forceDeleteClusterFromCloud(clusterName, region, providerName, projectName)
+	forceDeleteClusterFromCloud(clusterName, region, providerName, projectName, accountAlias)
 	return nil
 }
 
