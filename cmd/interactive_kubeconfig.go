@@ -7,48 +7,55 @@ import (
 )
 
 func runInteractiveKubeconfig() error {
-	var action string
-	err := newForm(
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("Kubeconfig — what would you like to do?").
-				Options(
-					huh.NewOption("Sync kubeconfigs from all clusters", "sync"),
-					huh.NewOption("Get kubeconfig for a cluster", "get"),
-					huh.NewOption("Use (merge + set active context)", "use"),
-					huh.NewOption("Merge into ~/.kube/config", "merge"),
-					huh.NewOption("Remove a kubeconfig", "remove"),
-				).
-				Value(&action),
-		),
-	).Run()
-	if err != nil {
-		return err
-	}
+	for {
+		var action string
+		err := newForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Kubeconfig — what would you like to do?").
+					Options(
+						huh.NewOption("Sync kubeconfigs from all clusters", "sync"),
+						huh.NewOption("Get kubeconfig for a cluster", "get"),
+						huh.NewOption("Use (merge + set active context)", "use"),
+						huh.NewOption("Merge into ~/.kube/config", "merge"),
+						huh.NewOption("Remove a kubeconfig", "remove"),
+						huh.NewOption("← Back", "back"),
+					).
+					Value(&action),
+			),
+		).Run()
+		if err != nil {
+			return err
+		}
 
-	switch action {
-	case "sync":
-		syncKubeconfigs()
-	case "get":
-		return interactiveKubeconfigGet()
-	case "use":
-		return interactiveKubeconfigUse()
-	case "merge":
-		return interactiveKubeconfigMerge()
-	case "remove":
-		return interactiveKubeconfigRemove()
+		switch action {
+		case "back":
+			return errBack
+		case "sync":
+			syncKubeconfigs()
+		case "get":
+			if err := interactiveKubeconfigGet(); err != nil && err != errBack {
+				return err
+			}
+		case "use":
+			if err := interactiveKubeconfigUse(); err != nil && err != errBack {
+				return err
+			}
+		case "merge":
+			if err := interactiveKubeconfigMerge(); err != nil && err != errBack {
+				return err
+			}
+		case "remove":
+			if err := interactiveKubeconfigRemove(); err != nil && err != errBack {
+				return err
+			}
+		}
 	}
-	return nil
 }
 
 func interactiveKubeconfigGet() error {
-	var clusterName string
-	err := newForm(
-		huh.NewGroup(
-			huh.NewInput().Title("Cluster name").Value(&clusterName),
-		),
-	).Run()
-	if err != nil {
+	clusterName := ""
+	if err := selectFromList("Cluster", fetchKubeconfigClusterNames(), &clusterName); err != nil {
 		return err
 	}
 	getKubeconfig(kubeconfigGetCmd, clusterName)
@@ -56,13 +63,8 @@ func interactiveKubeconfigGet() error {
 }
 
 func interactiveKubeconfigUse() error {
-	var clusterName string
-	err := newForm(
-		huh.NewGroup(
-			huh.NewInput().Title("Cluster name").Value(&clusterName),
-		),
-	).Run()
-	if err != nil {
+	clusterName := ""
+	if err := selectFromList("Cluster", fetchKubeconfigClusterNames(), &clusterName); err != nil {
 		return err
 	}
 	useKubeconfig(clusterName)
@@ -70,13 +72,8 @@ func interactiveKubeconfigUse() error {
 }
 
 func interactiveKubeconfigMerge() error {
-	var clusterName string
-	err := newForm(
-		huh.NewGroup(
-			huh.NewInput().Title("Cluster name to merge").Value(&clusterName),
-		),
-	).Run()
-	if err != nil {
+	clusterName := ""
+	if err := selectFromList("Cluster to merge", fetchKubeconfigClusterNames(), &clusterName); err != nil {
 		return err
 	}
 	mergeKubeconfig(clusterName)
@@ -84,21 +81,16 @@ func interactiveKubeconfigMerge() error {
 }
 
 func interactiveKubeconfigRemove() error {
-	var clusterName string
-	err := newForm(
-		huh.NewGroup(
-			huh.NewInput().Title("Cluster name to remove kubeconfig for").Value(&clusterName),
-		),
-	).Run()
-	if err != nil {
+	clusterName := ""
+	if err := selectFromList("Cluster to remove kubeconfig for", fetchKubeconfigClusterNames(), &clusterName); err != nil {
 		return err
 	}
 
 	var confirm bool
-	err = newForm(
+	err := newForm(
 		huh.NewGroup(
 			huh.NewConfirm().
-				Title(fmt.Sprintf("Remove kubeconfig for cluster '%s'?", clusterName)).
+				Title(fmt.Sprintf("Remove kubeconfig for '%s'?", clusterName)).
 				Affirmative("Yes, remove").
 				Negative("Cancel").
 				Value(&confirm),
@@ -108,7 +100,6 @@ func interactiveKubeconfigRemove() error {
 		return err
 	}
 	if !confirm {
-		fmt.Println("Cancelled.")
 		return nil
 	}
 

@@ -7,41 +7,55 @@ import (
 )
 
 func runInteractiveWorkflow() error {
-	var action string
-	err := newForm(
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("Workflow — what would you like to do?").
-				Options(
-					huh.NewOption("Create a workflow", "create"),
-					huh.NewOption("Run a workflow", "run"),
-					huh.NewOption("List workflows", "list"),
-					huh.NewOption("Show workflow details", "show"),
-					huh.NewOption("Validate a workflow", "validate"),
-					huh.NewOption("Delete a workflow", "delete"),
-				).
-				Value(&action),
-		),
-	).Run()
-	if err != nil {
-		return err
-	}
+	for {
+		var action string
+		err := newForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Workflow — what would you like to do?").
+					Options(
+						huh.NewOption("Create a workflow", "create"),
+						huh.NewOption("Run a workflow", "run"),
+						huh.NewOption("List workflows", "list"),
+						huh.NewOption("Show workflow details", "show"),
+						huh.NewOption("Validate a workflow", "validate"),
+						huh.NewOption("Delete a workflow", "delete"),
+						huh.NewOption("← Back", "back"),
+					).
+					Value(&action),
+			),
+		).Run()
+		if err != nil {
+			return err
+		}
 
-	switch action {
-	case "create":
-		return interactiveWorkflowCreate()
-	case "run":
-		return interactiveWorkflowRun()
-	case "list":
-		listWorkflows()
-	case "show":
-		return interactiveWorkflowShow()
-	case "validate":
-		return interactiveWorkflowValidate()
-	case "delete":
-		return interactiveWorkflowDelete()
+		switch action {
+		case "back":
+			return errBack
+		case "list":
+			listWorkflows()
+		case "create":
+			if err := interactiveWorkflowCreate(); err != nil && err != errBack {
+				return err
+			}
+		case "run":
+			if err := interactiveWorkflowRun(); err != nil && err != errBack {
+				return err
+			}
+		case "show":
+			if err := interactiveWorkflowShow(); err != nil && err != errBack {
+				return err
+			}
+		case "validate":
+			if err := interactiveWorkflowValidate(); err != nil && err != errBack {
+				return err
+			}
+		case "delete":
+			if err := interactiveWorkflowDelete(); err != nil && err != errBack {
+				return err
+			}
+		}
 	}
-	return nil
 }
 
 func interactiveWorkflowCreate() error {
@@ -53,12 +67,16 @@ func interactiveWorkflowCreate() error {
 				Options(
 					huh.NewOption("Default template", "template"),
 					huh.NewOption("Existing YAML file", "file"),
+					huh.NewOption("← Back", "back"),
 				).
 				Value(&mode),
 		),
 	).Run()
 	if err != nil {
 		return err
+	}
+	if mode == "back" {
+		return errBack
 	}
 
 	if mode == "file" {
@@ -90,24 +108,26 @@ func interactiveWorkflowCreate() error {
 }
 
 func interactiveWorkflowRun() error {
-	var (
-		name       string
-		cluster    string
-		showLogs   bool
-		showOutput bool
-	)
+	name := ""
+	if err := selectFromList("Workflow to run", fetchWorkflowNames(), &name); err != nil {
+		return err
+	}
 
-	showLogs = true // default
-
+	var cluster string
 	err := newForm(
 		huh.NewGroup(
-			huh.NewInput().
-				Title("Workflow name").
-				Value(&name),
 			huh.NewInput().
 				Title("Cluster (leave blank to run locally)").
 				Value(&cluster),
 		),
+	).Run()
+	if err != nil {
+		return err
+	}
+
+	showLogs := true
+	var showOutput bool
+	err = newForm(
 		huh.NewGroup(
 			huh.NewConfirm().
 				Title("Show execution logs?").
@@ -130,13 +150,8 @@ func interactiveWorkflowRun() error {
 }
 
 func interactiveWorkflowShow() error {
-	var name string
-	err := newForm(
-		huh.NewGroup(
-			huh.NewInput().Title("Workflow name").Value(&name),
-		),
-	).Run()
-	if err != nil {
+	name := ""
+	if err := selectFromList("Workflow to show", fetchWorkflowNames(), &name); err != nil {
 		return err
 	}
 	showWorkflow(name)
@@ -144,13 +159,8 @@ func interactiveWorkflowShow() error {
 }
 
 func interactiveWorkflowValidate() error {
-	var name string
-	err := newForm(
-		huh.NewGroup(
-			huh.NewInput().Title("Workflow name to validate").Value(&name),
-		),
-	).Run()
-	if err != nil {
+	name := ""
+	if err := selectFromList("Workflow to validate", fetchWorkflowNames(), &name); err != nil {
 		return err
 	}
 	validateWorkflow(name)
@@ -158,18 +168,13 @@ func interactiveWorkflowValidate() error {
 }
 
 func interactiveWorkflowDelete() error {
-	var name string
-	err := newForm(
-		huh.NewGroup(
-			huh.NewInput().Title("Workflow name to delete").Value(&name),
-		),
-	).Run()
-	if err != nil {
+	name := ""
+	if err := selectFromList("Workflow to delete", fetchWorkflowNames(), &name); err != nil {
 		return err
 	}
 
 	var confirm bool
-	err = newForm(
+	err := newForm(
 		huh.NewGroup(
 			huh.NewConfirm().
 				Title(fmt.Sprintf("Delete workflow '%s'?", name)).
@@ -182,7 +187,6 @@ func interactiveWorkflowDelete() error {
 		return err
 	}
 	if !confirm {
-		fmt.Println("Cancelled.")
 		return nil
 	}
 

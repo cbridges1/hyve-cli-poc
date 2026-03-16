@@ -9,38 +9,50 @@ import (
 )
 
 func runInteractiveCluster() error {
-	var action string
-	err := newForm(
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("Cluster — what would you like to do?").
-				Options(
-					huh.NewOption("Add a new cluster", "add"),
-					huh.NewOption("Modify an existing cluster", "modify"),
-					huh.NewOption("Delete a cluster", "delete"),
-					huh.NewOption("Force-delete a cluster from cloud", "force-delete"),
-					huh.NewOption("List clusters", "list"),
-				).
-				Value(&action),
-		),
-	).Run()
-	if err != nil {
-		return err
-	}
+	for {
+		var action string
+		err := newForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Cluster — what would you like to do?").
+					Options(
+						huh.NewOption("Add a new cluster", "add"),
+						huh.NewOption("Modify an existing cluster", "modify"),
+						huh.NewOption("Delete a cluster", "delete"),
+						huh.NewOption("Force-delete a cluster from cloud", "force-delete"),
+						huh.NewOption("List clusters", "list"),
+						huh.NewOption("← Back", "back"),
+					).
+					Value(&action),
+			),
+		).Run()
+		if err != nil {
+			return err
+		}
 
-	switch action {
-	case "add":
-		return interactiveClusterAdd()
-	case "modify":
-		return interactiveClusterModify()
-	case "delete":
-		return interactiveClusterDelete()
-	case "force-delete":
-		return interactiveClusterForceDelete()
-	case "list":
-		listClusters()
+		switch action {
+		case "back":
+			return errBack
+		case "list":
+			listClusters()
+		case "add":
+			if err := interactiveClusterAdd(); err != nil && err != errBack {
+				return err
+			}
+		case "modify":
+			if err := interactiveClusterModify(); err != nil && err != errBack {
+				return err
+			}
+		case "delete":
+			if err := interactiveClusterDelete(); err != nil && err != errBack {
+				return err
+			}
+		case "force-delete":
+			if err := interactiveClusterForceDelete(); err != nil && err != errBack {
+				return err
+			}
+		}
 	}
-	return nil
 }
 
 func interactiveClusterAdd() error {
@@ -72,9 +84,19 @@ func interactiveClusterAdd() error {
 					huh.NewOption("AWS (EKS)", "aws"),
 					huh.NewOption("GCP (GKE)", "gcp"),
 					huh.NewOption("Azure (AKS)", "azure"),
+					huh.NewOption("← Back", "back"),
 				).
 				Value(&providerName),
 		),
+	).Run()
+	if err != nil {
+		return err
+	}
+	if providerName == "back" {
+		return errBack
+	}
+
+	err = newForm(
 		huh.NewGroup(
 			huh.NewInput().
 				Title("Region").
@@ -97,63 +119,37 @@ func interactiveClusterAdd() error {
 		return err
 	}
 
-	// Provider-specific fields
+	// Provider-specific fields — use selects populated from config
 	switch providerName {
 	case "civo":
-		err = newForm(
-			huh.NewGroup(
-				huh.NewInput().
-					Title("Civo organization name").
-					Placeholder("my-org").
-					Value(&orgName),
-			),
-		).Run()
+		if err := selectFromList("Civo organization", fetchCivoOrgNames(), &orgName); err != nil {
+			return err
+		}
 	case "aws":
-		err = newForm(
-			huh.NewGroup(
-				huh.NewInput().
-					Title("AWS account alias").
-					Placeholder("prod").
-					Value(&accountName),
-				huh.NewInput().
-					Title("VPC name alias").
-					Placeholder("eks-vpc").
-					Value(&vpcName),
-				huh.NewInput().
-					Title("EKS role name alias").
-					Placeholder("eks-role").
-					Value(&eksRoleName),
-				huh.NewInput().
-					Title("Node role name alias").
-					Placeholder("node-role").
-					Value(&nodeRoleName),
-			),
-		).Run()
+		if err := selectFromList("AWS account alias", fetchAWSAccountNames(), &accountName); err != nil {
+			return err
+		}
+		if err := selectFromList("VPC alias", fetchAWSVPCNames(accountName), &vpcName); err != nil {
+			return err
+		}
+		if err := selectFromList("EKS role alias", fetchAWSEKSRoleNames(accountName), &eksRoleName); err != nil {
+			return err
+		}
+		if err := selectFromList("Node role alias", fetchAWSNodeRoleNames(accountName), &nodeRoleName); err != nil {
+			return err
+		}
 	case "gcp":
-		err = newForm(
-			huh.NewGroup(
-				huh.NewInput().
-					Title("GCP project name alias").
-					Placeholder("my-project").
-					Value(&projectName),
-			),
-		).Run()
+		if err := selectFromList("GCP project alias", fetchGCPProjectNames(), &projectName); err != nil {
+			return err
+		}
 	case "azure":
-		err = newForm(
-			huh.NewGroup(
-				huh.NewInput().
-					Title("Azure subscription name alias").
-					Placeholder("prod-sub").
-					Value(&subscriptionName),
-			),
-		).Run()
-	}
-	if err != nil {
-		return err
+		if err := selectFromList("Azure subscription alias", fetchAzureSubscriptionNames(), &subscriptionName); err != nil {
+			return err
+		}
 	}
 
-	var confirm bool
 	nodes := splitAndTrim(nodesStr, ",")
+	var confirm bool
 	summary := fmt.Sprintf("Add cluster '%s' on %s in %s with nodes: %s", clusterName, providerName, region, strings.Join(nodes, ", "))
 	err = newForm(
 		huh.NewGroup(
@@ -168,7 +164,6 @@ func interactiveClusterAdd() error {
 		return err
 	}
 	if !confirm {
-		fmt.Println("Cancelled.")
 		return nil
 	}
 
@@ -177,24 +172,13 @@ func interactiveClusterAdd() error {
 }
 
 func interactiveClusterModify() error {
-	var clusterName string
-	err := newForm(
-		huh.NewGroup(
-			huh.NewInput().
-				Title("Cluster name to modify").
-				Value(&clusterName),
-		),
-	).Run()
-	if err != nil {
+	clusterName := ""
+	if err := selectFromList("Cluster to modify", fetchClusterNames(), &clusterName); err != nil {
 		return err
 	}
 
-	var (
-		region   string
-		nodesStr string
-	)
-
-	err = newForm(
+	var region, nodesStr string
+	err := newForm(
 		huh.NewGroup(
 			huh.NewInput().
 				Title("New region (leave blank to keep current)").
@@ -208,7 +192,6 @@ func interactiveClusterModify() error {
 		return err
 	}
 
-	// Build a fake cobra.Command with the flags set so we can reuse modifyClusterFromCLI
 	modifyCmd.Flags().Set("region", region)
 	if nodesStr != "" {
 		for _, n := range splitAndTrim(nodesStr, ",") {
@@ -220,21 +203,19 @@ func interactiveClusterModify() error {
 }
 
 func interactiveClusterDelete() error {
-	var (
-		clusterName string
-		force       bool
-		forceCloud  bool
-	)
+	clusterName := ""
+	if err := selectFromList("Cluster to delete", fetchClusterNames(), &clusterName); err != nil {
+		return err
+	}
 
+	var forceCloud bool
 	err := newForm(
 		huh.NewGroup(
-			huh.NewInput().
-				Title("Cluster name to delete").
-				Value(&clusterName),
 			huh.NewConfirm().
-				Title("Delete from cloud immediately (--force)?").
-				Affirmative("Yes").
-				Negative("No (GitOps — remove YAML and reconcile)").
+				Title("Delete from cloud immediately?").
+				Description("No = remove from state only (GitOps reconcile handles cloud deletion)").
+				Affirmative("Yes — delete from cloud now").
+				Negative("No — GitOps").
 				Value(&forceCloud),
 		),
 	).Run()
@@ -242,11 +223,11 @@ func interactiveClusterDelete() error {
 		return err
 	}
 
-	var confirm bool
-	action := "remove from state (GitOps)"
+	action := "remove from Git state (GitOps)"
 	if forceCloud {
 		action = "DELETE from cloud immediately"
 	}
+	var confirm bool
 	err = newForm(
 		huh.NewGroup(
 			huh.NewConfirm().
@@ -260,27 +241,22 @@ func interactiveClusterDelete() error {
 		return err
 	}
 	if !confirm {
-		fmt.Println("Cancelled.")
 		return nil
 	}
 
-	deleteClusterFromCLI(clusterName, forceCloud, force)
+	deleteClusterFromCLI(clusterName, forceCloud, false)
 	return nil
 }
 
 func interactiveClusterForceDelete() error {
-	var (
-		clusterName  string
-		region       string
-		providerName string
-		projectName  string
-	)
+	clusterName := ""
+	if err := selectFromList("Cluster to force-delete", fetchClusterNames(), &clusterName); err != nil {
+		return err
+	}
 
+	var providerName string
 	err := newForm(
 		huh.NewGroup(
-			huh.NewInput().
-				Title("Cluster name").
-				Value(&clusterName),
 			huh.NewSelect[string]().
 				Title("Cloud provider").
 				Options(
@@ -290,9 +266,16 @@ func interactiveClusterForceDelete() error {
 					huh.NewOption("Azure (AKS)", "azure"),
 				).
 				Value(&providerName),
-			huh.NewInput().
-				Title("Region").
-				Value(&region),
+		),
+	).Run()
+	if err != nil {
+		return err
+	}
+
+	var region, projectName string
+	err = newForm(
+		huh.NewGroup(
+			huh.NewInput().Title("Region").Value(&region),
 		),
 	).Run()
 	if err != nil {
@@ -300,14 +283,7 @@ func interactiveClusterForceDelete() error {
 	}
 
 	if providerName == "gcp" {
-		err = newForm(
-			huh.NewGroup(
-				huh.NewInput().
-					Title("GCP project name alias").
-					Value(&projectName),
-			),
-		).Run()
-		if err != nil {
+		if err := selectFromList("GCP project alias", fetchGCPProjectNames(), &projectName); err != nil {
 			return err
 		}
 	}
@@ -326,7 +302,6 @@ func interactiveClusterForceDelete() error {
 		return err
 	}
 	if !confirm {
-		fmt.Println("Cancelled.")
 		return nil
 	}
 

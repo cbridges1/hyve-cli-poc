@@ -7,69 +7,89 @@ import (
 )
 
 func runInteractiveGit() error {
-	var category string
-	err := newForm(
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("Git — what would you like to do?").
-				Options(
-					huh.NewOption("Repository management", "repo"),
-					huh.NewOption("Branch management", "branch"),
-					huh.NewOption("Pull / push / sync", "sync"),
-				).
-				Value(&category),
-		),
-	).Run()
-	if err != nil {
-		return err
-	}
+	for {
+		var category string
+		err := newForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Git — what would you like to do?").
+					Options(
+						huh.NewOption("Repository management", "repo"),
+						huh.NewOption("Branch management", "branch"),
+						huh.NewOption("Pull / push / sync", "sync"),
+						huh.NewOption("← Back", "back"),
+					).
+					Value(&category),
+			),
+		).Run()
+		if err != nil {
+			return err
+		}
 
-	switch category {
-	case "repo":
-		return interactiveGitRepo()
-	case "branch":
-		return interactiveGitBranch()
-	case "sync":
-		return interactiveGitSync()
+		switch category {
+		case "back":
+			return errBack
+		case "repo":
+			if err := interactiveGitRepo(); err != nil && err != errBack {
+				return err
+			}
+		case "branch":
+			if err := interactiveGitBranch(); err != nil && err != errBack {
+				return err
+			}
+		case "sync":
+			if err := interactiveGitSync(); err != nil && err != errBack {
+				return err
+			}
+		}
 	}
-	return nil
 }
 
 // ── Repository ───────────────────────────────────────────────────────────────
 
 func interactiveGitRepo() error {
-	var action string
-	err := newForm(
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("Repository — action").
-				Options(
-					huh.NewOption("Add repository", "add"),
-					huh.NewOption("List repositories", "list"),
-					huh.NewOption("Use (switch to) repository", "use"),
-					huh.NewOption("Show status", "status"),
-					huh.NewOption("Remove repository", "remove"),
-				).
-				Value(&action),
-		),
-	).Run()
-	if err != nil {
-		return err
-	}
+	for {
+		var action string
+		err := newForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Repository — action").
+					Options(
+						huh.NewOption("Add repository", "add"),
+						huh.NewOption("List repositories", "list"),
+						huh.NewOption("Use (switch to) repository", "use"),
+						huh.NewOption("Show status", "status"),
+						huh.NewOption("Remove repository", "remove"),
+						huh.NewOption("← Back", "back"),
+					).
+					Value(&action),
+			),
+		).Run()
+		if err != nil {
+			return err
+		}
 
-	switch action {
-	case "add":
-		return interactiveGitRepoAdd()
-	case "list":
-		listGitRepositories()
-	case "use":
-		return interactiveGitRepoUse()
-	case "status":
-		showGitStatus()
-	case "remove":
-		return interactiveGitRepoRemove()
+		switch action {
+		case "back":
+			return errBack
+		case "list":
+			listGitRepositories()
+		case "status":
+			showGitStatus()
+		case "add":
+			if err := interactiveGitRepoAdd(); err != nil && err != errBack {
+				return err
+			}
+		case "use":
+			if err := interactiveGitRepoUse(); err != nil && err != errBack {
+				return err
+			}
+		case "remove":
+			if err := interactiveGitRepoRemove(); err != nil && err != errBack {
+				return err
+			}
+		}
 	}
-	return nil
 }
 
 func interactiveGitRepoAdd() error {
@@ -101,13 +121,8 @@ func interactiveGitRepoAdd() error {
 }
 
 func interactiveGitRepoUse() error {
-	var name string
-	err := newForm(
-		huh.NewGroup(
-			huh.NewInput().Title("Repository alias to switch to").Value(&name),
-		),
-	).Run()
-	if err != nil {
+	name := ""
+	if err := selectFromList("Repository to switch to", fetchGitRepoNames(), &name); err != nil {
 		return err
 	}
 	switchToRepository(name)
@@ -115,18 +130,13 @@ func interactiveGitRepoUse() error {
 }
 
 func interactiveGitRepoRemove() error {
-	var name string
-	err := newForm(
-		huh.NewGroup(
-			huh.NewInput().Title("Repository alias to remove").Value(&name),
-		),
-	).Run()
-	if err != nil {
+	name := ""
+	if err := selectFromList("Repository to remove", fetchGitRepoNames(), &name); err != nil {
 		return err
 	}
 
 	var confirm bool
-	err = newForm(
+	err := newForm(
 		huh.NewGroup(
 			huh.NewConfirm().
 				Title(fmt.Sprintf("Remove repository '%s'?", name)).
@@ -139,7 +149,6 @@ func interactiveGitRepoRemove() error {
 		return err
 	}
 	if !confirm {
-		fmt.Println("Cancelled.")
 		return nil
 	}
 
@@ -150,35 +159,45 @@ func interactiveGitRepoRemove() error {
 // ── Branch ───────────────────────────────────────────────────────────────────
 
 func interactiveGitBranch() error {
-	var action string
-	err := newForm(
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("Branch — action").
-				Options(
-					huh.NewOption("List branches", "list"),
-					huh.NewOption("Create branch", "create"),
-					huh.NewOption("Switch branch", "switch"),
-					huh.NewOption("Delete branch", "delete"),
-				).
-				Value(&action),
-		),
-	).Run()
-	if err != nil {
-		return err
-	}
+	for {
+		var action string
+		err := newForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Branch — action").
+					Options(
+						huh.NewOption("List branches", "list"),
+						huh.NewOption("Create branch", "create"),
+						huh.NewOption("Switch branch", "switch"),
+						huh.NewOption("Delete branch", "delete"),
+						huh.NewOption("← Back", "back"),
+					).
+					Value(&action),
+			),
+		).Run()
+		if err != nil {
+			return err
+		}
 
-	switch action {
-	case "list":
-		listGitBranches()
-	case "create":
-		return interactiveGitBranchCreate()
-	case "switch":
-		return interactiveGitBranchSwitch()
-	case "delete":
-		return interactiveGitBranchDelete()
+		switch action {
+		case "back":
+			return errBack
+		case "list":
+			listGitBranches()
+		case "create":
+			if err := interactiveGitBranchCreate(); err != nil && err != errBack {
+				return err
+			}
+		case "switch":
+			if err := interactiveGitBranchSwitch(); err != nil && err != errBack {
+				return err
+			}
+		case "delete":
+			if err := interactiveGitBranchDelete(); err != nil && err != errBack {
+				return err
+			}
+		}
 	}
-	return nil
 }
 
 func interactiveGitBranchCreate() error {
@@ -269,7 +288,6 @@ func interactiveGitBranchDelete() error {
 		return err
 	}
 	if !confirm {
-		fmt.Println("Cancelled.")
 		return nil
 	}
 
@@ -280,32 +298,40 @@ func interactiveGitBranchDelete() error {
 // ── Sync ─────────────────────────────────────────────────────────────────────
 
 func interactiveGitSync() error {
-	var action string
-	err := newForm(
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("Sync — action").
-				Options(
-					huh.NewOption("Pull latest changes", "pull"),
-					huh.NewOption("Push changes", "push"),
-					huh.NewOption("Sync (pull then push)", "sync"),
-				).
-				Value(&action),
-		),
-	).Run()
-	if err != nil {
-		return err
-	}
+	for {
+		var action string
+		err := newForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Sync — action").
+					Options(
+						huh.NewOption("Pull latest changes", "pull"),
+						huh.NewOption("Push changes", "push"),
+						huh.NewOption("Sync (pull then push)", "sync"),
+						huh.NewOption("← Back", "back"),
+					).
+					Value(&action),
+			),
+		).Run()
+		if err != nil {
+			return err
+		}
 
-	switch action {
-	case "pull":
-		pullGitChanges()
-	case "push":
-		return interactiveGitPush()
-	case "sync":
-		return interactiveGitSyncChanges()
+		switch action {
+		case "back":
+			return errBack
+		case "pull":
+			pullGitChanges()
+		case "push":
+			if err := interactiveGitPush(); err != nil && err != errBack {
+				return err
+			}
+		case "sync":
+			if err := interactiveGitSyncChanges(); err != nil && err != errBack {
+				return err
+			}
+		}
 	}
-	return nil
 }
 
 func interactiveGitPush() error {

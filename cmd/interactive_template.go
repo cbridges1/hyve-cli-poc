@@ -7,41 +7,55 @@ import (
 )
 
 func runInteractiveTemplate() error {
-	var action string
-	err := newForm(
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("Template — what would you like to do?").
-				Options(
-					huh.NewOption("Create a template", "create"),
-					huh.NewOption("Execute a template", "execute"),
-					huh.NewOption("List templates", "list"),
-					huh.NewOption("Show template details", "show"),
-					huh.NewOption("Validate a template", "validate"),
-					huh.NewOption("Delete a template", "delete"),
-				).
-				Value(&action),
-		),
-	).Run()
-	if err != nil {
-		return err
-	}
+	for {
+		var action string
+		err := newForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Template — what would you like to do?").
+					Options(
+						huh.NewOption("Create a template", "create"),
+						huh.NewOption("Execute a template", "execute"),
+						huh.NewOption("List templates", "list"),
+						huh.NewOption("Show template details", "show"),
+						huh.NewOption("Validate a template", "validate"),
+						huh.NewOption("Delete a template", "delete"),
+						huh.NewOption("← Back", "back"),
+					).
+					Value(&action),
+			),
+		).Run()
+		if err != nil {
+			return err
+		}
 
-	switch action {
-	case "create":
-		return interactiveTemplateCreate()
-	case "execute":
-		return interactiveTemplateExecute()
-	case "list":
-		listTemplates()
-	case "show":
-		return interactiveTemplateShow()
-	case "validate":
-		return interactiveTemplateValidate()
-	case "delete":
-		return interactiveTemplateDelete()
+		switch action {
+		case "back":
+			return errBack
+		case "list":
+			listTemplates()
+		case "create":
+			if err := interactiveTemplateCreate(); err != nil && err != errBack {
+				return err
+			}
+		case "execute":
+			if err := interactiveTemplateExecute(); err != nil && err != errBack {
+				return err
+			}
+		case "show":
+			if err := interactiveTemplateShow(); err != nil && err != errBack {
+				return err
+			}
+		case "validate":
+			if err := interactiveTemplateValidate(); err != nil && err != errBack {
+				return err
+			}
+		case "delete":
+			if err := interactiveTemplateDelete(); err != nil && err != errBack {
+				return err
+			}
+		}
 	}
-	return nil
 }
 
 func interactiveTemplateCreate() error {
@@ -65,6 +79,7 @@ func interactiveTemplateCreate() error {
 					huh.NewOption("AWS (EKS)", "aws"),
 					huh.NewOption("GCP (GKE)", "gcp"),
 					huh.NewOption("Azure (AKS)", "azure"),
+					huh.NewOption("← Back", "back"),
 				).
 				Value(&provider),
 		),
@@ -83,14 +98,21 @@ func interactiveTemplateCreate() error {
 	if err != nil {
 		return err
 	}
+	if provider == "back" {
+		return errBack
+	}
 
 	createTemplate(name, description, provider, region, nodesSizes, clusterType, "", "")
 	return nil
 }
 
 func interactiveTemplateExecute() error {
+	templateName := ""
+	if err := selectFromList("Template to execute", fetchTemplateNames(), &templateName); err != nil {
+		return err
+	}
+
 	var (
-		templateName  string
 		clusterName   string
 		providerName  string
 		org           string
@@ -105,7 +127,6 @@ func interactiveTemplateExecute() error {
 
 	err := newForm(
 		huh.NewGroup(
-			huh.NewInput().Title("Template name").Value(&templateName),
 			huh.NewInput().Title("New cluster name").Value(&clusterName),
 			huh.NewSelect[string]().
 				Title("Cloud provider").
@@ -124,36 +145,33 @@ func interactiveTemplateExecute() error {
 
 	switch providerName {
 	case "civo":
-		err = newForm(
-			huh.NewGroup(
-				huh.NewInput().Title("Civo organization name").Value(&org),
-			),
-		).Run()
+		if err := selectFromList("Civo organization", fetchCivoOrgNames(), &org); err != nil {
+			return err
+		}
 	case "aws":
-		err = newForm(
-			huh.NewGroup(
-				huh.NewInput().Title("AWS account alias").Value(&account),
-				huh.NewInput().Title("VPC name alias").Value(&vpcName),
-				huh.NewInput().Title("EKS role alias").Value(&eksRole),
-				huh.NewInput().Title("Node role alias").Value(&nodeRole),
-			),
-		).Run()
+		if err := selectFromList("AWS account alias", fetchAWSAccountNames(), &account); err != nil {
+			return err
+		}
+		if err := selectFromList("VPC alias", fetchAWSVPCNames(account), &vpcName); err != nil {
+			return err
+		}
+		if err := selectFromList("EKS role alias", fetchAWSEKSRoleNames(account), &eksRole); err != nil {
+			return err
+		}
+		if err := selectFromList("Node role alias", fetchAWSNodeRoleNames(account), &nodeRole); err != nil {
+			return err
+		}
 	case "gcp":
-		err = newForm(
-			huh.NewGroup(
-				huh.NewInput().Title("GCP project alias").Value(&project),
-			),
-		).Run()
+		if err := selectFromList("GCP project alias", fetchGCPProjectNames(), &project); err != nil {
+			return err
+		}
 	case "azure":
-		err = newForm(
-			huh.NewGroup(
-				huh.NewInput().Title("Azure subscription alias").Value(&subscription),
-				huh.NewInput().Title("Resource group name").Value(&resourceGroup),
-			),
-		).Run()
-	}
-	if err != nil {
-		return err
+		if err := selectFromList("Azure subscription alias", fetchAzureSubscriptionNames(), &subscription); err != nil {
+			return err
+		}
+		if err := selectFromList("Resource group", fetchAzureResourceGroupNames(subscription), &resourceGroup); err != nil {
+			return err
+		}
 	}
 
 	executeTemplate(templateName, clusterName, org, account, vpcName, eksRole, nodeRole, subscription, resourceGroup, project)
@@ -161,11 +179,8 @@ func interactiveTemplateExecute() error {
 }
 
 func interactiveTemplateShow() error {
-	var name string
-	err := newForm(
-		huh.NewGroup(huh.NewInput().Title("Template name").Value(&name)),
-	).Run()
-	if err != nil {
+	name := ""
+	if err := selectFromList("Template to show", fetchTemplateNames(), &name); err != nil {
 		return err
 	}
 	showTemplate(name)
@@ -173,11 +188,8 @@ func interactiveTemplateShow() error {
 }
 
 func interactiveTemplateValidate() error {
-	var name string
-	err := newForm(
-		huh.NewGroup(huh.NewInput().Title("Template name to validate").Value(&name)),
-	).Run()
-	if err != nil {
+	name := ""
+	if err := selectFromList("Template to validate", fetchTemplateNames(), &name); err != nil {
 		return err
 	}
 	validateTemplate(name)
@@ -185,16 +197,13 @@ func interactiveTemplateValidate() error {
 }
 
 func interactiveTemplateDelete() error {
-	var name string
-	err := newForm(
-		huh.NewGroup(huh.NewInput().Title("Template name to delete").Value(&name)),
-	).Run()
-	if err != nil {
+	name := ""
+	if err := selectFromList("Template to delete", fetchTemplateNames(), &name); err != nil {
 		return err
 	}
 
 	var confirm bool
-	err = newForm(
+	err := newForm(
 		huh.NewGroup(
 			huh.NewConfirm().
 				Title(fmt.Sprintf("Delete template '%s'?", name)).
@@ -207,7 +216,6 @@ func interactiveTemplateDelete() error {
 		return err
 	}
 	if !confirm {
-		fmt.Println("Cancelled.")
 		return nil
 	}
 

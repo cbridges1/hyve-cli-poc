@@ -74,41 +74,52 @@ var interactiveCmd = &cobra.Command{
 	Short: "Launch the interactive TUI",
 	Long:  "Navigate and run any Hyve command through a guided terminal user interface.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		var section string
-		err := newForm(
-			huh.NewGroup(
-				huh.NewSelect[string]().
-					Title("Hyve — what would you like to do?").
-					Options(
-						huh.NewOption("cluster   — manage Kubernetes clusters", "cluster"),
-						huh.NewOption("git       — manage Git repositories", "git"),
-						huh.NewOption("config    — provider credentials & config", "config"),
-						huh.NewOption("workflow  — automated pipelines", "workflow"),
-						huh.NewOption("template  — reusable cluster patterns", "template"),
-						huh.NewOption("kubeconfig — cluster access", "kubeconfig"),
-					).
-					Value(&section),
-			),
-		).Run()
-		if err != nil {
-			return err
-		}
+		for {
+			var section string
+			err := newForm(
+				huh.NewGroup(
+					huh.NewSelect[string]().
+						Title("Hyve — what would you like to do?").
+						Options(
+							huh.NewOption("cluster    — manage Kubernetes clusters", "cluster"),
+							huh.NewOption("git        — manage Git repositories", "git"),
+							huh.NewOption("config     — provider credentials & config", "config"),
+							huh.NewOption("workflow   — automated pipelines", "workflow"),
+							huh.NewOption("template   — reusable cluster patterns", "template"),
+							huh.NewOption("kubeconfig — cluster access", "kubeconfig"),
+							huh.NewOption("Quit", "quit"),
+						).
+						Value(&section),
+				),
+			).Run()
+			if err != nil {
+				return err
+			}
 
-		switch section {
-		case "cluster":
-			return runInteractiveCluster()
-		case "git":
-			return runInteractiveGit()
-		case "config":
-			return runInteractiveConfig()
-		case "workflow":
-			return runInteractiveWorkflow()
-		case "template":
-			return runInteractiveTemplate()
-		case "kubeconfig":
-			return runInteractiveKubeconfig()
+			if section == "quit" {
+				return nil
+			}
+
+			var runErr error
+			switch section {
+			case "cluster":
+				runErr = runInteractiveCluster()
+			case "git":
+				runErr = runInteractiveGit()
+			case "config":
+				runErr = runInteractiveConfig()
+			case "workflow":
+				runErr = runInteractiveWorkflow()
+			case "template":
+				runErr = runInteractiveTemplate()
+			case "kubeconfig":
+				runErr = runInteractiveKubeconfig()
+			}
+			// errBack from a top-level section just returns to this menu
+			if runErr != nil && runErr != errBack {
+				return runErr
+			}
 		}
-		return nil
 	},
 }
 
