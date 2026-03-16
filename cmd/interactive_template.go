@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/huh"
 )
@@ -61,12 +62,14 @@ func runInteractiveTemplate() error {
 
 func interactiveTemplateCreate() error {
 	var (
-		name        string
-		description string
-		provider    string
-		region      string
-		nodesSizes  string
-		clusterType string
+		name           string
+		description    string
+		provider       string
+		region         string
+		nodesSizes     string
+		clusterType    string
+		onCreatedNames []string
+		onDestroyNames []string
 	)
 
 	err := newForm(
@@ -118,7 +121,35 @@ func interactiveTemplateCreate() error {
 		}
 	}
 
-	createTemplate(name, description, provider, region, nodesSizes, clusterType, "", "")
+	// Workflow attachment — optional last step
+	if wfNames := fetchWorkflowNames(); len(wfNames) > 0 {
+		makeOpts := func() []huh.Option[string] {
+			opts := make([]huh.Option[string], len(wfNames))
+			for i, wf := range wfNames {
+				opts[i] = huh.NewOption(wf, wf)
+			}
+			return opts
+		}
+		err = newForm(
+			huh.NewGroup(
+				huh.NewMultiSelect[string]().
+					Title("On-created workflows (optional — space to select, enter to confirm)").
+					Options(makeOpts()...).
+					Value(&onCreatedNames),
+				huh.NewMultiSelect[string]().
+					Title("On-destroy workflows (optional — space to select, enter to confirm)").
+					Options(makeOpts()...).
+					Value(&onDestroyNames),
+			),
+		).Run()
+		if err != nil {
+			return err
+		}
+	}
+
+	onCreatedStr := strings.Join(onCreatedNames, ",")
+	onDestroyStr := strings.Join(onDestroyNames, ",")
+	createTemplate(name, description, provider, region, nodesSizes, clusterType, onCreatedStr, onDestroyStr)
 	return nil
 }
 
