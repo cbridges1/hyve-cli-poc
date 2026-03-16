@@ -18,7 +18,9 @@ func runInteractiveCluster() error {
 					Title("Cluster — what would you like to do?").
 					Options(
 						huh.NewOption("Add a new cluster", "add"),
+						huh.NewOption("Import an existing cluster", "import"),
 						huh.NewOption("Modify an existing cluster", "modify"),
+						huh.NewOption("Release a cluster from management", "release"),
 						huh.NewOption("Delete a cluster", "delete"),
 						huh.NewOption("Force-delete a cluster from cloud", "force-delete"),
 						huh.NewOption("List clusters", "list"),
@@ -38,6 +40,14 @@ func runInteractiveCluster() error {
 			listClusters()
 		case "add":
 			if err := interactiveClusterAdd(); err != nil && err != errBack {
+				return err
+			}
+		case "import":
+			if err := interactiveClusterImport(); err != nil && err != errBack {
+				return err
+			}
+		case "release":
+			if err := interactiveClusterRelease(); err != nil && err != errBack {
 				return err
 			}
 		case "modify":
@@ -326,4 +336,180 @@ func splitAndTrim(s, sep string) []string {
 		}
 	}
 	return out
+}
+
+func interactiveClusterImport() error {
+	var (
+		providerName string
+		accountAlias string
+		region       string
+		clusterName  string
+		vpcName      string
+		eksRoleName  string
+		nodeRoleName string
+	)
+
+	// Step 1: provider
+	err := newForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Cloud provider").
+				Options(
+					huh.NewOption("Civo", "civo"),
+					huh.NewOption("AWS (EKS)", "aws"),
+					huh.NewOption("GCP (GKE)", "gcp"),
+					huh.NewOption("Azure (AKS)", "azure"),
+					huh.NewOption("← Back", "back"),
+				).
+				Value(&providerName),
+		),
+	).Run()
+	if err != nil {
+		return err
+	}
+	if providerName == "back" {
+		return errBack
+	}
+
+	// Step 2: account / org / project / subscription
+	switch providerName {
+	case "civo":
+		if err := selectFromList("Civo organization", fetchCivoOrgNames(), &accountAlias); err != nil {
+			return err
+		}
+	case "aws":
+		if err := selectFromList("AWS account alias", fetchAWSAccountNames(), &accountAlias); err != nil {
+			return err
+		}
+		if err := selectFromList("VPC alias", fetchAWSVPCNames(accountAlias), &vpcName); err != nil {
+			return err
+		}
+		if err := selectFromList("EKS role alias", fetchAWSEKSRoleNames(accountAlias), &eksRoleName); err != nil {
+			return err
+		}
+		if err := selectFromList("Node role alias", fetchAWSNodeRoleNames(accountAlias), &nodeRoleName); err != nil {
+			return err
+		}
+	case "gcp":
+		if err := selectFromList("GCP project alias", fetchGCPProjectNames(), &accountAlias); err != nil {
+			return err
+		}
+	case "azure":
+		if err := selectFromList("Azure subscription alias", fetchAzureSubscriptionNames(), &accountAlias); err != nil {
+			return err
+		}
+	}
+
+	// Step 3: region
+	ctx := gocontext.Background()
+	if err := selectFromGroups("Region", fetchRegionGroups(ctx, providerName), "us-east-1", &region); err != nil {
+		return err
+	}
+
+	// Step 4: cluster name — select from cloud or enter manually
+	cloudNames := fetchCloudClusterNames(ctx, providerName, region, accountAlias)
+	const manualKey = "__manual__"
+	if len(cloudNames) > 0 {
+		opts := make([]huh.Option[string], 0, len(cloudNames)+2)
+		opts = append(opts, huh.NewOption("Enter manually...", manualKey))
+		for _, n := range cloudNames {
+			opts = append(opts, huh.NewOption(n, n))
+		}
+		opts = append(opts, huh.NewOption("← Back", "__back__"))
+
+		selection := ""
+		if err := newForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Select cluster to import").
+					Options(opts...).
+					Value(&selection),
+			),
+		).Run(); err != nil {
+			return err
+		}
+		switch selection {
+		case "__back__":
+			return errBack
+		case manualKey:
+			// fall through to manual input below
+		default:
+			clusterName = selection
+		}
+	}
+
+	if clusterName == "" {
+		if err := newForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Cluster name (must match the name in your cloud provider)").
+					Placeholder("my-cluster").
+					Value(&clusterName),
+			),
+		).Run(); err != nil {
+			return err
+		}
+	}
+
+	// Step 5: confirm
+	// Map accountAlias back to the right field for importClusterFromCLI
+	var orgName, projectName, subscriptionName, accountName string
+	switch providerName {
+	case "civo":
+		orgName = accountAlias
+	case "aws":
+		accountName = accountAlias
+	case "gcp":
+		projectName = accountAlias
+	case "azure":
+		subscriptionName = accountAlias
+	}
+
+	var confirm bool
+	summary := fmt.Sprintf("Import '%s' (%s, %s) into hyve — cloud cluster will NOT be reprovisioned", clusterName, providerName, region)
+	err = newForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title(summary).
+				Affirmative("Import").
+				Negative("Cancel").
+				Value(&confirm),
+		),
+	).Run()
+	if err != nil {
+		return err
+	}
+	if !confirm {
+		return nil
+	}
+
+	importClusterFromCLI(clusterName, region, providerName, nil, []types.NodeGroup{}, accountName, projectName, subscriptionName, orgName, vpcName, eksRoleName, nodeRoleName)
+	return nil
+}
+
+func interactiveClusterRelease() error {
+	clusterName := ""
+	if err := selectFromList("Cluster to release from management", fetchClusterNames(), &clusterName); err != nil {
+		return err
+	}
+
+	var confirm bool
+	err := newForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title(fmt.Sprintf("Release '%s' from hyve management? The cloud cluster will NOT be deleted.", clusterName)).
+				Affirmative("Yes, release").
+				Negative("Cancel").
+				Value(&confirm),
+		),
+	).Run()
+	if err != nil {
+		return err
+	}
+	if !confirm {
+		return nil
+	}
+
+	releaseClusterFromCLI(clusterName)
+	return nil
 }

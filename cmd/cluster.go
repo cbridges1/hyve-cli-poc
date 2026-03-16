@@ -266,6 +266,37 @@ Note: This command does not remove configuration files or run reconciliation.`,
 	},
 }
 
+var importCmd = &cobra.Command{
+	Use:   "import <name>",
+	Short: "Import an existing cloud cluster into hyve",
+	Long:  "Record an already-running cluster in the hyve repository without provisioning it.",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		clusterName := args[0]
+		region, _ := cmd.Flags().GetString("region")
+		providerName, _ := cmd.Flags().GetString("provider")
+		nodes, _ := cmd.Flags().GetStringSlice("nodes")
+		accountName, _ := cmd.Flags().GetString("account-name")
+		projectName, _ := cmd.Flags().GetString("project-name")
+		subscriptionName, _ := cmd.Flags().GetString("subscription-name")
+		orgName, _ := cmd.Flags().GetString("org-name")
+		vpcName, _ := cmd.Flags().GetString("vpc-name")
+		eksRoleName, _ := cmd.Flags().GetString("eks-role-name")
+		nodeRoleName, _ := cmd.Flags().GetString("node-role-name")
+		importClusterFromCLI(clusterName, region, providerName, nodes, []types.NodeGroup{}, accountName, projectName, subscriptionName, orgName, vpcName, eksRoleName, nodeRoleName)
+	},
+}
+
+var releaseCmd = &cobra.Command{
+	Use:   "release <name>",
+	Short: "Release a cluster from hyve management without deleting it from the cloud",
+	Long:  "Remove the cluster definition from the hyve repository. The cloud cluster is left running.",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		releaseClusterFromCLI(args[0])
+	},
+}
+
 var listCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all cluster definitions",
@@ -308,7 +339,21 @@ func init() {
 	forceDeleteCmd.Flags().StringP("provider", "p", "civo", "Cloud provider (civo, aws, gcp, azure)")
 	forceDeleteCmd.Flags().String("project-name", "", "Project/account name alias (required for GCP provider)")
 
+	importCmd.Flags().StringP("region", "r", "", "Region where the cluster is running")
+	importCmd.Flags().StringP("provider", "p", "", "Cloud provider (civo, aws, gcp, azure)")
+	importCmd.MarkFlagRequired("provider")
+	importCmd.Flags().StringSliceP("nodes", "n", nil, "Node sizes")
+	importCmd.Flags().StringP("account-name", "a", "", "AWS account name alias")
+	importCmd.Flags().String("project-name", "", "GCP project name alias")
+	importCmd.Flags().StringP("subscription-name", "s", "", "Azure subscription name alias")
+	importCmd.Flags().StringP("org-name", "o", "", "Civo organization name alias")
+	importCmd.Flags().StringP("vpc-name", "v", "", "AWS VPC name alias")
+	importCmd.Flags().StringP("eks-role-name", "e", "", "AWS EKS IAM role name alias")
+	importCmd.Flags().String("node-role-name", "", "AWS EKS node IAM role name alias")
+
 	clusterCmd.AddCommand(addCmd)
+	clusterCmd.AddCommand(importCmd)
+	clusterCmd.AddCommand(releaseCmd)
 	clusterCmd.AddCommand(listCmd)
 	clusterCmd.AddCommand(modifyCmd)
 	clusterCmd.AddCommand(deleteCmd)
@@ -515,6 +560,11 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 			}
 			log.Printf("Using AWS node role '%s' (ARN: %s)", nodeRoleName, awsNodeRoleARN)
 		}
+	}
+
+	// ClusterType is only meaningful for Civo
+	if providerName != "civo" {
+		clusterType = ""
 	}
 
 	clusterDef := types.ClusterDefinition{
@@ -1082,4 +1132,104 @@ func listClusters() {
 	log.Println("  hyve cluster modify <name>    # Modify an existing cluster")
 	log.Println("  hyve cluster delete <name>    # Delete a cluster")
 	log.Println("  hyve reconcile                # Apply cluster changes to cloud")
+}
+
+// importClusterFromCLI records an already-running cloud cluster in the hyve
+// repository without provisioning it. Reconciliation is intentionally skipped.
+func importClusterFromCLI(clusterName, region, providerName string, nodes []string, nodeGroups []types.NodeGroup, accountName, projectName, subscriptionName, orgName, vpcName, eksRoleName, nodeRoleName string) {
+	ctx := gocontext.Background()
+	stateMgr, stateDir := createStateManager(ctx)
+
+	if err := os.MkdirAll(stateDir, 0755); err != nil {
+		log.Fatalf("Failed to create state directory: %v", err)
+	}
+
+	filePath := filepath.Join(stateDir, clusterName+".yaml")
+	if _, err := os.Stat(filePath); err == nil {
+		log.Fatalf("Cluster '%s' already exists in the repository. Use 'modify' to update it.", clusterName)
+	}
+
+	pcMgr := providerconfig.NewManager(filepath.Dir(stateDir))
+	var err error
+
+	// Resolve GCP project alias
+	var gcpProjectID string
+	if providerName == "gcp" && projectName != "" {
+		gcpProjectID, err = pcMgr.GetGCPProjectID(projectName)
+		if err != nil {
+			log.Fatalf("GCP project alias '%s' not found.", projectName)
+		}
+	}
+
+	// Resolve AWS aliases
+	var awsAccountID, awsVPCID, awsEKSRoleARN, awsNodeRoleARN string
+	if providerName == "aws" && accountName != "" {
+		awsAccountID, _ = pcMgr.GetAWSAccountID(accountName)
+		if vpcName != "" {
+			awsVPCID, _ = pcMgr.GetAWSVPCID(accountName, vpcName)
+		}
+		if eksRoleName != "" {
+			awsEKSRoleARN, _ = pcMgr.GetAWSEKSRoleARN(accountName, eksRoleName)
+		}
+		if nodeRoleName != "" {
+			awsNodeRoleARN, _ = pcMgr.GetAWSNodeRoleARN(accountName, nodeRoleName)
+		}
+	}
+
+	clusterDef := types.ClusterDefinition{
+		APIVersion: "v1",
+		Kind:       "Cluster",
+		Metadata: types.ClusterMetadata{
+			Name:   clusterName,
+			Region: region,
+		},
+		Spec: types.ClusterSpec{
+			Provider:   providerName,
+			Nodes:      nodes,
+			NodeGroups: nodeGroups,
+			// ClusterType intentionally omitted — not provisioned by hyve
+			GCPProject:        projectName,
+			GCPProjectID:      gcpProjectID,
+			AWSAccount:        accountName,
+			AWSAccountID:      awsAccountID,
+			AWSVPCName:        vpcName,
+			AWSVPCID:          awsVPCID,
+			AWSEKSRole:        eksRoleName,
+			AWSEKSRoleARN:     awsEKSRoleARN,
+			AWSNodeRole:       nodeRoleName,
+			AWSNodeRoleARN:    awsNodeRoleARN,
+			AzureSubscription: subscriptionName,
+			CivoOrganization:  orgName,
+		},
+	}
+
+	data, err := yaml.Marshal(&clusterDef)
+	if err != nil {
+		log.Fatalf("Failed to marshal cluster definition: %v", err)
+	}
+	if err := os.WriteFile(filePath, data, 0644); err != nil {
+		log.Fatalf("Failed to write cluster definition: %v", err)
+	}
+
+	commitStateChanges(ctx, stateMgr, fmt.Sprintf("Import cluster %s", clusterName))
+	log.Printf("✅ Cluster '%s' imported into hyve repository (cloud cluster untouched)", clusterName)
+}
+
+// releaseClusterFromCLI removes a cluster from the hyve repository without
+// deleting it from the cloud. Reconciliation is intentionally skipped.
+func releaseClusterFromCLI(clusterName string) {
+	ctx := gocontext.Background()
+	stateMgr, stateDir := createStateManager(ctx)
+	filePath := filepath.Join(stateDir, clusterName+".yaml")
+
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		log.Fatalf("Cluster '%s' not found in repository.", clusterName)
+	}
+
+	if err := os.Remove(filePath); err != nil {
+		log.Fatalf("Failed to remove cluster definition: %v", err)
+	}
+
+	commitStateChanges(ctx, stateMgr, fmt.Sprintf("Release cluster %s", clusterName))
+	log.Printf("✅ Cluster '%s' released from hyve management. The cloud cluster continues to run.", clusterName)
 }

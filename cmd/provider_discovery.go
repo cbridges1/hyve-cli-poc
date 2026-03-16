@@ -19,6 +19,7 @@ import (
 	"google.golang.org/api/compute/v1"
 	"google.golang.org/api/option"
 
+	"hyve/internal/provider"
 	"hyve/internal/providerconfig"
 )
 
@@ -536,6 +537,85 @@ func fetchAzureNodeGroups(ctx context.Context, location string) []optionGroup {
 		byFamily[k] = opts
 	}
 	return groupsFromMap(byFamily)
+}
+
+// ── Cloud cluster discovery ───────────────────────────────────────────────────
+
+// fetchCloudClusterNames queries the given provider for clusters running in
+// region. The account/org/project/subscription alias selects which credentials
+// to use. Returns nil on any error so callers can fall back to manual entry.
+func fetchCloudClusterNames(ctx context.Context, providerName, region, accountAlias string) []string {
+	opts := provider.ProviderOptions{Region: region}
+
+	pcm := newProviderConfigManager()
+
+	switch providerName {
+	case "civo":
+		var token string
+		if pcm != nil && accountAlias != "" {
+			token, _ = pcm.GetCivoToken(accountAlias)
+		}
+		if token == "" {
+			token = os.Getenv("CIVO_TOKEN")
+		}
+		if token == "" {
+			return nil
+		}
+		opts.APIKey = token
+		opts.AccountName = accountAlias
+
+	case "aws":
+		if pcm != nil && accountAlias != "" {
+			keyID, secret, tok, err := pcm.GetAWSCredentials(accountAlias)
+			if err == nil {
+				opts.AccessKeyID = keyID
+				opts.SecretAccessKey = secret
+				opts.SessionToken = tok
+			}
+		}
+		opts.AccountName = accountAlias
+
+	case "gcp":
+		if pcm != nil && accountAlias != "" {
+			projectID, _ := pcm.GetGCPProjectID(accountAlias)
+			credJSON, _ := pcm.GetGCPCredentialsJSON(accountAlias)
+			opts.ProjectID = projectID
+			opts.GCPCredentialsJSON = credJSON
+		}
+		opts.AccountName = accountAlias
+
+	case "azure":
+		if pcm != nil && accountAlias != "" {
+			subID, _ := pcm.GetAzureSubscriptionID(accountAlias)
+			tenantID, clientID, clientSecret, err := pcm.GetAzureCredentials(accountAlias)
+			if err == nil {
+				opts.AzureSubscriptionID = subID
+				opts.AzureTenantID = tenantID
+				opts.AzureClientID = clientID
+				opts.AzureClientSecret = clientSecret
+			}
+		}
+		opts.AccountName = accountAlias
+
+	default:
+		return nil
+	}
+
+	prov, err := provider.NewFactory().CreateProviderWithOptions(providerName, opts)
+	if err != nil {
+		return nil
+	}
+
+	clusters, err := prov.ListClusters(ctx)
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(clusters))
+	for _, c := range clusters {
+		names = append(names, c.Name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // ── pointer helpers ───────────────────────────────────────────────────────────
