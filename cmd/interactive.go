@@ -92,6 +92,9 @@ var interactiveCmd = &cobra.Command{
 						Value(&section),
 				),
 			).Run()
+			if err == huh.ErrUserAborted {
+				return nil
+			}
 			if err != nil {
 				return err
 			}
@@ -116,6 +119,9 @@ var interactiveCmd = &cobra.Command{
 				runErr = runInteractiveKubeconfig()
 			}
 			// errBack from a top-level section just returns to this menu
+			if runErr == huh.ErrUserAborted {
+				return nil
+			}
 			if runErr != nil && runErr != errBack {
 				return runErr
 			}
