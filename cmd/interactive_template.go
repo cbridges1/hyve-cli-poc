@@ -96,10 +96,10 @@ func interactiveTemplateCreate() error {
 	}
 
 	ctx := context.Background()
-	if err := selectFromGroups("Region", fetchRegionGroups(ctx, provider), "us-east-1", &region); err != nil {
+	if err := selectFromGroups("Region", fetchRegionGroups(ctx, provider, ""), "us-east-1", &region); err != nil {
 		return err
 	}
-	if err := selectFromGroups("Node size", fetchNodeGroups(ctx, provider, region), "g4s.kube.medium", &nodesSizes); err != nil {
+	if err := selectFromGroups("Node size", fetchNodeGroups(ctx, provider, region, ""), "g4s.kube.medium", &nodesSizes); err != nil {
 		return err
 	}
 

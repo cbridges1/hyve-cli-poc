@@ -108,10 +108,10 @@ func interactiveClusterAdd() error {
 	}
 
 	ctx := gocontext.Background()
-	if err := selectFromGroups("Region", fetchRegionGroups(ctx, providerName), "us-east-1", &region); err != nil {
+	if err := selectFromGroups("Region", fetchRegionGroups(ctx, providerName, ""), "us-east-1", &region); err != nil {
 		return err
 	}
-	if err := selectFromGroups("Node size", fetchNodeGroups(ctx, providerName, region), "g4s.kube.medium", &nodesStr); err != nil {
+	if err := selectFromGroups("Node size", fetchNodeGroups(ctx, providerName, region, ""), "g4s.kube.medium", &nodesStr); err != nil {
 		return err
 	}
 
@@ -205,10 +205,10 @@ func interactiveClusterModify() error {
 	}
 
 	ctx2 := gocontext.Background()
-	if err := selectFromGroupsOptional("New region", fetchRegionGroups(ctx2, providerForModify), &region); err != nil {
+	if err := selectFromGroupsOptional("New region", fetchRegionGroups(ctx2, providerForModify, ""), &region); err != nil {
 		return err
 	}
-	if err := selectFromGroupsOptional("New node size", fetchNodeGroups(ctx2, providerForModify, region), &nodesStr); err != nil {
+	if err := selectFromGroupsOptional("New node size", fetchNodeGroups(ctx2, providerForModify, region, ""), &nodesStr); err != nil {
 		return err
 	}
 
@@ -294,7 +294,7 @@ func interactiveClusterForceDelete() error {
 
 	var region, projectName string
 	ctxFD := gocontext.Background()
-	if err := selectFromGroups("Region", fetchRegionGroups(ctxFD, providerName), "us-east-1", &region); err != nil {
+	if err := selectFromGroups("Region", fetchRegionGroups(ctxFD, providerName, ""), "us-east-1", &region); err != nil {
 		return err
 	}
 
@@ -339,6 +339,14 @@ func splitAndTrim(s, sep string) []string {
 }
 
 func interactiveClusterImport() error {
+	if sm, _ := createStateManager(gocontext.Background()); sm != nil {
+		if repoCfg, err := sm.LoadRepoConfig(); err == nil && repoCfg.Reconcile.StrictDelete {
+			fmt.Println("❌ Import is disabled: this repository has strictDelete enabled.")
+			fmt.Println("   In strict-delete mode hyve owns the full desired-state; importing an unmanaged cluster would cause it to be deleted on the next reconciliation.")
+			return nil
+		}
+	}
+
 	var (
 		providerName string
 		accountAlias string
@@ -400,9 +408,9 @@ func interactiveClusterImport() error {
 		}
 	}
 
-	// Step 3: region
+	// Step 3: region (pass accountAlias so we use the right credentials)
 	ctx := gocontext.Background()
-	if err := selectFromGroups("Region", fetchRegionGroups(ctx, providerName), "us-east-1", &region); err != nil {
+	if err := selectFromGroups("Region", fetchRegionGroups(ctx, providerName, accountAlias), "us-east-1", &region); err != nil {
 		return err
 	}
 
@@ -488,6 +496,15 @@ func interactiveClusterImport() error {
 }
 
 func interactiveClusterRelease() error {
+	if sm, _ := createStateManager(gocontext.Background()); sm != nil {
+		if repoCfg, err := sm.LoadRepoConfig(); err == nil && repoCfg.Reconcile.StrictDelete {
+			fmt.Println("❌ Release is disabled: this repository has strictDelete enabled.")
+			fmt.Println("   In strict-delete mode removing a cluster definition would cause the cloud cluster to be deleted on the next reconciliation.")
+			fmt.Println("   Use 'hyve cluster delete' instead.")
+			return nil
+		}
+	}
+
 	clusterName := ""
 	if err := selectFromList("Cluster to release from management", fetchClusterNames(), &clusterName); err != nil {
 		return err

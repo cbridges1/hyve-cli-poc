@@ -1140,6 +1140,11 @@ func importClusterFromCLI(clusterName, region, providerName string, nodes []stri
 	ctx := gocontext.Background()
 	stateMgr, stateDir := createStateManager(ctx)
 
+	if repoCfg, err := stateMgr.LoadRepoConfig(); err == nil && repoCfg.Reconcile.StrictDelete {
+		log.Fatalf("❌ Import is disabled: this repository has strictDelete enabled. " +
+			"In strict-delete mode hyve owns the full desired-state; importing an unmanaged cluster would cause it to be deleted on the next reconciliation.")
+	}
+
 	if err := os.MkdirAll(stateDir, 0755); err != nil {
 		log.Fatalf("Failed to create state directory: %v", err)
 	}
@@ -1220,6 +1225,13 @@ func importClusterFromCLI(clusterName, region, providerName string, nodes []stri
 func releaseClusterFromCLI(clusterName string) {
 	ctx := gocontext.Background()
 	stateMgr, stateDir := createStateManager(ctx)
+
+	if repoCfg, err := stateMgr.LoadRepoConfig(); err == nil && repoCfg.Reconcile.StrictDelete {
+		log.Fatalf("❌ Release is disabled: this repository has strictDelete enabled. " +
+			"In strict-delete mode removing a cluster definition would cause the cloud cluster to be deleted on the next reconciliation. " +
+			"Use 'hyve cluster delete' instead.")
+	}
+
 	filePath := filepath.Join(stateDir, clusterName+".yaml")
 
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {

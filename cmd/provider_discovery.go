@@ -24,33 +24,36 @@ import (
 )
 
 // fetchRegionGroups queries the provider API for available regions and groups
-// them geographically. Returns nil on failure so callers fall back to manual entry.
-func fetchRegionGroups(ctx context.Context, provider string) []optionGroup {
-	switch provider {
+// them geographically. accountAlias selects which configured credentials to use;
+// pass "" to fall back to the first configured account or env vars.
+// Returns nil on failure so callers fall back to manual entry.
+func fetchRegionGroups(ctx context.Context, providerName, accountAlias string) []optionGroup {
+	switch providerName {
 	case "civo":
-		return fetchCivoRegionGroups(ctx)
+		return fetchCivoRegionGroups(ctx, accountAlias)
 	case "aws":
-		return fetchAWSRegionGroups(ctx)
+		return fetchAWSRegionGroups(ctx, accountAlias)
 	case "gcp":
-		return fetchGCPRegionGroups(ctx)
+		return fetchGCPRegionGroups(ctx, accountAlias)
 	case "azure":
-		return fetchAzureRegionGroups(ctx)
+		return fetchAzureRegionGroups(ctx, accountAlias)
 	}
 	return nil
 }
 
 // fetchNodeGroups queries the provider API for available node/instance types.
 // region is used by AWS/GCP/Azure to filter region-specific offerings.
-func fetchNodeGroups(ctx context.Context, provider, region string) []optionGroup {
-	switch provider {
+// accountAlias selects which configured credentials to use.
+func fetchNodeGroups(ctx context.Context, providerName, region, accountAlias string) []optionGroup {
+	switch providerName {
 	case "civo":
-		return fetchCivoNodeGroups(ctx)
+		return fetchCivoNodeGroups(ctx, accountAlias)
 	case "aws":
-		return fetchAWSNodeGroups(ctx, region)
+		return fetchAWSNodeGroups(ctx, region, accountAlias)
 	case "gcp":
-		return fetchGCPNodeGroups(ctx, region)
+		return fetchGCPNodeGroups(ctx, region, accountAlias)
 	case "azure":
-		return fetchAzureNodeGroups(ctx, region)
+		return fetchAzureNodeGroups(ctx, region, accountAlias)
 	}
 	return nil
 }
@@ -83,12 +86,26 @@ func newProviderConfigManager() *providerconfig.Manager {
 
 // ── Civo ──────────────────────────────────────────────────────────────────────
 
-func getCivoClient() (*civogo.Client, error) {
+// getCivoClient returns a civogo client. If orgName is non-empty it tries that
+// org's token first, then falls back to the first configured org, then CIVO_TOKEN.
+func getCivoClient(orgName string) (*civogo.Client, error) {
 	if pcm := newProviderConfigManager(); pcm != nil {
-		if cfg, err := pcm.LoadCivoConfig(); err == nil && len(cfg.Organizations) > 0 {
-			if token, err := pcm.GetCivoToken(cfg.Organizations[0].Name); err == nil && token != "" {
+		// Try the named org first
+		if orgName != "" {
+			if token, err := pcm.GetCivoToken(orgName); err == nil && token != "" {
 				if client, err := civogo.NewClient(token, ""); err == nil {
 					return client, nil
+				}
+			}
+		}
+		// Fall back to first configured org
+		if cfg, err := pcm.LoadCivoConfig(); err == nil && len(cfg.Organizations) > 0 {
+			firstName := cfg.Organizations[0].Name
+			if firstName != orgName { // avoid re-trying the same org
+				if token, err := pcm.GetCivoToken(firstName); err == nil && token != "" {
+					if client, err := civogo.NewClient(token, ""); err == nil {
+						return client, nil
+					}
 				}
 			}
 		}
@@ -101,8 +118,8 @@ func getCivoClient() (*civogo.Client, error) {
 	return civogo.NewClient(token, "")
 }
 
-func fetchCivoRegionGroups(ctx context.Context) []optionGroup {
-	client, err := getCivoClient()
+func fetchCivoRegionGroups(ctx context.Context, orgName string) []optionGroup {
+	client, err := getCivoClient(orgName)
 	if err != nil {
 		return nil
 	}
@@ -122,8 +139,8 @@ func fetchCivoRegionGroups(ctx context.Context) []optionGroup {
 	return groupsFromMap(byCountry)
 }
 
-func fetchCivoNodeGroups(ctx context.Context) []optionGroup {
-	client, err := getCivoClient()
+func fetchCivoNodeGroups(ctx context.Context, orgName string) []optionGroup {
+	client, err := getCivoClient(orgName)
 	if err != nil {
 		return nil
 	}
@@ -165,25 +182,33 @@ func fetchCivoNodeGroups(ctx context.Context) []optionGroup {
 
 // ── AWS ───────────────────────────────────────────────────────────────────────
 
-func getAWSEC2Client(ctx context.Context, region string) (*ec2.Client, error) {
+func getAWSEC2Client(ctx context.Context, region, accountAlias string) (*ec2.Client, error) {
 	if region == "" {
 		region = "us-east-1"
 	}
-	var opts []func(*awsconfig.LoadOptions) error
-	opts = append(opts, awsconfig.WithRegion(region))
+	var loadOpts []func(*awsconfig.LoadOptions) error
+	loadOpts = append(loadOpts, awsconfig.WithRegion(region))
 
 	if pcm := newProviderConfigManager(); pcm != nil {
-		if accounts, err := pcm.ListAWSAccounts(); err == nil && len(accounts) > 0 {
-			keyID, secret, token, err := pcm.GetAWSCredentials(accounts[0].Name)
+		// Try the named account first, then first configured account
+		tryAccount := func(name string) bool {
+			keyID, secret, token, err := pcm.GetAWSCredentials(name)
 			if err == nil && keyID != "" {
-				opts = append(opts, awsconfig.WithCredentialsProvider(
+				loadOpts = append(loadOpts, awsconfig.WithCredentialsProvider(
 					awscredentials.NewStaticCredentialsProvider(keyID, secret, token),
 				))
+				return true
 			}
+			return false
+		}
+		if accountAlias != "" {
+			tryAccount(accountAlias)
+		} else if accounts, err := pcm.ListAWSAccounts(); err == nil && len(accounts) > 0 {
+			tryAccount(accounts[0].Name)
 		}
 	}
 
-	cfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, loadOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -214,8 +239,8 @@ func awsRegionContinent(name string) string {
 	}
 }
 
-func fetchAWSRegionGroups(ctx context.Context) []optionGroup {
-	client, err := getAWSEC2Client(ctx, "us-east-1")
+func fetchAWSRegionGroups(ctx context.Context, accountAlias string) []optionGroup {
+	client, err := getAWSEC2Client(ctx, "us-east-1", accountAlias)
 	if err != nil {
 		return nil
 	}
@@ -253,11 +278,11 @@ func awsInstanceFamily(name string) string {
 	return parts[0]
 }
 
-func fetchAWSNodeGroups(ctx context.Context, region string) []optionGroup {
+func fetchAWSNodeGroups(ctx context.Context, region, accountAlias string) []optionGroup {
 	if region == "" {
 		region = "us-east-1"
 	}
-	client, err := getAWSEC2Client(ctx, region)
+	client, err := getAWSEC2Client(ctx, region, accountAlias)
 	if err != nil {
 		return nil
 	}
@@ -290,25 +315,33 @@ func fetchAWSNodeGroups(ctx context.Context, region string) []optionGroup {
 
 // ── GCP ───────────────────────────────────────────────────────────────────────
 
-// getFirstGCPInfo returns (credentialsJSON, projectID) from the first configured
-// GCP project, falling back to ("", "") so ADC is used.
-func getFirstGCPInfo() (credJSON, projectID string) {
+// getGCPInfo returns (credentialsJSON, projectID) for the given project alias.
+// If projectAlias is empty, falls back to the first configured project.
+// Falls back to ("", "") so ADC is used when nothing is configured.
+func getGCPInfo(projectAlias string) (credJSON, projectID string) {
 	if pcm := newProviderConfigManager(); pcm != nil {
+		tryProject := func(name string) bool {
+			id, err := pcm.GetGCPProjectID(name)
+			if err != nil || id == "" {
+				return false
+			}
+			projectID = id
+			j, _ := pcm.GetGCPCredentialsJSON(name)
+			credJSON = j
+			return true
+		}
+		if projectAlias != "" && tryProject(projectAlias) {
+			return
+		}
 		if projects, err := pcm.ListGCPProjects(); err == nil && len(projects) > 0 {
-			name := projects[0].Name
-			if id, err := pcm.GetGCPProjectID(name); err == nil {
-				projectID = id
-			}
-			if j, err := pcm.GetGCPCredentialsJSON(name); err == nil {
-				credJSON = j
-			}
+			tryProject(projects[0].Name)
 		}
 	}
 	return
 }
 
-func getGCPComputeService(ctx context.Context) (*compute.Service, string, error) {
-	credJSON, projectID := getFirstGCPInfo()
+func getGCPComputeService(ctx context.Context, projectAlias string) (*compute.Service, string, error) {
+	credJSON, projectID := getGCPInfo(projectAlias)
 	var svc *compute.Service
 	var err error
 	if credJSON != "" {
@@ -344,8 +377,8 @@ func gcpRegionContinent(name string) string {
 	}
 }
 
-func fetchGCPRegionGroups(ctx context.Context) []optionGroup {
-	svc, projectID, err := getGCPComputeService(ctx)
+func fetchGCPRegionGroups(ctx context.Context, projectAlias string) []optionGroup {
+	svc, projectID, err := getGCPComputeService(ctx, projectAlias)
 	if err != nil || projectID == "" {
 		return nil
 	}
@@ -375,8 +408,8 @@ func gcpMachineFamily(name string) string {
 	return strings.ToUpper(parts[0])
 }
 
-func fetchGCPNodeGroups(ctx context.Context, region string) []optionGroup {
-	svc, projectID, err := getGCPComputeService(ctx)
+func fetchGCPNodeGroups(ctx context.Context, region, projectAlias string) []optionGroup {
+	svc, projectID, err := getGCPComputeService(ctx, projectAlias)
 	if err != nil || projectID == "" {
 		return nil
 	}
@@ -405,19 +438,35 @@ func fetchGCPNodeGroups(ctx context.Context, region string) []optionGroup {
 
 // ── Azure ─────────────────────────────────────────────────────────────────────
 
-// getFirstAzureInfo returns (credential, subscriptionID) using the first configured
-// Azure subscription. Falls back to DefaultAzureCredential.
-func getFirstAzureInfo() (cred *azidentity.ClientSecretCredential, subscriptionID string, defCred *azidentity.DefaultAzureCredential) {
+// getAzureInfo returns (credential, subscriptionID) for the given subscription alias.
+// If subAlias is empty, falls back to the first configured subscription, then DefaultAzureCredential.
+func getAzureInfo(subAlias string) (cred *azidentity.ClientSecretCredential, subscriptionID string, defCred *azidentity.DefaultAzureCredential) {
 	if pcm := newProviderConfigManager(); pcm != nil {
-		if subs, err := pcm.ListAzureSubscriptions(); err == nil && len(subs) > 0 {
-			name := subs[0].Name
-			if id, err := pcm.GetAzureSubscriptionID(name); err == nil {
-				subscriptionID = id
+		trySubscription := func(name string) bool {
+			id, err := pcm.GetAzureSubscriptionID(name)
+			if err != nil || id == "" {
+				return false
 			}
-			if tenantID, clientID, clientSecret, err := pcm.GetAzureCredentials(name); err == nil {
+			subscriptionID = id
+			tenantID, clientID, clientSecret, err := pcm.GetAzureCredentials(name)
+			if err == nil {
 				c, err := azidentity.NewClientSecretCredential(tenantID, clientID, clientSecret, nil)
 				if err == nil {
 					cred = c
+					return true
+				}
+			}
+			return true // got subID even if cred failed
+		}
+		if subAlias != "" && trySubscription(subAlias) {
+			if cred != nil {
+				return
+			}
+		}
+		if subs, err := pcm.ListAzureSubscriptions(); err == nil && len(subs) > 0 {
+			if subs[0].Name != subAlias {
+				trySubscription(subs[0].Name)
+				if cred != nil {
 					return
 				}
 			}
@@ -429,8 +478,8 @@ func getFirstAzureInfo() (cred *azidentity.ClientSecretCredential, subscriptionI
 	return
 }
 
-func fetchAzureRegionGroups(ctx context.Context) []optionGroup {
-	cred, subID, defCred := getFirstAzureInfo()
+func fetchAzureRegionGroups(ctx context.Context, subAlias string) []optionGroup {
+	cred, subID, defCred := getAzureInfo(subAlias)
 	if subID == "" {
 		return nil
 	}
@@ -495,11 +544,11 @@ func azureVMFamily(name string) string {
 	return family
 }
 
-func fetchAzureNodeGroups(ctx context.Context, location string) []optionGroup {
+func fetchAzureNodeGroups(ctx context.Context, location, subAlias string) []optionGroup {
 	if location == "" {
 		return nil
 	}
-	cred, subID, defCred := getFirstAzureInfo()
+	cred, subID, defCred := getAzureInfo(subAlias)
 	if subID == "" {
 		return nil
 	}
