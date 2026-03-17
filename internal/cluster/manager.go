@@ -38,10 +38,6 @@ func (m *Manager) DetermineAction(ctx context.Context, desired types.ClusterDefi
 	log.Printf("Found existing cluster %s with ID %s", desired.Metadata.Name, cluster.ID)
 
 	if cluster.Status == "ACTIVE" {
-		if m.needsUpdate(cluster, desired) {
-			log.Printf("Cluster %s configuration differs from desired state, will update", desired.Metadata.Name)
-			return types.ActionUpdate
-		}
 		log.Printf("Cluster %s is up to date", desired.Metadata.Name)
 		return types.ActionNone
 	}
@@ -53,11 +49,6 @@ func (m *Manager) DetermineAction(ctx context.Context, desired types.ClusterDefi
 
 	log.Printf("Cluster %s is in %s state, no action needed", desired.Metadata.Name, cluster.Status)
 	return types.ActionNone
-}
-
-// needsUpdate checks if cluster needs to be updated
-func (m *Manager) needsUpdate(actual *provider.Cluster, desired types.ClusterDefinition) bool {
-	return false
 }
 
 // FindByName finds a cluster by name
