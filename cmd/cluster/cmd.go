@@ -1,80 +1,17 @@
-package cmd
+package cluster
 
 import (
-	gocontext "context"
-	"fmt"
 	"log"
-	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
 
-	"hyve/internal/credentials"
-	"hyve/internal/repository"
-	"hyve/internal/state"
+	"hyve/cmd/shared"
 	"hyve/internal/types"
 )
 
-// syncRepoState performs a git pull to synchronise the local repository with
-// the remote before any operation that reads or writes repository state.
-// It is non-fatal: if the sync cannot be completed (e.g. no network), a
-// warning is logged and the caller continues with local state.
-func syncRepoState(ctx gocontext.Context) {
-	repoMgr, err := repository.NewManager()
-	if err != nil {
-		log.Printf("⚠️  Skipping git sync: failed to open repository manager: %v", err)
-		return
-	}
-	defer repoMgr.Close()
-
-	currentRepo, err := repoMgr.GetCurrentRepository()
-	if err != nil {
-		// No repository configured — nothing to sync.
-		return
-	}
-
-	authUsername, authToken := getAuthCredentials(currentRepo)
-	stateMgr, err := state.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
-	if err != nil {
-		log.Printf("⚠️  Skipping git sync: failed to create state manager: %v", err)
-		return
-	}
-
-	if err := stateMgr.InitializeGitRepo(ctx); err != nil {
-		log.Printf("⚠️  Skipping git sync: failed to initialise git repo: %v", err)
-		return
-	}
-
-	if err := stateMgr.SyncWithRemote(ctx); err != nil {
-		log.Printf("⚠️  Skipping git sync: failed to sync with remote: %v", err)
-		return
-	}
-
-	log.Println("🔄 Repository synchronised")
-}
-
-// ValidProviders is the list of supported cloud providers
-var ValidProviders = []string{"civo", "aws", "gcp", "azure"}
-
-// isValidProvider checks if the given provider is in the list of valid providers
-func isValidProvider(provider string) bool {
-	provider = strings.ToLower(provider)
-	for _, p := range ValidProviders {
-		if p == provider {
-			return true
-		}
-	}
-	return false
-}
-
-// validProvidersString returns a formatted string of valid providers for error messages
-func validProvidersString() string {
-	return strings.Join(ValidProviders, ", ")
-}
-
-var clusterCmd = &cobra.Command{
+// Cmd is the cluster command.
+var Cmd = &cobra.Command{
 	Use:   "cluster",
 	Short: "Manage clusters",
 	Long:  "Commands to add, modify, or delete cluster configurations",
@@ -101,7 +38,6 @@ Use --account-name, --project-name, --subscription-name, or --org-name to specif
 		nodes, _ := cmd.Flags().GetStringSlice("nodes")
 		clusterType, _ := cmd.Flags().GetString("cluster-type")
 
-		// cluster-type is only meaningful for the Civo provider
 		if strings.ToLower(providerName) != "civo" {
 			if cmd.Flags().Changed("cluster-type") {
 				log.Printf("⚠️  --cluster-type is only supported for the Civo provider and will be ignored for '%s'", providerName)
@@ -109,26 +45,21 @@ Use --account-name, --project-name, --subscription-name, or --org-name to specif
 			clusterType = ""
 		}
 
-		// Provider-specific account/project override flags
 		accountName, _ := cmd.Flags().GetString("account-name")
 		projectName, _ := cmd.Flags().GetString("project-name")
 		subscriptionName, _ := cmd.Flags().GetString("subscription-name")
 		orgName, _ := cmd.Flags().GetString("org-name")
 
-		// AWS-specific flags
 		vpcName, _ := cmd.Flags().GetString("vpc-name")
 		eksRoleName, _ := cmd.Flags().GetString("eks-role-name")
 		nodeRoleName, _ := cmd.Flags().GetString("node-role-name")
 
-		// Validate provider
-		if !isValidProvider(providerName) {
-			log.Fatalf("Invalid provider '%s'. Valid providers are: %s", providerName, validProvidersString())
+		if !shared.IsValidProvider(providerName) {
+			log.Fatalf("Invalid provider '%s'. Valid providers are: %s", providerName, shared.ValidProvidersString())
 		}
 
-		// Normalize provider to lowercase
 		providerName = strings.ToLower(providerName)
 
-		// Validate required account/project flags per provider
 		switch providerName {
 		case "aws":
 			if accountName == "" {
@@ -157,11 +88,10 @@ Use --account-name, --project-name, --subscription-name, or --org-name to specif
 			}
 		}
 
-		// Parse --node-group flags
 		nodeGroupStrs, _ := cmd.Flags().GetStringArray("node-group")
 		var nodeGroups []types.NodeGroup
 		for _, s := range nodeGroupStrs {
-			ng, err := parseNodeGroup(s)
+			ng, err := shared.ParseNodeGroup(s)
 			if err != nil {
 				log.Fatalf("Invalid --node-group value '%s': %v", s, err)
 			}
@@ -186,11 +116,10 @@ Supported cloud providers (if changing provider):
 	Run: func(cmd *cobra.Command, args []string) {
 		clusterName := args[0]
 
-		// Validate provider if it's being changed
 		if cmd.Flags().Changed("provider") {
 			providerName, _ := cmd.Flags().GetString("provider")
-			if !isValidProvider(providerName) {
-				log.Fatalf("Invalid provider '%s'. Valid providers are: %s", providerName, validProvidersString())
+			if !shared.IsValidProvider(providerName) {
+				log.Fatalf("Invalid provider '%s'. Valid providers are: %s", providerName, shared.ValidProvidersString())
 			}
 		}
 
@@ -207,10 +136,6 @@ Default behaviour:
   1. Remove the cluster configuration YAML file
   2. Commit and push the removal to the state repository
   3. Run reconciliation
-
-  In CI/CD mode with strictDelete enabled the push triggers the pipeline,
-  which then deletes the cloud cluster. In local mode with strictDelete enabled
-  the local reconcile deletes the cloud cluster immediately.
 
 Use --force to delete the cluster from the cloud provider immediately before
 removing the configuration file. This is useful when you want to bypass CI/CD
@@ -242,17 +167,14 @@ Note: This command does not remove configuration files or run reconciliation.`,
 		providerName, _ := cmd.Flags().GetString("provider")
 		projectName, _ := cmd.Flags().GetString("project-name")
 
-		// Default to civo for backward compatibility
 		if providerName == "" {
 			providerName = "civo"
 		}
 
-		// Validate provider
-		if !isValidProvider(providerName) {
-			log.Fatalf("Invalid provider '%s'. Valid providers are: %s", providerName, validProvidersString())
+		if !shared.IsValidProvider(providerName) {
+			log.Fatalf("Invalid provider '%s'. Valid providers are: %s", providerName, shared.ValidProvidersString())
 		}
 
-		// Validate project-name is provided for GCP provider
 		if providerName == "gcp" && projectName == "" {
 			log.Fatalf("GCP provider requires --project-name flag. Use 'hyve config gcp project list' to see available projects.")
 		}
@@ -308,13 +230,11 @@ func init() {
 	addCmd.Flags().StringSliceP("nodes", "n", []string{"g4s.kube.small"}, "Node sizes")
 	addCmd.Flags().StringP("cluster-type", "t", "k3s", "Type of Kubernetes cluster")
 
-	// Provider account/project override flags (uses current context if not specified)
 	addCmd.Flags().StringP("account-name", "a", "", "AWS account name (required for AWS provider)")
 	addCmd.Flags().String("project-name", "", "GCP project name (required for GCP provider)")
 	addCmd.Flags().StringP("subscription-name", "s", "", "Azure subscription name (required for Azure provider)")
 	addCmd.Flags().StringP("org-name", "o", "", "Civo organization name (required for Civo provider)")
 
-	// AWS-specific flags
 	addCmd.Flags().StringP("vpc-name", "v", "", "AWS VPC name alias (required for AWS provider)")
 	addCmd.Flags().StringP("eks-role-name", "e", "", "AWS EKS IAM role name alias (required for AWS provider)")
 	addCmd.Flags().String("node-role-name", "", "AWS EKS node IAM role name alias (required for AWS provider)")
@@ -346,137 +266,11 @@ func init() {
 	importCmd.Flags().StringP("eks-role-name", "e", "", "AWS EKS IAM role name alias")
 	importCmd.Flags().String("node-role-name", "", "AWS EKS node IAM role name alias")
 
-	clusterCmd.AddCommand(addCmd)
-	clusterCmd.AddCommand(importCmd)
-	clusterCmd.AddCommand(releaseCmd)
-	clusterCmd.AddCommand(listCmd)
-	clusterCmd.AddCommand(modifyCmd)
-	clusterCmd.AddCommand(deleteCmd)
-	clusterCmd.AddCommand(forceDeleteCmd)
-}
-
-// createStateManager creates state manager from current repository
-func createStateManager(ctx gocontext.Context) (*state.Manager, string) {
-	repoMgr, err := repository.NewManager()
-	if err != nil {
-		log.Fatalf("Failed to create repository manager: %v", err)
-	}
-	defer repoMgr.Close()
-
-	currentRepo, err := repoMgr.GetCurrentRepository()
-	if err != nil {
-		log.Fatalf("❌ No Git repository configured. Hyve requires a Git repository for state management.\n\n" +
-			"Add a Git repository with: hyve git add <name> --repo-url <url>")
-	}
-	log.Printf("Using Git repository: %s", currentRepo.RepoURL)
-
-	credsMgr, err := credentials.NewManager()
-	var authToken string
-	var authUsername = currentRepo.Username
-	if err == nil {
-		defer credsMgr.Close()
-		if creds, _ := credsMgr.GetCredentials(); creds != nil {
-			if password, err := creds.GetPassword(); err == nil && password != "" {
-				authToken = password
-				if authUsername == "" {
-					authUsername = creds.Username
-				}
-			}
-		}
-	}
-	if authToken == "" {
-		authToken = os.Getenv("HYVE_GIT_TOKEN")
-	}
-
-	stateMgr, err := state.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
-	if err != nil {
-		log.Fatalf("Failed to create state manager: %v", err)
-	}
-	if err := stateMgr.InitializeGitRepo(ctx); err != nil {
-		log.Fatalf("Failed to initialize Git repository: %v", err)
-	}
-	if err := stateMgr.SyncWithRemote(ctx); err != nil {
-		log.Fatalf("Failed to sync with remote repository: %v", err)
-	}
-	log.Println("Git repository synchronized")
-	stateDir := filepath.Join(currentRepo.LocalPath, "clusters")
-	return stateMgr, stateDir
-}
-
-// commitStateChanges commits changes to Git repository and pushes to remote
-func commitStateChanges(ctx gocontext.Context, stateMgr *state.Manager, message string) {
-	log.Println("📝 Committing and pushing changes to Git repository...")
-
-	if err := stateMgr.CommitAndPush(ctx, message); err != nil {
-		log.Printf("❌ Failed to commit and push: %v", err)
-
-		// Provide helpful hints based on error type
-		if strings.Contains(err.Error(), "failed to push") {
-			log.Println("💡 Changes were committed locally but push failed")
-			log.Println("💡 Check your Git credentials and network connection")
-			log.Println("💡 You can manually push with: cd <repo-path> && git push")
-		} else if strings.Contains(err.Error(), "failed to commit") {
-			log.Println("💡 Commit operation failed - changes may still be in working directory")
-		}
-		return
-	}
-
-	log.Println("✅ Changes committed and pushed to remote repository successfully")
-}
-
-// parseNodeGroup parses a node group spec string into a types.NodeGroup.
-// Format: name=workers,type=t3.medium,count=3[,min=1,max=5,disk=50,spot=true,mode=System]
-func parseNodeGroup(s string) (types.NodeGroup, error) {
-	ng := types.NodeGroup{}
-	for _, part := range strings.Split(s, ",") {
-		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
-		if len(kv) != 2 {
-			continue
-		}
-		k, v := strings.TrimSpace(kv[0]), strings.TrimSpace(kv[1])
-		switch k {
-		case "name":
-			ng.Name = v
-		case "type", "instanceType":
-			ng.InstanceType = v
-		case "count":
-			n, err := strconv.Atoi(v)
-			if err != nil {
-				return ng, fmt.Errorf("invalid count '%s': %w", v, err)
-			}
-			ng.Count = n
-		case "min":
-			n, err := strconv.Atoi(v)
-			if err != nil {
-				return ng, fmt.Errorf("invalid min '%s': %w", v, err)
-			}
-			ng.MinCount = n
-		case "max":
-			n, err := strconv.Atoi(v)
-			if err != nil {
-				return ng, fmt.Errorf("invalid max '%s': %w", v, err)
-			}
-			ng.MaxCount = n
-		case "disk":
-			n, err := strconv.Atoi(v)
-			if err != nil {
-				return ng, fmt.Errorf("invalid disk '%s': %w", v, err)
-			}
-			ng.DiskSize = n
-		case "spot":
-			ng.Spot = strings.EqualFold(v, "true")
-		case "mode":
-			ng.Mode = v
-		}
-	}
-	if ng.Name == "" {
-		return ng, fmt.Errorf("node group must have a name (name=<value>)")
-	}
-	if ng.InstanceType == "" {
-		return ng, fmt.Errorf("node group '%s' must have a type (type=<value>)", ng.Name)
-	}
-	if ng.Count < 1 {
-		ng.Count = 1
-	}
-	return ng, nil
+	Cmd.AddCommand(addCmd)
+	Cmd.AddCommand(importCmd)
+	Cmd.AddCommand(releaseCmd)
+	Cmd.AddCommand(listCmd)
+	Cmd.AddCommand(modifyCmd)
+	Cmd.AddCommand(deleteCmd)
+	Cmd.AddCommand(forceDeleteCmd)
 }

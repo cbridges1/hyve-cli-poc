@@ -1,4 +1,4 @@
-package cmd
+package cluster
 
 import (
 	gocontext "context"
@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
+	"hyve/cmd/shared"
 	"hyve/internal/config"
 	"hyve/internal/providerconfig"
 	"hyve/internal/repository"
@@ -19,7 +20,7 @@ import (
 
 func addClusterFromCLI(clusterName, region, providerName string, nodes []string, nodeGroups []types.NodeGroup, clusterType, accountName, projectName, subscriptionName, orgName, vpcName, eksRoleName, nodeRoleName string) {
 	ctx := gocontext.Background()
-	stateMgr, stateDir := createStateManager(ctx)
+	stateMgr, stateDir := shared.CreateStateManager(ctx)
 
 	if err := os.MkdirAll(stateDir, 0755); err != nil {
 		log.Fatalf("Failed to create state directory: %v", err)
@@ -34,7 +35,6 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 	pcMgr := providerconfig.NewManager(filepath.Dir(stateDir))
 	var err error
 
-	// Resolve GCP project alias to project ID
 	var gcpProjectID string
 	if providerName == "gcp" && projectName != "" {
 		gcpProjectID, err = pcMgr.GetGCPProjectID(projectName)
@@ -45,10 +45,8 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 		log.Printf("Using GCP project '%s' (ID: %s)", projectName, gcpProjectID)
 	}
 
-	// Resolve AWS aliases
 	var awsAccountID, awsVPCID, awsEKSRoleARN, awsNodeRoleARN string
 	if providerName == "aws" {
-		// Resolve AWS account alias
 		awsAccountID, err = pcMgr.GetAWSAccountID(accountName)
 		if err != nil {
 			log.Fatalf("AWS account alias '%s' not found in repository configuration.\n"+
@@ -56,7 +54,6 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 		}
 		log.Printf("Using AWS account '%s' (ID: %s)", accountName, awsAccountID)
 
-		// Resolve VPC alias (required for AWS)
 		if vpcName != "" {
 			awsVPCID, err = pcMgr.GetAWSVPCID(accountName, vpcName)
 			if err != nil {
@@ -68,7 +65,6 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 			log.Printf("Using AWS VPC '%s' (ID: %s)", vpcName, awsVPCID)
 		}
 
-		// Resolve EKS role alias (required for AWS)
 		if eksRoleName != "" {
 			awsEKSRoleARN, err = pcMgr.GetAWSEKSRoleARN(accountName, eksRoleName)
 			if err != nil {
@@ -80,7 +76,6 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 			log.Printf("Using AWS EKS role '%s' (ARN: %s)", eksRoleName, awsEKSRoleARN)
 		}
 
-		// Resolve node role alias (required for AWS)
 		if nodeRoleName != "" {
 			awsNodeRoleARN, err = pcMgr.GetAWSNodeRoleARN(accountName, nodeRoleName)
 			if err != nil {
@@ -93,7 +88,6 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 		}
 	}
 
-	// ClusterType is only meaningful for Civo
 	if providerName != "civo" {
 		clusterType = ""
 	}
@@ -106,26 +100,22 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 			Region: region,
 		},
 		Spec: types.ClusterSpec{
-			Provider:    providerName,
-			Nodes:       nodes,
-			NodeGroups:  nodeGroups,
-			ClusterType: clusterType,
-			// GCP-specific
-			GCPProject:   projectName,
-			GCPProjectID: gcpProjectID,
-			// AWS-specific
-			AWSAccount:     accountName,
-			AWSAccountID:   awsAccountID,
-			AWSVPCName:     vpcName,
-			AWSVPCID:       awsVPCID,
-			AWSEKSRole:     eksRoleName,
-			AWSEKSRoleARN:  awsEKSRoleARN,
-			AWSNodeRole:    nodeRoleName,
-			AWSNodeRoleARN: awsNodeRoleARN,
-			// Azure-specific
+			Provider:          providerName,
+			Nodes:             nodes,
+			NodeGroups:        nodeGroups,
+			ClusterType:       clusterType,
+			GCPProject:        projectName,
+			GCPProjectID:      gcpProjectID,
+			AWSAccount:        accountName,
+			AWSAccountID:      awsAccountID,
+			AWSVPCName:        vpcName,
+			AWSVPCID:          awsVPCID,
+			AWSEKSRole:        eksRoleName,
+			AWSEKSRoleARN:     awsEKSRoleARN,
+			AWSNodeRole:       nodeRoleName,
+			AWSNodeRoleARN:    awsNodeRoleARN,
 			AzureSubscription: subscriptionName,
-			// Civo-specific
-			CivoOrganization: orgName,
+			CivoOrganization:  orgName,
 			Ingress: types.IngressSpec{
 				Enabled:      true,
 				LoadBalancer: true,
@@ -161,24 +151,23 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 		log.Printf("  AWS Node Role: %s", nodeRoleName)
 	}
 
-	// Commit changes to Git if configured
-	commitStateChanges(ctx, stateMgr, fmt.Sprintf("Add cluster %s", clusterName))
+	shared.CommitStateChanges(ctx, stateMgr, fmt.Sprintf("Add cluster %s", clusterName))
 
 	log.Printf("Exporting cluster information...")
 	configMgr := config.NewManager()
 	if apiKey := configMgr.GetCivoToken(clusterDef.Spec.CivoOrganization); apiKey != "" {
-		err := exportClusterInfo(ctx, apiKey, clusterDef)
+		err := shared.ExportClusterInfo(ctx, apiKey, clusterDef)
 		if err != nil {
 			log.Printf("Warning: Failed to export cluster info: %v", err)
 		}
 	}
 
-	runReconciliation("")
+	shared.RunReconciliation("")
 }
 
 func modifyClusterFromCLI(cmd *cobra.Command, clusterName string) {
 	ctx := gocontext.Background()
-	stateMgr, stateDir := createStateManager(ctx)
+	stateMgr, stateDir := shared.CreateStateManager(ctx)
 	filePath := filepath.Join(stateDir, clusterName+".yaml")
 
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
@@ -219,7 +208,7 @@ func modifyClusterFromCLI(cmd *cobra.Command, clusterName string) {
 		nodeGroupStrs, _ := cmd.Flags().GetStringArray("node-group")
 		var nodeGroups []types.NodeGroup
 		for _, s := range nodeGroupStrs {
-			ng, err := parseNodeGroup(s)
+			ng, err := shared.ParseNodeGroup(s)
 			if err != nil {
 				log.Fatalf("Invalid --node-group value '%s': %v", s, err)
 			}
@@ -244,13 +233,12 @@ func modifyClusterFromCLI(cmd *cobra.Command, clusterName string) {
 	log.Printf("  Nodes: %v", clusterDef.Spec.Nodes)
 	log.Printf("  Cluster Type: %s", clusterDef.Spec.ClusterType)
 
-	// Commit changes to Git if configured
-	commitStateChanges(ctx, stateMgr, fmt.Sprintf("Modify cluster %s", clusterName))
+	shared.CommitStateChanges(ctx, stateMgr, fmt.Sprintf("Modify cluster %s", clusterName))
 
 	log.Printf("Exporting cluster information...")
 	configMgr := config.NewManager()
 	if apiKey := configMgr.GetCivoToken(clusterDef.Spec.CivoOrganization); apiKey != "" {
-		err := exportClusterInfo(ctx, apiKey, clusterDef)
+		err := shared.ExportClusterInfo(ctx, apiKey, clusterDef)
 		if err != nil {
 			log.Printf("Warning: Failed to export cluster info: %v", err)
 		}
@@ -258,7 +246,6 @@ func modifyClusterFromCLI(cmd *cobra.Command, clusterName string) {
 }
 
 func listClusters() {
-	// Get local path from current repository
 	listRepoMgr, err := repository.NewManager()
 	if err != nil {
 		log.Fatalf("Failed to create repository manager: %v", err)
@@ -270,17 +257,14 @@ func listClusters() {
 		log.Fatalf("No Git repository configured. Add one with: hyve git add <name> --repo-url <url>")
 	}
 
-	// Read cluster definitions from the repository's clusters directory
 	clustersDir := filepath.Join(listCurrentRepo.LocalPath, "clusters")
 
-	// Check if clusters directory exists
 	if _, err := os.Stat(clustersDir); os.IsNotExist(err) {
 		log.Println("❌ No clusters found")
 		log.Println("\n💡 Run 'hyve cluster add <name>' to create a cluster")
 		return
 	}
 
-	// Read all YAML files from the clusters directory
 	entries, err := os.ReadDir(clustersDir)
 	if err != nil {
 		log.Fatalf("Failed to read clusters directory: %v", err)
@@ -292,7 +276,6 @@ func listClusters() {
 			continue
 		}
 
-		// Only process .yaml and .yml files
 		name := entry.Name()
 		if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
 			continue
@@ -311,7 +294,6 @@ func listClusters() {
 			continue
 		}
 
-		// Only include files with Kind: Cluster
 		if clusterDef.Kind == "Cluster" {
 			clusters = append(clusters, clusterDef)
 		}

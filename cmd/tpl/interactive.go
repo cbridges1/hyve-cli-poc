@@ -1,4 +1,4 @@
-package cmd
+package tpl
 
 import (
 	"context"
@@ -7,13 +7,20 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/huh"
+
+	"hyve/cmd/shared"
 	"hyve/internal/types"
 )
+
+// RunInteractive runs the interactive template menu.
+func RunInteractive() error {
+	return runInteractiveTemplate()
+}
 
 func runInteractiveTemplate() error {
 	for {
 		var action string
-		err := newForm(
+		err := shared.NewForm(
 			huh.NewGroup(
 				huh.NewSelect[string]().
 					Title("Template — what would you like to do?").
@@ -35,27 +42,27 @@ func runInteractiveTemplate() error {
 
 		switch action {
 		case "back":
-			return errBack
+			return shared.ErrBack
 		case "list":
 			listTemplates()
 		case "create":
-			if err := interactiveTemplateCreate(); err != nil && err != errBack {
+			if err := interactiveTemplateCreate(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		case "execute":
-			if err := interactiveTemplateExecute(); err != nil && err != errBack {
+			if err := interactiveTemplateExecute(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		case "show":
-			if err := interactiveTemplateShow(); err != nil && err != errBack {
+			if err := interactiveTemplateShow(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		case "validate":
-			if err := interactiveTemplateValidate(); err != nil && err != errBack {
+			if err := interactiveTemplateValidate(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		case "delete":
-			if err := interactiveTemplateDelete(); err != nil && err != errBack {
+			if err := interactiveTemplateDelete(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		}
@@ -74,7 +81,7 @@ func interactiveTemplateCreate() error {
 		onDestroyNames []string
 	)
 
-	err := newForm(
+	err := shared.NewForm(
 		huh.NewGroup(
 			huh.NewInput().Title("Template name").Placeholder("my-template").Value(&name),
 			huh.NewInput().Title("Description (optional)").Value(&description),
@@ -94,14 +101,14 @@ func interactiveTemplateCreate() error {
 		return err
 	}
 	if provider == "back" {
-		return errBack
+		return shared.ErrBack
 	}
 
 	ctx := context.Background()
-	if err := selectFromGroups("Region", fetchRegionGroups(ctx, provider, ""), "us-east-1", &region); err != nil {
+	if err := shared.SelectFromGroups("Region", shared.FetchRegionGroups(ctx, provider, ""), "us-east-1", &region); err != nil {
 		return err
 	}
-	if err := selectFromGroups("Node size", fetchNodeGroups(ctx, provider, region, ""), "g4s.kube.medium", &nodesSizes); err != nil {
+	if err := shared.SelectFromGroups("Node size", shared.FetchNodeGroups(ctx, provider, region, ""), "g4s.kube.medium", &nodesSizes); err != nil {
 		return err
 	}
 
@@ -112,7 +119,7 @@ func interactiveTemplateCreate() error {
 		var ngName, ngCountStr, ngMinStr, ngMaxStr string
 		ngName = "default"
 		ngCountStr = "1"
-		err = newForm(
+		err = shared.NewForm(
 			huh.NewGroup(
 				huh.NewInput().
 					Title("Node group name").
@@ -152,7 +159,7 @@ func interactiveTemplateCreate() error {
 
 	// Cluster type is only applicable to Civo
 	if provider == "civo" {
-		err = newForm(
+		err = shared.NewForm(
 			huh.NewGroup(
 				huh.NewSelect[string]().
 					Title("Cluster type").
@@ -169,7 +176,7 @@ func interactiveTemplateCreate() error {
 	}
 
 	// Workflow attachment — optional last step
-	if wfNames := fetchWorkflowNames(); len(wfNames) > 0 {
+	if wfNames := shared.FetchWorkflowNames(); len(wfNames) > 0 {
 		makeOpts := func() []huh.Option[string] {
 			opts := make([]huh.Option[string], len(wfNames))
 			for i, wf := range wfNames {
@@ -177,7 +184,7 @@ func interactiveTemplateCreate() error {
 			}
 			return opts
 		}
-		err = newForm(
+		err = shared.NewForm(
 			huh.NewGroup(
 				huh.NewMultiSelect[string]().
 					Title("On-created workflows (optional — space to select, enter to confirm)").
@@ -202,12 +209,12 @@ func interactiveTemplateCreate() error {
 
 func interactiveTemplateExecute() error {
 	templateName := ""
-	if err := selectFromList("Template to execute", fetchTemplateNames(), &templateName); err != nil {
+	if err := shared.SelectFromList("Template to execute", shared.FetchTemplateNames(), &templateName); err != nil {
 		return err
 	}
 
 	var clusterName string
-	if err := newForm(
+	if err := shared.NewForm(
 		huh.NewGroup(
 			huh.NewInput().Title("New cluster name").Value(&clusterName),
 		),
@@ -219,12 +226,12 @@ func interactiveTemplateExecute() error {
 	// For any missing required fields, prompt the user.
 	var org, account, vpcName, eksRole, nodeRole, subscription, resourceGroup, project string
 
-	if tmpl := fetchTemplate(templateName); tmpl != nil {
+	if tmpl := shared.FetchTemplate(templateName); tmpl != nil {
 		switch strings.ToLower(tmpl.Spec.Provider) {
 		case "civo":
 			org = tmpl.Spec.CivoOrganization
 			if org == "" {
-				if err := selectFromList("Civo organization", fetchCivoOrgNames(), &org); err != nil && err != errBack {
+				if err := shared.SelectFromList("Civo organization", shared.FetchCivoOrgNames(), &org); err != nil && err != shared.ErrBack {
 					return err
 				}
 			}
@@ -232,25 +239,25 @@ func interactiveTemplateExecute() error {
 		case "aws":
 			account = tmpl.Spec.AWSAccount
 			if account == "" {
-				if err := selectFromList("AWS account alias", fetchAWSAccountNames(), &account); err != nil && err != errBack {
+				if err := shared.SelectFromList("AWS account alias", shared.FetchAWSAccountNames(), &account); err != nil && err != shared.ErrBack {
 					return err
 				}
 			}
 			vpcName = tmpl.Spec.AWSVPCName
 			if vpcName == "" {
-				if err := selectFromList("VPC alias", fetchAWSVPCNames(account), &vpcName); err != nil && err != errBack {
+				if err := shared.SelectFromList("VPC alias", shared.FetchAWSVPCNames(account), &vpcName); err != nil && err != shared.ErrBack {
 					return err
 				}
 			}
 			eksRole = tmpl.Spec.AWSEKSRole
 			if eksRole == "" {
-				if err := selectFromList("EKS role alias", fetchAWSEKSRoleNames(account), &eksRole); err != nil && err != errBack {
+				if err := shared.SelectFromList("EKS role alias", shared.FetchAWSEKSRoleNames(account), &eksRole); err != nil && err != shared.ErrBack {
 					return err
 				}
 			}
 			nodeRole = tmpl.Spec.AWSNodeRole
 			if nodeRole == "" {
-				if err := selectFromList("Node role alias", fetchAWSNodeRoleNames(account), &nodeRole); err != nil && err != errBack {
+				if err := shared.SelectFromList("Node role alias", shared.FetchAWSNodeRoleNames(account), &nodeRole); err != nil && err != shared.ErrBack {
 					return err
 				}
 			}
@@ -258,7 +265,7 @@ func interactiveTemplateExecute() error {
 		case "gcp":
 			project = tmpl.Spec.GCPProject
 			if project == "" {
-				if err := selectFromList("GCP project alias", fetchGCPProjectNames(), &project); err != nil && err != errBack {
+				if err := shared.SelectFromList("GCP project alias", shared.FetchGCPProjectNames(), &project); err != nil && err != shared.ErrBack {
 					return err
 				}
 			}
@@ -266,13 +273,13 @@ func interactiveTemplateExecute() error {
 		case "azure":
 			subscription = tmpl.Spec.AzureSubscription
 			if subscription == "" {
-				if err := selectFromList("Azure subscription alias", fetchAzureSubscriptionNames(), &subscription); err != nil && err != errBack {
+				if err := shared.SelectFromList("Azure subscription alias", shared.FetchAzureSubscriptionNames(), &subscription); err != nil && err != shared.ErrBack {
 					return err
 				}
 			}
 			resourceGroup = tmpl.Spec.AzureResourceGroup
 			if resourceGroup == "" {
-				if err := selectFromList("Azure resource group", fetchAzureResourceGroupNames(subscription), &resourceGroup); err != nil && err != errBack {
+				if err := shared.SelectFromList("Azure resource group", shared.FetchAzureResourceGroupNames(subscription), &resourceGroup); err != nil && err != shared.ErrBack {
 					return err
 				}
 			}
@@ -285,7 +292,7 @@ func interactiveTemplateExecute() error {
 
 func interactiveTemplateShow() error {
 	name := ""
-	if err := selectFromList("Template to show", fetchTemplateNames(), &name); err != nil {
+	if err := shared.SelectFromList("Template to show", shared.FetchTemplateNames(), &name); err != nil {
 		return err
 	}
 	showTemplate(name)
@@ -294,7 +301,7 @@ func interactiveTemplateShow() error {
 
 func interactiveTemplateValidate() error {
 	name := ""
-	if err := selectFromList("Template to validate", fetchTemplateNames(), &name); err != nil {
+	if err := shared.SelectFromList("Template to validate", shared.FetchTemplateNames(), &name); err != nil {
 		return err
 	}
 	validateTemplate(name)
@@ -303,12 +310,12 @@ func interactiveTemplateValidate() error {
 
 func interactiveTemplateDelete() error {
 	name := ""
-	if err := selectFromList("Template to delete", fetchTemplateNames(), &name); err != nil {
+	if err := shared.SelectFromList("Template to delete", shared.FetchTemplateNames(), &name); err != nil {
 		return err
 	}
 
 	var confirm bool
-	err := newForm(
+	err := shared.NewForm(
 		huh.NewGroup(
 			huh.NewConfirm().
 				Title(fmt.Sprintf("Delete template '%s'?", name)).

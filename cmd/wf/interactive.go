@@ -1,15 +1,22 @@
-package cmd
+package wf
 
 import (
 	"fmt"
 
 	"github.com/charmbracelet/huh"
+
+	"hyve/cmd/shared"
 )
+
+// RunInteractive runs the interactive workflow menu.
+func RunInteractive() error {
+	return runInteractiveWorkflow()
+}
 
 func runInteractiveWorkflow() error {
 	for {
 		var action string
-		err := newForm(
+		err := shared.NewForm(
 			huh.NewGroup(
 				huh.NewSelect[string]().
 					Title("Workflow — what would you like to do?").
@@ -31,27 +38,27 @@ func runInteractiveWorkflow() error {
 
 		switch action {
 		case "back":
-			return errBack
+			return shared.ErrBack
 		case "list":
 			listWorkflows()
 		case "create":
-			if err := interactiveWorkflowCreate(); err != nil && err != errBack {
+			if err := interactiveWorkflowCreate(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		case "run":
-			if err := interactiveWorkflowRun(); err != nil && err != errBack {
+			if err := interactiveWorkflowRun(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		case "show":
-			if err := interactiveWorkflowShow(); err != nil && err != errBack {
+			if err := interactiveWorkflowShow(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		case "validate":
-			if err := interactiveWorkflowValidate(); err != nil && err != errBack {
+			if err := interactiveWorkflowValidate(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		case "delete":
-			if err := interactiveWorkflowDelete(); err != nil && err != errBack {
+			if err := interactiveWorkflowDelete(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		}
@@ -60,7 +67,7 @@ func runInteractiveWorkflow() error {
 
 func interactiveWorkflowCreate() error {
 	var mode string
-	err := newForm(
+	err := shared.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Create from").
@@ -76,12 +83,12 @@ func interactiveWorkflowCreate() error {
 		return err
 	}
 	if mode == "back" {
-		return errBack
+		return shared.ErrBack
 	}
 
 	if mode == "file" {
 		var fromFile string
-		err = newForm(
+		err = shared.NewForm(
 			huh.NewGroup(
 				huh.NewInput().Title("Path to YAML file").Placeholder("./workflow.yaml").Value(&fromFile),
 			),
@@ -94,7 +101,7 @@ func interactiveWorkflowCreate() error {
 	}
 
 	var name, description string
-	err = newForm(
+	err = shared.NewForm(
 		huh.NewGroup(
 			huh.NewInput().Title("Workflow name").Placeholder("deploy-app").Value(&name),
 			huh.NewInput().Title("Description (optional)").Value(&description),
@@ -109,12 +116,12 @@ func interactiveWorkflowCreate() error {
 
 func interactiveWorkflowRun() error {
 	name := ""
-	if err := selectFromList("Workflow to run", fetchWorkflowNames(), &name); err != nil {
+	if err := shared.SelectFromList("Workflow to run", shared.FetchWorkflowNames(), &name); err != nil {
 		return err
 	}
 
 	var cluster string
-	err := newForm(
+	err := shared.NewForm(
 		huh.NewGroup(
 			huh.NewInput().
 				Title("Cluster (leave blank to run locally)").
@@ -127,7 +134,7 @@ func interactiveWorkflowRun() error {
 
 	showLogs := true
 	var showOutput bool
-	err = newForm(
+	err = shared.NewForm(
 		huh.NewGroup(
 			huh.NewConfirm().
 				Title("Show execution logs?").
@@ -151,7 +158,7 @@ func interactiveWorkflowRun() error {
 
 func interactiveWorkflowShow() error {
 	name := ""
-	if err := selectFromList("Workflow to show", fetchWorkflowNames(), &name); err != nil {
+	if err := shared.SelectFromList("Workflow to show", shared.FetchWorkflowNames(), &name); err != nil {
 		return err
 	}
 	showWorkflow(name)
@@ -160,7 +167,7 @@ func interactiveWorkflowShow() error {
 
 func interactiveWorkflowValidate() error {
 	name := ""
-	if err := selectFromList("Workflow to validate", fetchWorkflowNames(), &name); err != nil {
+	if err := shared.SelectFromList("Workflow to validate", shared.FetchWorkflowNames(), &name); err != nil {
 		return err
 	}
 	validateWorkflow(name)
@@ -169,12 +176,12 @@ func interactiveWorkflowValidate() error {
 
 func interactiveWorkflowDelete() error {
 	name := ""
-	if err := selectFromList("Workflow to delete", fetchWorkflowNames(), &name); err != nil {
+	if err := shared.SelectFromList("Workflow to delete", shared.FetchWorkflowNames(), &name); err != nil {
 		return err
 	}
 
 	var confirm bool
-	err := newForm(
+	err := shared.NewForm(
 		huh.NewGroup(
 			huh.NewConfirm().
 				Title(fmt.Sprintf("Delete workflow '%s'?", name)).

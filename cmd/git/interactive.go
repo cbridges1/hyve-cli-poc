@@ -1,15 +1,22 @@
-package cmd
+package git
 
 import (
 	"fmt"
 
 	"github.com/charmbracelet/huh"
+
+	"hyve/cmd/shared"
 )
+
+// RunInteractive runs the interactive git menu.
+func RunInteractive() error {
+	return runInteractiveGit()
+}
 
 func runInteractiveGit() error {
 	for {
 		var category string
-		err := newForm(
+		err := shared.NewForm(
 			huh.NewGroup(
 				huh.NewSelect[string]().
 					Title("Git — what would you like to do?").
@@ -28,17 +35,17 @@ func runInteractiveGit() error {
 
 		switch category {
 		case "back":
-			return errBack
+			return shared.ErrBack
 		case "repo":
-			if err := interactiveGitRepo(); err != nil && err != errBack {
+			if err := interactiveGitRepo(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		case "branch":
-			if err := interactiveGitBranch(); err != nil && err != errBack {
+			if err := interactiveGitBranch(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		case "sync":
-			if err := interactiveGitSync(); err != nil && err != errBack {
+			if err := interactiveGitSync(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		}
@@ -50,7 +57,7 @@ func runInteractiveGit() error {
 func interactiveGitRepo() error {
 	for {
 		var action string
-		err := newForm(
+		err := shared.NewForm(
 			huh.NewGroup(
 				huh.NewSelect[string]().
 					Title("Repository — action").
@@ -71,21 +78,21 @@ func interactiveGitRepo() error {
 
 		switch action {
 		case "back":
-			return errBack
+			return shared.ErrBack
 		case "list":
 			listGitRepositories()
 		case "status":
 			showGitStatus()
 		case "add":
-			if err := interactiveGitRepoAdd(); err != nil && err != errBack {
+			if err := interactiveGitRepoAdd(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		case "use":
-			if err := interactiveGitRepoUse(); err != nil && err != errBack {
+			if err := interactiveGitRepoUse(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		case "remove":
-			if err := interactiveGitRepoRemove(); err != nil && err != errBack {
+			if err := interactiveGitRepoRemove(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		}
@@ -100,7 +107,7 @@ func interactiveGitRepoAdd() error {
 		setCurrent bool
 	)
 
-	err := newForm(
+	err := shared.NewForm(
 		huh.NewGroup(
 			huh.NewInput().Title("Repository alias").Placeholder("production").Value(&name),
 			huh.NewInput().Title("Repository URL").Placeholder("https://github.com/org/hyve-state.git").Value(&repoURL),
@@ -122,7 +129,7 @@ func interactiveGitRepoAdd() error {
 
 func interactiveGitRepoUse() error {
 	name := ""
-	if err := selectFromList("Repository to switch to", fetchGitRepoNames(), &name); err != nil {
+	if err := shared.SelectFromList("Repository to switch to", shared.FetchGitRepoNames(), &name); err != nil {
 		return err
 	}
 	switchToRepository(name)
@@ -131,12 +138,12 @@ func interactiveGitRepoUse() error {
 
 func interactiveGitRepoRemove() error {
 	name := ""
-	if err := selectFromList("Repository to remove", fetchGitRepoNames(), &name); err != nil {
+	if err := shared.SelectFromList("Repository to remove", shared.FetchGitRepoNames(), &name); err != nil {
 		return err
 	}
 
 	var confirm bool
-	err := newForm(
+	err := shared.NewForm(
 		huh.NewGroup(
 			huh.NewConfirm().
 				Title(fmt.Sprintf("Remove repository '%s'?", name)).
@@ -161,7 +168,7 @@ func interactiveGitRepoRemove() error {
 func interactiveGitBranch() error {
 	for {
 		var action string
-		err := newForm(
+		err := shared.NewForm(
 			huh.NewGroup(
 				huh.NewSelect[string]().
 					Title("Branch — action").
@@ -181,19 +188,19 @@ func interactiveGitBranch() error {
 
 		switch action {
 		case "back":
-			return errBack
+			return shared.ErrBack
 		case "list":
 			listGitBranches()
 		case "create":
-			if err := interactiveGitBranchCreate(); err != nil && err != errBack {
+			if err := interactiveGitBranchCreate(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		case "switch":
-			if err := interactiveGitBranchSwitch(); err != nil && err != errBack {
+			if err := interactiveGitBranchSwitch(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		case "delete":
-			if err := interactiveGitBranchDelete(); err != nil && err != errBack {
+			if err := interactiveGitBranchDelete(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		}
@@ -207,7 +214,7 @@ func interactiveGitBranchCreate() error {
 		push         bool
 	)
 
-	err := newForm(
+	err := shared.NewForm(
 		huh.NewGroup(
 			huh.NewInput().Title("New branch name").Placeholder("feature/my-feature").Value(&branchName),
 			huh.NewConfirm().
@@ -236,7 +243,7 @@ func interactiveGitBranchSwitch() error {
 		pull       bool
 	)
 
-	err := newForm(
+	err := shared.NewForm(
 		huh.NewGroup(
 			huh.NewInput().Title("Branch name to switch to").Value(&branchName),
 			huh.NewConfirm().
@@ -260,7 +267,7 @@ func interactiveGitBranchDelete() error {
 		force      bool
 	)
 
-	err := newForm(
+	err := shared.NewForm(
 		huh.NewGroup(
 			huh.NewInput().Title("Branch name to delete").Value(&branchName),
 			huh.NewConfirm().
@@ -275,7 +282,7 @@ func interactiveGitBranchDelete() error {
 	}
 
 	var confirm bool
-	err = newForm(
+	err = shared.NewForm(
 		huh.NewGroup(
 			huh.NewConfirm().
 				Title(fmt.Sprintf("Delete branch '%s'?", branchName)).
@@ -300,7 +307,7 @@ func interactiveGitBranchDelete() error {
 func interactiveGitSync() error {
 	for {
 		var action string
-		err := newForm(
+		err := shared.NewForm(
 			huh.NewGroup(
 				huh.NewSelect[string]().
 					Title("Sync — action").
@@ -319,15 +326,15 @@ func interactiveGitSync() error {
 
 		switch action {
 		case "back":
-			return errBack
+			return shared.ErrBack
 		case "pull":
 			pullGitChanges()
 		case "push":
-			if err := interactiveGitPush(); err != nil && err != errBack {
+			if err := interactiveGitPush(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		case "sync":
-			if err := interactiveGitSyncChanges(); err != nil && err != errBack {
+			if err := interactiveGitSyncChanges(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		}
@@ -336,7 +343,7 @@ func interactiveGitSync() error {
 
 func interactiveGitPush() error {
 	var message string
-	err := newForm(
+	err := shared.NewForm(
 		huh.NewGroup(
 			huh.NewInput().Title("Commit message").Placeholder("Update cluster config").Value(&message),
 		),
@@ -350,7 +357,7 @@ func interactiveGitPush() error {
 
 func interactiveGitSyncChanges() error {
 	var message string
-	err := newForm(
+	err := shared.NewForm(
 		huh.NewGroup(
 			huh.NewInput().Title("Commit message").Placeholder("Update cluster config").Value(&message),
 		),

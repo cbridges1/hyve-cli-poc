@@ -1,4 +1,4 @@
-package cmd
+package cluster
 
 import (
 	gocontext "context"
@@ -10,7 +10,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"hyve/internal/cluster"
+	"hyve/cmd/shared"
+	internalcluster "hyve/internal/cluster"
 	"hyve/internal/config"
 	"hyve/internal/provider"
 	"hyve/internal/providerconfig"
@@ -18,13 +19,9 @@ import (
 	"hyve/internal/types"
 )
 
-// deleteClusterFromCLI deletes a cluster. When deleteFromCloud is true the
-// cluster is removed from the cloud provider BEFORE the YAML is touched and
-// BEFORE reconciliation runs, guaranteeing the cloud resource is gone first.
-// allowNoConfig permits cloud deletion even when no YAML exists (--force-cloud).
 func deleteClusterFromCLI(clusterName string, allowNoConfig bool, deleteFromCloud bool) {
 	ctx := gocontext.Background()
-	stateMgr, stateDir := createStateManager(ctx)
+	stateMgr, stateDir := shared.CreateStateManager(ctx)
 	filePath := filepath.Join(stateDir, clusterName+".yaml")
 
 	var clusterDef types.ClusterDefinition
@@ -32,7 +29,6 @@ func deleteClusterFromCLI(clusterName string, allowNoConfig bool, deleteFromClou
 
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		if deleteFromCloud && allowNoConfig {
-			// --force --force-cloud: allow cloud deletion even without a config file.
 			log.Printf("⚠️ Configuration file not found, but --force --force-cloud specified")
 			clusterDef.Metadata.Name = clusterName
 		} else {
@@ -49,8 +45,6 @@ func deleteClusterFromCLI(clusterName string, allowNoConfig bool, deleteFromClou
 		}
 	}
 
-	// Step 1: delete from cloud FIRST so the resource is gone before we touch
-	// git state or run reconciliation.
 	if deleteFromCloud {
 		log.Printf("🗑️ Deleting cluster '%s' from cloud provider...", clusterName)
 		if err := deleteClusterExplicitly(ctx, clusterDef); err != nil {
@@ -63,32 +57,24 @@ func deleteClusterFromCLI(clusterName string, allowNoConfig bool, deleteFromClou
 		log.Printf("📝 Removing cluster YAML — cloud deletion will be handled by reconciliation")
 	}
 
-	// Step 2: remove the YAML from git state.
 	if configExists {
 		if err := os.Remove(filePath); err != nil {
 			log.Fatalf("Failed to delete cluster definition file: %v", err)
 		}
-		commitStateChanges(ctx, stateMgr, fmt.Sprintf("Delete cluster %s", clusterName))
+		shared.CommitStateChanges(ctx, stateMgr, fmt.Sprintf("Delete cluster %s", clusterName))
 		log.Printf("Deleted cluster definition file: %s", filePath)
 		log.Printf("Cluster %s has been removed from configuration", clusterName)
 	} else {
 		log.Printf("📝 No configuration file to remove")
 	}
 
-	// Step 3: clean up stored kubeconfig.
 	cleanupClusterKubeconfig(clusterName)
 
-	// Step 4: reconcile. When deleteFromCloud=true the cluster is already gone
-	// from the cloud so reconciliation is a no-op for this cluster; it still
-	// ensures any remaining desired state is applied.
-	runReconciliation("")
+	shared.RunReconciliation("")
 }
 
-// cleanupClusterKubeconfig removes a cluster's kubeconfig from both the Hyve
-// database and the active ~/.kube/config context list.
 func cleanupClusterKubeconfig(clusterName string) {
-	// Remove from the Hyve encrypted database
-	kubeconfigMgr, _, err := createKubeconfigManager()
+	kubeconfigMgr, _, err := shared.CreateKubeconfigManager()
 	if err != nil {
 		log.Printf("⚠️  Could not open kubeconfig database: %v", err)
 	} else {
@@ -100,32 +86,26 @@ func cleanupClusterKubeconfig(clusterName string) {
 		}
 	}
 
-	// Remove from ~/.kube/config
-	removeKubeconfig(clusterName)
+	shared.RemoveKubeconfig(clusterName)
 }
 
-// deleteClusterExplicitly deletes a cluster by name directly from the provider
-// This ensures deletion even if the cluster doesn't appear in provider API listings
 func deleteClusterExplicitly(ctx gocontext.Context, clusterDef types.ClusterDefinition) error {
 	clusterName := clusterDef.Metadata.Name
 	region := clusterDef.Metadata.Region
 	providerName := clusterDef.Spec.Provider
 	if providerName == "" {
-		providerName = "civo" // default for backward compatibility
+		providerName = "civo"
 	}
 
-	// Create provider with appropriate options
 	prov, err := createProviderForClusterDef(clusterDef)
 	if err != nil {
 		return fmt.Errorf("failed to create provider: %w", err)
 	}
 
-	// Create cluster manager
-	clusterMgr := cluster.NewManager(prov)
+	clusterMgr := internalcluster.NewManager(prov)
 
 	log.Printf("🔍 Explicitly searching for cluster '%s' in region %s (provider: %s)...", clusterName, region, providerName)
 
-	// Try to find the cluster by name
 	existingCluster, err := clusterMgr.FindByName(ctx, clusterName)
 	if err != nil {
 		return fmt.Errorf("failed to search for cluster: %w", err)
@@ -138,7 +118,6 @@ func deleteClusterExplicitly(ctx gocontext.Context, clusterDef types.ClusterDefi
 
 	log.Printf("🗑️ Found cluster '%s' with ID %s, explicitly deleting...", clusterName, existingCluster.ID)
 
-	// Delete the cluster explicitly by ID
 	err = clusterMgr.Delete(ctx, existingCluster.ID)
 	if err != nil {
 		return fmt.Errorf("failed to delete cluster %s (ID: %s): %w", clusterName, existingCluster.ID, err)
@@ -148,11 +127,15 @@ func deleteClusterExplicitly(ctx gocontext.Context, clusterDef types.ClusterDefi
 	return nil
 }
 
-// createProviderForClusterDef creates a provider with appropriate options for a cluster definition
+// CreateProviderForClusterDef creates a cloud provider instance for the given cluster definition.
+func CreateProviderForClusterDef(clusterDef types.ClusterDefinition) (provider.Provider, error) {
+	return createProviderForClusterDef(clusterDef)
+}
+
 func createProviderForClusterDef(clusterDef types.ClusterDefinition) (provider.Provider, error) {
 	providerName := clusterDef.Spec.Provider
 	if providerName == "" {
-		providerName = "civo" // default
+		providerName = "civo"
 	}
 
 	providerFactory := provider.NewFactory()
@@ -161,7 +144,6 @@ func createProviderForClusterDef(clusterDef types.ClusterDefinition) (provider.P
 		Region: clusterDef.Metadata.Region,
 	}
 
-	// Populate AccountName so the factory can resolve named env vars.
 	switch strings.ToLower(providerName) {
 	case "civo":
 		opts.AccountName = clusterDef.Spec.CivoOrganization
@@ -173,7 +155,6 @@ func createProviderForClusterDef(clusterDef types.ClusterDefinition) (provider.P
 		opts.AccountName = clusterDef.Spec.AzureSubscription
 	}
 
-	// Handle Civo-specific configuration
 	if providerName == "civo" {
 		configMgr := config.NewManager()
 		apiKey := configMgr.GetCivoToken(clusterDef.Spec.CivoOrganization)
@@ -186,9 +167,7 @@ func createProviderForClusterDef(clusterDef types.ClusterDefinition) (provider.P
 		opts.APIKey = apiKey
 	}
 
-	// Handle GCP-specific configuration
 	if providerName == "gcp" {
-		// Use stored project ID if available, otherwise resolve from alias
 		if clusterDef.Spec.GCPProjectID != "" {
 			opts.ProjectID = clusterDef.Spec.GCPProjectID
 			log.Printf("Using GCP project ID '%s'", clusterDef.Spec.GCPProjectID)
@@ -209,7 +188,6 @@ func createProviderForClusterDef(clusterDef types.ClusterDefinition) (provider.P
 		}
 	}
 
-	// Handle Azure-specific configuration
 	if providerName == "azure" {
 		opts.AzureResourceGroup = clusterDef.Spec.AzureResourceGroup
 		if clusterDef.Spec.AzureSubscriptionID != "" {
@@ -234,7 +212,6 @@ func createProviderForClusterDef(clusterDef types.ClusterDefinition) (provider.P
 	return providerFactory.CreateProviderWithOptions(providerName, opts)
 }
 
-// forceDeleteClusterFromCloud deletes a cluster by name from the cloud provider across multiple regions
 func forceDeleteClusterFromCloud(clusterName, region, providerName, projectName string, accountAlias ...string) {
 	alias := ""
 	if len(accountAlias) > 0 {
@@ -244,7 +221,6 @@ func forceDeleteClusterFromCloud(clusterName, region, providerName, projectName 
 
 	regions := []string{region}
 	if region == "" {
-		// Search common regions based on provider
 		switch providerName {
 		case "civo":
 			regions = []string{"PHX1", "NYC1", "FRA1", "LON1"}
@@ -260,10 +236,8 @@ func forceDeleteClusterFromCloud(clusterName, region, providerName, projectName 
 		log.Printf("🔍 No region specified, searching common %s regions: %v", providerName, regions)
 	}
 
-	// Build provider options
 	opts := provider.ProviderOptions{}
 
-	// Handle Civo-specific configuration
 	if providerName == "civo" {
 		configMgr := config.NewManager()
 		apiKey := configMgr.GetCivoToken(projectName)
@@ -276,7 +250,6 @@ func forceDeleteClusterFromCloud(clusterName, region, providerName, projectName 
 		opts.APIKey = apiKey
 	}
 
-	// Resolve provider config manager for alias lookups
 	var fdPcMgr *providerconfig.Manager
 	{
 		fdRepoMgr, err := repository.NewManager()
@@ -288,7 +261,6 @@ func forceDeleteClusterFromCloud(clusterName, region, providerName, projectName 
 		}
 	}
 
-	// Handle GCP-specific configuration
 	if providerName == "gcp" && projectName != "" {
 		if fdPcMgr == nil {
 			log.Fatalf("Failed to load repository configuration for GCP project lookup")
@@ -300,12 +272,9 @@ func forceDeleteClusterFromCloud(clusterName, region, providerName, projectName 
 		}
 		opts.ProjectID = projectID
 		log.Printf("Using GCP project '%s' (ID: %s)", projectName, projectID)
-		// GKE's list/get API with a specific region misses zonal clusters. The
-		// wildcard "-" searches all zones and regions in a single API call.
 		regions = []string{"-"}
 	}
 
-	// Handle AWS-specific configuration
 	if providerName == "aws" && alias != "" && fdPcMgr != nil {
 		keyID, secret, tok, err := fdPcMgr.GetAWSCredentials(alias)
 		if err == nil {
@@ -316,7 +285,6 @@ func forceDeleteClusterFromCloud(clusterName, region, providerName, projectName 
 		opts.AccountName = alias
 	}
 
-	// Handle Azure-specific configuration
 	if providerName == "azure" && alias != "" && fdPcMgr != nil {
 		subID, _ := fdPcMgr.GetAzureSubscriptionID(alias)
 		tenantID, clientID, clientSecret, err := fdPcMgr.GetAzureCredentials(alias)
@@ -327,8 +295,6 @@ func forceDeleteClusterFromCloud(clusterName, region, providerName, projectName 
 		}
 		opts.AzureSubscriptionID = subID
 		opts.AccountName = alias
-		// Leave AzureResourceGroup empty — FindClusterByName will auto-detect
-		// it from the cluster's ARM ID by doing a subscription-wide list.
 	}
 
 	providerFactory := provider.NewFactory()
@@ -344,7 +310,7 @@ func forceDeleteClusterFromCloud(clusterName, region, providerName, projectName 
 			continue
 		}
 
-		clusterMgr := cluster.NewManager(prov)
+		clusterMgr := internalcluster.NewManager(prov)
 
 		existingCluster, err := clusterMgr.FindByName(ctx, clusterName)
 		if err != nil {
@@ -361,7 +327,6 @@ func forceDeleteClusterFromCloud(clusterName, region, providerName, projectName 
 		log.Printf("✅ Found cluster '%s' in region %s with ID %s", clusterName, r, existingCluster.ID)
 		log.Printf("🗑️ Force deleting cluster '%s'...", clusterName)
 
-		// Delete the cluster
 		err = clusterMgr.Delete(ctx, existingCluster.ID)
 		if err != nil {
 			log.Fatalf("Failed to delete cluster %s (ID: %s): %v", clusterName, existingCluster.ID, err)

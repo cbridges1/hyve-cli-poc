@@ -1,4 +1,4 @@
-package cmd
+package git
 
 import (
 	"context"
@@ -11,11 +11,32 @@ import (
 	"github.com/spf13/cobra"
 
 	"hyve/internal/credentials"
-	"hyve/internal/git"
+	internalgit "hyve/internal/git"
 	"hyve/internal/repository"
 )
 
-var gitCmd = &cobra.Command{
+// HyveHome returns the effective Hyve home directory.
+// We import this from the parent but to avoid circular imports we accept it as a function.
+var hyveHomeFunc func() string
+
+// SetHyveHomeFunc sets the function to retrieve the hyve home directory.
+func SetHyveHomeFunc(f func() string) {
+	hyveHomeFunc = f
+}
+
+func hyveHome() string {
+	if hyveHomeFunc != nil {
+		return hyveHomeFunc()
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		homeDir = "."
+	}
+	return filepath.Join(homeDir, ".hyve")
+}
+
+// Cmd is the git command.
+var Cmd = &cobra.Command{
 	Use:   "git",
 	Short: "Manage Git repositories",
 	Long:  "Configure and manage multiple Git repositories for state management",
@@ -204,44 +225,39 @@ func init() {
 	gitBranchCmd.AddCommand(gitBranchDeleteCmd)
 	gitBranchCmd.AddCommand(gitBranchSwitchCmd)
 
-	gitCmd.AddCommand(gitAddCmd)
-	gitCmd.AddCommand(gitListCmd)
-	gitCmd.AddCommand(gitUseCmd)
-	gitCmd.AddCommand(gitStatusCmd)
-	gitCmd.AddCommand(gitRemoveCmd)
-	gitCmd.AddCommand(gitResetCmd)
-	gitCmd.AddCommand(gitBranchCmd)
-	gitCmd.AddCommand(gitPullCmd)
-	gitCmd.AddCommand(gitPushCmd)
-	gitCmd.AddCommand(gitSyncCmd)
+	Cmd.AddCommand(gitAddCmd)
+	Cmd.AddCommand(gitListCmd)
+	Cmd.AddCommand(gitUseCmd)
+	Cmd.AddCommand(gitStatusCmd)
+	Cmd.AddCommand(gitRemoveCmd)
+	Cmd.AddCommand(gitResetCmd)
+	Cmd.AddCommand(gitBranchCmd)
+	Cmd.AddCommand(gitPullCmd)
+	Cmd.AddCommand(gitPushCmd)
+	Cmd.AddCommand(gitSyncCmd)
 }
 
 func addGitRepository(name, repoURL, username string, setCurrent bool) {
-	// Generate local path in centralized repositories directory
-	repositoriesDir := filepath.Join(HyveHome(), "repositories")
+	repositoriesDir := filepath.Join(hyveHome(), "repositories")
 	localPath := filepath.Join(repositoriesDir, strings.ToLower(name))
 
-	// Ensure repositories directory exists
 	if err := os.MkdirAll(repositoriesDir, 0755); err != nil {
 		log.Printf("Warning: Failed to create repositories directory: %v", err)
 	}
 
 	log.Printf("Adding Git repository '%s': %s", name, repoURL)
 
-	// Create repository manager
 	repoMgr, err := repository.NewManager()
 	if err != nil {
 		log.Fatalf("Failed to create repository manager: %v", err)
 	}
 	defer repoMgr.Close()
 
-	// Add repository
 	repo, err := repoMgr.AddRepository(name, repoURL, localPath, username)
 	if err != nil {
 		log.Fatalf("Failed to add repository: %v", err)
 	}
 
-	// Set as current if requested or if it's the first repository
 	if setCurrent {
 		if err := repoMgr.SetCurrentRepository(name); err != nil {
 			log.Fatalf("Failed to set current repository: %v", err)
@@ -249,10 +265,8 @@ func addGitRepository(name, repoURL, username string, setCurrent bool) {
 		repo.IsCurrent = true
 	}
 
-	// Test the connection
 	log.Println("Testing Git repository connection...")
 
-	// Get global credentials or fall back to environment token
 	credsMgr, err := credentials.NewManager()
 	if err == nil {
 		defer credsMgr.Close()
@@ -277,7 +291,7 @@ func addGitRepository(name, repoURL, username string, setCurrent bool) {
 	}
 
 	ctx := context.Background()
-	gitMgr, err := git.NewBackend(repoURL, localPath, authUsername, authToken)
+	gitMgr, err := internalgit.NewBackend(repoURL, localPath, authUsername, authToken)
 	if err != nil {
 		log.Fatalf("Failed to create git backend: %v", err)
 	}
@@ -295,7 +309,6 @@ func addGitRepository(name, repoURL, username string, setCurrent bool) {
 	if username != "" {
 		log.Printf("Username: %s", username)
 	}
-	// Check if global credentials are configured
 	if credsMgr != nil {
 		if creds, _ := credsMgr.GetCredentials(); creds != nil {
 			log.Printf("Authentication: ✅ Global credentials configured")
@@ -349,7 +362,6 @@ func listGitRepositories() {
 		log.Println()
 	}
 
-	// Check global credentials
 	credsMgr, err := credentials.NewManager()
 	if err == nil {
 		defer credsMgr.Close()
@@ -381,7 +393,6 @@ func switchToRepository(name string) {
 
 	log.Printf("✅ Switched to repository '%s'", name)
 
-	// Show current status
 	repo, err := repoMgr.GetRepositoryByName(name)
 	if err != nil {
 		log.Fatalf("Failed to get repository details: %v", err)
@@ -414,7 +425,6 @@ func showGitStatus() {
 		log.Printf("Username: %s", currentRepo.Username)
 	}
 
-	// Check authentication options
 	credsMgr, err := credentials.NewManager()
 	var globalCreds *credentials.Credentials
 	if err == nil {
@@ -432,7 +442,6 @@ func showGitStatus() {
 		log.Println("Authentication: ⚠️  No authentication configured")
 	}
 
-	// Test connection
 	log.Println("\nTesting connection...")
 	var authToken string
 	var authUsername = currentRepo.Username
@@ -450,7 +459,7 @@ func showGitStatus() {
 		authToken = envToken
 	}
 	ctx := context.Background()
-	gitMgr, err := git.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
+	gitMgr, err := internalgit.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
 	if err != nil {
 		log.Fatalf("Failed to create git backend: %v", err)
 	}
@@ -475,7 +484,6 @@ func removeGitRepository(name string) {
 
 	log.Printf("✅ Repository '%s' removed successfully", name)
 
-	// Show remaining repositories
 	repos, err := repoMgr.ListRepositories()
 	if err == nil && len(repos) > 0 {
 		current, err := repoMgr.GetCurrentRepository()
@@ -494,7 +502,6 @@ func resetGitConfiguration() {
 	}
 	defer repoMgr.Close()
 
-	// List all repositories for confirmation
 	repos, err := repoMgr.ListRepositories()
 	if err != nil {
 		log.Fatalf("Failed to list repositories: %v", err)
@@ -505,7 +512,6 @@ func resetGitConfiguration() {
 		return
 	}
 
-	// Remove all repositories
 	for _, repo := range repos {
 		if err := repoMgr.DeleteRepository(repo.Name); err != nil {
 			log.Printf("Failed to remove repository '%s': %v", repo.Name, err)
@@ -530,21 +536,18 @@ func listGitBranches() {
 		return
 	}
 
-	// Get authentication
 	authToken, authUsername := getGitAuth(currentRepo)
 
 	ctx := context.Background()
-	gitMgr, err := git.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
+	gitMgr, err := internalgit.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
 	if err != nil {
 		log.Fatalf("Failed to create git backend: %v", err)
 	}
 
-	// Initialize/open repository
 	if err := gitMgr.InitializeRepo(ctx); err != nil {
 		log.Fatalf("Failed to initialize repository: %v", err)
 	}
 
-	// List branches
 	branches, err := gitMgr.ListBranches(ctx)
 	if err != nil {
 		log.Fatalf("Failed to list branches: %v", err)
@@ -586,7 +589,7 @@ func createGitBranch(branchName string, switchToBranch, push bool) {
 	authToken, authUsername := getGitAuth(currentRepo)
 
 	ctx := context.Background()
-	gitMgr, err := git.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
+	gitMgr, err := internalgit.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
 	if err != nil {
 		log.Fatalf("Failed to create git backend: %v", err)
 	}
@@ -595,13 +598,11 @@ func createGitBranch(branchName string, switchToBranch, push bool) {
 		log.Fatalf("Failed to initialize repository: %v", err)
 	}
 
-	// Get current branch for display
 	currentBranch, err := gitMgr.GetCurrentBranch(ctx)
 	if err != nil {
 		log.Fatalf("Failed to get current branch: %v", err)
 	}
 
-	// Create branch
 	log.Printf("Creating branch '%s' from '%s'...", branchName, currentBranch)
 	if err := gitMgr.CreateBranch(ctx, branchName); err != nil {
 		log.Fatalf("Failed to create branch: %v", err)
@@ -609,7 +610,6 @@ func createGitBranch(branchName string, switchToBranch, push bool) {
 
 	log.Printf("✅ Branch '%s' created successfully", branchName)
 
-	// Switch if requested
 	if switchToBranch {
 		if err := gitMgr.SwitchBranch(ctx, branchName); err != nil {
 			log.Fatalf("Failed to switch to branch: %v", err)
@@ -617,7 +617,6 @@ func createGitBranch(branchName string, switchToBranch, push bool) {
 		log.Printf("✅ Switched to branch '%s'", branchName)
 	}
 
-	// Push if requested
 	if push {
 		log.Printf("Pushing branch '%s' to remote...", branchName)
 		if err := gitMgr.PushBranch(ctx, branchName); err != nil {
@@ -648,7 +647,7 @@ func deleteGitBranch(branchName string, force bool) {
 	authToken, authUsername := getGitAuth(currentRepo)
 
 	ctx := context.Background()
-	gitMgr, err := git.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
+	gitMgr, err := internalgit.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
 	if err != nil {
 		log.Fatalf("Failed to create git backend: %v", err)
 	}
@@ -657,7 +656,6 @@ func deleteGitBranch(branchName string, force bool) {
 		log.Fatalf("Failed to initialize repository: %v", err)
 	}
 
-	// Delete branch
 	log.Printf("Deleting branch '%s'...", branchName)
 	if err := gitMgr.DeleteBranch(ctx, branchName, force); err != nil {
 		log.Fatalf("Failed to delete branch: %v", err)
@@ -684,7 +682,7 @@ func switchGitBranch(branchName string, pull bool) {
 	authToken, authUsername := getGitAuth(currentRepo)
 
 	ctx := context.Background()
-	gitMgr, err := git.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
+	gitMgr, err := internalgit.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
 	if err != nil {
 		log.Fatalf("Failed to create git backend: %v", err)
 	}
@@ -693,7 +691,6 @@ func switchGitBranch(branchName string, pull bool) {
 		log.Fatalf("Failed to initialize repository: %v", err)
 	}
 
-	// Get current branch
 	currentBranch, err := gitMgr.GetCurrentBranch(ctx)
 	if err != nil {
 		log.Fatalf("Failed to get current branch: %v", err)
@@ -712,7 +709,6 @@ func switchGitBranch(branchName string, pull bool) {
 		return
 	}
 
-	// Switch branch
 	log.Printf("Switching from '%s' to '%s'...", currentBranch, branchName)
 	if err := gitMgr.SwitchBranch(ctx, branchName); err != nil {
 		log.Fatalf("Failed to switch branch: %v", err)
@@ -720,7 +716,6 @@ func switchGitBranch(branchName string, pull bool) {
 
 	log.Printf("✅ Switched to branch '%s'", branchName)
 
-	// Pull if requested
 	if pull {
 		log.Println("Pulling latest changes...")
 		if err := gitMgr.Pull(ctx); err != nil {
@@ -734,11 +729,9 @@ func switchGitBranch(branchName string, pull bool) {
 	log.Println("💡 Changes made will be tracked on this branch")
 }
 
-// getGitAuth retrieves Git authentication credentials
 func getGitAuth(repo *repository.Repository) (token, username string) {
 	username = repo.Username
 
-	// Try global credentials first
 	credsMgr, err := credentials.NewManager()
 	if err == nil {
 		defer credsMgr.Close()
@@ -752,7 +745,6 @@ func getGitAuth(repo *repository.Repository) (token, username string) {
 		}
 	}
 
-	// Fall back to environment token
 	if token == "" {
 		token = os.Getenv("HYVE_GIT_TOKEN")
 	}
@@ -776,7 +768,7 @@ func pullGitChanges() {
 	authToken, authUsername := getGitAuth(currentRepo)
 
 	ctx := context.Background()
-	gitMgr, err := git.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
+	gitMgr, err := internalgit.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
 	if err != nil {
 		log.Fatalf("Failed to create git backend: %v", err)
 	}
@@ -785,7 +777,6 @@ func pullGitChanges() {
 		log.Fatalf("Failed to initialize repository: %v", err)
 	}
 
-	// Get current branch
 	currentBranch, err := gitMgr.GetCurrentBranch(ctx)
 	if err != nil {
 		log.Fatalf("Failed to get current branch: %v", err)
@@ -793,7 +784,6 @@ func pullGitChanges() {
 
 	log.Printf("Pulling latest changes from '%s'...", currentBranch)
 
-	// Pull changes
 	if err := gitMgr.Pull(ctx); err != nil {
 		log.Fatalf("Failed to pull changes: %v", err)
 	}
@@ -818,7 +808,7 @@ func pushGitChanges(message string) {
 	authToken, authUsername := getGitAuth(currentRepo)
 
 	ctx := context.Background()
-	gitMgr, err := git.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
+	gitMgr, err := internalgit.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
 	if err != nil {
 		log.Fatalf("Failed to create git backend: %v", err)
 	}
@@ -827,7 +817,6 @@ func pushGitChanges(message string) {
 		log.Fatalf("Failed to initialize repository: %v", err)
 	}
 
-	// Check if there are uncommitted changes
 	hasChanges, err := gitMgr.HasUncommittedChanges(ctx)
 	if err != nil {
 		log.Fatalf("Failed to check for changes: %v", err)
@@ -839,7 +828,6 @@ func pushGitChanges(message string) {
 		return
 	}
 
-	// Get status summary
 	statusSummary, err := gitMgr.GetStatusSummary(ctx)
 	if err != nil {
 		log.Fatalf("Failed to get status: %v", err)
@@ -847,19 +835,16 @@ func pushGitChanges(message string) {
 
 	log.Printf("📝 Changes detected: %s", statusSummary)
 
-	// Use default message if not provided
 	if message == "" {
 		message = fmt.Sprintf("Update: %s", statusSummary)
 		log.Printf("Using default commit message: %s", message)
 	}
 
-	// Get current branch
 	currentBranch, err := gitMgr.GetCurrentBranch(ctx)
 	if err != nil {
 		log.Fatalf("Failed to get current branch: %v", err)
 	}
 
-	// Stage, commit, and push
 	log.Printf("Committing changes to '%s'...", currentBranch)
 	if err := gitMgr.Commit(ctx, message); err != nil {
 		log.Fatalf("Failed to commit changes: %v", err)
@@ -892,7 +877,7 @@ func syncGitChanges(message string) {
 	authToken, authUsername := getGitAuth(currentRepo)
 
 	ctx := context.Background()
-	gitMgr, err := git.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
+	gitMgr, err := internalgit.NewBackend(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
 	if err != nil {
 		log.Fatalf("Failed to create git backend: %v", err)
 	}
@@ -901,7 +886,6 @@ func syncGitChanges(message string) {
 		log.Fatalf("Failed to initialize repository: %v", err)
 	}
 
-	// Get current branch
 	currentBranch, err := gitMgr.GetCurrentBranch(ctx)
 	if err != nil {
 		log.Fatalf("Failed to get current branch: %v", err)
@@ -909,7 +893,6 @@ func syncGitChanges(message string) {
 
 	log.Printf("🔄 Syncing branch '%s' with remote...", currentBranch)
 
-	// First, pull changes
 	log.Println("1. Pulling latest changes from remote...")
 	if err := gitMgr.Pull(ctx); err != nil {
 		log.Printf("⚠️  Failed to pull changes: %v", err)
@@ -917,7 +900,6 @@ func syncGitChanges(message string) {
 		log.Println("✅ Pulled latest changes")
 	}
 
-	// Check if there are uncommitted changes
 	hasChanges, err := gitMgr.HasUncommittedChanges(ctx)
 	if err != nil {
 		log.Fatalf("Failed to check for changes: %v", err)
@@ -929,7 +911,6 @@ func syncGitChanges(message string) {
 		return
 	}
 
-	// Get status summary
 	statusSummary, err := gitMgr.GetStatusSummary(ctx)
 	if err != nil {
 		log.Fatalf("Failed to get status: %v", err)
@@ -941,14 +922,12 @@ func syncGitChanges(message string) {
 		message = "Update repository state"
 	}
 
-	// Commit changes
 	log.Println("3. Committing local changes...")
 	if err := gitMgr.Commit(ctx, message); err != nil {
 		log.Fatalf("Failed to commit changes: %v", err)
 	}
 	log.Println("✅ Changes committed")
 
-	// Push changes
 	log.Println("4. Pushing to remote...")
 	if err := gitMgr.Push(ctx); err != nil {
 		log.Fatalf("Failed to push changes: %v", err)

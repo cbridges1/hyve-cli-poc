@@ -1,4 +1,4 @@
-package cmd
+package cluster
 
 import (
 	gocontext "context"
@@ -9,15 +9,14 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"hyve/cmd/shared"
 	"hyve/internal/providerconfig"
 	"hyve/internal/types"
 )
 
-// importClusterFromCLI records an already-running cloud cluster in the hyve
-// repository without provisioning it. Reconciliation is intentionally skipped.
 func importClusterFromCLI(clusterName, region, providerName string, nodes []string, nodeGroups []types.NodeGroup, accountName, projectName, subscriptionName, orgName, vpcName, eksRoleName, nodeRoleName string) {
 	ctx := gocontext.Background()
-	stateMgr, stateDir := createStateManager(ctx)
+	stateMgr, stateDir := shared.CreateStateManager(ctx)
 
 	if repoCfg, err := stateMgr.LoadRepoConfig(); err == nil && repoCfg.Reconcile.StrictDelete {
 		log.Fatalf("❌ Import is disabled: this repository has strictDelete enabled. " +
@@ -36,7 +35,6 @@ func importClusterFromCLI(clusterName, region, providerName string, nodes []stri
 	pcMgr := providerconfig.NewManager(filepath.Dir(stateDir))
 	var err error
 
-	// Resolve GCP project alias
 	var gcpProjectID string
 	if providerName == "gcp" && projectName != "" {
 		gcpProjectID, err = pcMgr.GetGCPProjectID(projectName)
@@ -45,7 +43,6 @@ func importClusterFromCLI(clusterName, region, providerName string, nodes []stri
 		}
 	}
 
-	// Resolve AWS aliases
 	var awsAccountID, awsVPCID, awsEKSRoleARN, awsNodeRoleARN string
 	if providerName == "aws" && accountName != "" {
 		awsAccountID, _ = pcMgr.GetAWSAccountID(accountName)
@@ -60,8 +57,6 @@ func importClusterFromCLI(clusterName, region, providerName string, nodes []stri
 		}
 	}
 
-	// If no node groups were explicitly provided, query the cloud provider for
-	// the live node pool configuration so the imported definition is complete.
 	if len(nodeGroups) == 0 && len(nodes) == 0 {
 		tempDef := types.ClusterDefinition{
 			Metadata: types.ClusterMetadata{Name: clusterName, Region: region},
@@ -92,10 +87,9 @@ func importClusterFromCLI(clusterName, region, providerName string, nodes []stri
 			Region: region,
 		},
 		Spec: types.ClusterSpec{
-			Provider:   providerName,
-			Nodes:      nodes,
-			NodeGroups: nodeGroups,
-			// ClusterType intentionally omitted — not provisioned by hyve
+			Provider:          providerName,
+			Nodes:             nodes,
+			NodeGroups:        nodeGroups,
 			GCPProject:        projectName,
 			GCPProjectID:      gcpProjectID,
 			AWSAccount:        accountName,
@@ -119,12 +113,10 @@ func importClusterFromCLI(clusterName, region, providerName string, nodes []stri
 		log.Fatalf("Failed to write cluster definition: %v", err)
 	}
 
-	commitStateChanges(ctx, stateMgr, fmt.Sprintf("Import cluster %s", clusterName))
+	shared.CommitStateChanges(ctx, stateMgr, fmt.Sprintf("Import cluster %s", clusterName))
 	log.Printf("✅ Cluster '%s' imported into hyve repository (cloud cluster untouched)", clusterName)
 }
 
-// resolveAzureResourceGroup returns the first configured resource group for a
-// subscription alias, or empty string if none is found (best-effort).
 func resolveAzureResourceGroup(pcMgr *providerconfig.Manager, subscriptionName string) string {
 	if subscriptionName == "" || pcMgr == nil {
 		return ""
@@ -136,11 +128,9 @@ func resolveAzureResourceGroup(pcMgr *providerconfig.Manager, subscriptionName s
 	return rgs[0].Name
 }
 
-// releaseClusterFromCLI removes a cluster from the hyve repository without
-// deleting it from the cloud. Reconciliation is intentionally skipped.
 func releaseClusterFromCLI(clusterName string) {
 	ctx := gocontext.Background()
-	stateMgr, stateDir := createStateManager(ctx)
+	stateMgr, stateDir := shared.CreateStateManager(ctx)
 
 	if repoCfg, err := stateMgr.LoadRepoConfig(); err == nil && repoCfg.Reconcile.StrictDelete {
 		log.Fatalf("❌ Release is disabled: this repository has strictDelete enabled. " +
@@ -158,6 +148,6 @@ func releaseClusterFromCLI(clusterName string) {
 		log.Fatalf("Failed to remove cluster definition: %v", err)
 	}
 
-	commitStateChanges(ctx, stateMgr, fmt.Sprintf("Release cluster %s", clusterName))
+	shared.CommitStateChanges(ctx, stateMgr, fmt.Sprintf("Release cluster %s", clusterName))
 	log.Printf("✅ Cluster '%s' released from hyve management. The cloud cluster continues to run.", clusterName)
 }

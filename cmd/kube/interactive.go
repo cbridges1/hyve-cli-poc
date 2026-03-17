@@ -1,15 +1,22 @@
-package cmd
+package kube
 
 import (
 	"fmt"
 
 	"github.com/charmbracelet/huh"
+
+	"hyve/cmd/shared"
 )
+
+// RunInteractive runs the interactive kubeconfig menu.
+func RunInteractive() error {
+	return runInteractiveKubeconfig()
+}
 
 func runInteractiveKubeconfig() error {
 	for {
 		var action string
-		err := newForm(
+		err := shared.NewForm(
 			huh.NewGroup(
 				huh.NewSelect[string]().
 					Title("Kubeconfig — what would you like to do?").
@@ -30,23 +37,23 @@ func runInteractiveKubeconfig() error {
 
 		switch action {
 		case "back":
-			return errBack
+			return shared.ErrBack
 		case "sync":
 			syncKubeconfigs()
 		case "get":
-			if err := interactiveKubeconfigGet(); err != nil && err != errBack {
+			if err := interactiveKubeconfigGet(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		case "use":
-			if err := interactiveKubeconfigUse(); err != nil && err != errBack {
+			if err := interactiveKubeconfigUse(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		case "merge":
-			if err := interactiveKubeconfigMerge(); err != nil && err != errBack {
+			if err := interactiveKubeconfigMerge(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		case "remove":
-			if err := interactiveKubeconfigRemove(); err != nil && err != errBack {
+			if err := interactiveKubeconfigRemove(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		}
@@ -55,7 +62,7 @@ func runInteractiveKubeconfig() error {
 
 func interactiveKubeconfigGet() error {
 	clusterName := ""
-	if err := selectFromList("Cluster", fetchKubeconfigClusterNames(), &clusterName); err != nil {
+	if err := shared.SelectFromList("Cluster", shared.FetchKubeconfigClusterNames(), &clusterName); err != nil {
 		return err
 	}
 	getKubeconfig(kubeconfigGetCmd, clusterName)
@@ -64,16 +71,16 @@ func interactiveKubeconfigGet() error {
 
 func interactiveKubeconfigUse() error {
 	clusterName := ""
-	if err := selectFromList("Cluster", fetchKubeconfigClusterNames(), &clusterName); err != nil {
+	if err := shared.SelectFromList("Cluster", shared.FetchKubeconfigClusterNames(), &clusterName); err != nil {
 		return err
 	}
-	useKubeconfig(clusterName)
+	UseKubeconfig(clusterName)
 	return nil
 }
 
 func interactiveKubeconfigMerge() error {
 	clusterName := ""
-	if err := selectFromList("Cluster to merge", fetchKubeconfigClusterNames(), &clusterName); err != nil {
+	if err := shared.SelectFromList("Cluster to merge", shared.FetchKubeconfigClusterNames(), &clusterName); err != nil {
 		return err
 	}
 	mergeKubeconfig(clusterName)
@@ -82,12 +89,12 @@ func interactiveKubeconfigMerge() error {
 
 func interactiveKubeconfigRemove() error {
 	clusterName := ""
-	if err := selectFromList("Cluster to remove kubeconfig for", fetchKubeconfigClusterNames(), &clusterName); err != nil {
+	if err := shared.SelectFromList("Cluster to remove kubeconfig for", shared.FetchKubeconfigClusterNames(), &clusterName); err != nil {
 		return err
 	}
 
 	var confirm bool
-	err := newForm(
+	err := shared.NewForm(
 		huh.NewGroup(
 			huh.NewConfirm().
 				Title(fmt.Sprintf("Remove kubeconfig for '%s'?", clusterName)).
@@ -103,6 +110,6 @@ func interactiveKubeconfigRemove() error {
 		return nil
 	}
 
-	removeKubeconfig(clusterName)
+	shared.RemoveKubeconfig(clusterName)
 	return nil
 }

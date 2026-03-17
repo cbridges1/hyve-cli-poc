@@ -1,4 +1,4 @@
-package cmd
+package tpl
 
 import (
 	"context"
@@ -11,8 +11,9 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
-	"hyve/internal/cluster"
-	"hyve/internal/credentials"
+	"hyve/cmd/cluster"
+	"hyve/cmd/shared"
+	internalcluster "hyve/internal/cluster"
 	"hyve/internal/kubeconfig"
 	"hyve/internal/providerconfig"
 	"hyve/internal/repository"
@@ -21,6 +22,9 @@ import (
 	"hyve/internal/types"
 	"hyve/internal/workflow"
 )
+
+// Cmd is the root template command exposed to the parent.
+var Cmd = templateCmd
 
 var templateCmd = &cobra.Command{
 	Use:   "template",
@@ -49,7 +53,7 @@ and workflows to execute upon cluster creation or destruction.`,
 		var nodeGroups []types.NodeGroup
 		if ngStrs, _ := cmd.Flags().GetStringArray("node-group"); len(ngStrs) > 0 {
 			for _, s := range ngStrs {
-				ng, err := parseNodeGroup(s)
+				ng, err := shared.ParseNodeGroup(s)
 				if err != nil {
 					log.Fatalf("Invalid --node-group value '%s': %v", s, err)
 				}
@@ -138,30 +142,6 @@ var templateValidateCmd = &cobra.Command{
 	},
 }
 
-// getAuthCredentials retrieves authentication credentials for git operations
-func getAuthCredentials(currentRepo *repository.Repository) (username, token string) {
-	username = currentRepo.Username
-
-	credsMgr, err := credentials.NewManager()
-	if err == nil {
-		defer credsMgr.Close()
-		if creds, _ := credsMgr.GetCredentials(); creds != nil {
-			if password, err := creds.GetPassword(); err == nil && password != "" {
-				token = password
-				if username == "" {
-					username = creds.Username
-				}
-			}
-		}
-	}
-
-	if token == "" {
-		token = os.Getenv("HYVE_GIT_TOKEN")
-	}
-
-	return username, token
-}
-
 func init() {
 	templateCreateCmd.Flags().StringP("description", "d", "", "Template description")
 	templateCreateCmd.Flags().StringP("provider", "p", "civo", "Cloud provider")
@@ -199,7 +179,7 @@ func createTemplate(name, description, provider, region, nodesSizes, clusterType
 	}
 
 	ctx := context.Background()
-	syncRepoState(ctx)
+	shared.SyncRepoState(ctx)
 
 	// Get repository path
 	repoMgr, err := repository.NewManager()
@@ -270,13 +250,13 @@ func createTemplate(name, description, provider, region, nodesSizes, clusterType
 	log.Printf("✅ Template '%s' created successfully", name)
 
 	// Commit and push template to Git
-	authUsername, authToken := getAuthCredentials(currentRepo)
+	authUsername, authToken := shared.GetAuthCredentials(currentRepo)
 	stateMgr, err := state.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
 	if err != nil {
 		log.Printf("⚠️  Warning: Failed to create state manager: %v", err)
 		log.Println("💡 Template saved locally but not pushed to git")
 	} else {
-		commitStateChanges(ctx, stateMgr, fmt.Sprintf("Create template %s", name))
+		shared.CommitStateChanges(ctx, stateMgr, fmt.Sprintf("Create template %s", name))
 	}
 	log.Printf("Template path: %s", templateMgr.GetTemplatePath(name))
 	log.Println("\n📋 Template Details:")
@@ -296,7 +276,7 @@ func createTemplate(name, description, provider, region, nodesSizes, clusterType
 }
 
 func listTemplates() {
-	syncRepoState(context.Background())
+	shared.SyncRepoState(context.Background())
 
 	// Get repository path
 	repoMgr, err := repository.NewManager()
@@ -351,7 +331,7 @@ func listTemplates() {
 
 func deleteTemplate(name string) {
 	ctx := context.Background()
-	syncRepoState(ctx)
+	shared.SyncRepoState(ctx)
 
 	// Get repository path
 	repoMgr, err := repository.NewManager()
@@ -377,18 +357,18 @@ func deleteTemplate(name string) {
 	log.Printf("✅ Template '%s' deleted successfully", name)
 
 	// Commit and push deletion to Git
-	authUsername, authToken := getAuthCredentials(currentRepo)
+	authUsername, authToken := shared.GetAuthCredentials(currentRepo)
 	stateMgr, err := state.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
 	if err != nil {
 		log.Printf("⚠️  Warning: Failed to create state manager: %v", err)
 		log.Println("💡 Template deleted locally but not pushed to git")
 	} else {
-		commitStateChanges(ctx, stateMgr, fmt.Sprintf("Delete template %s", name))
+		shared.CommitStateChanges(ctx, stateMgr, fmt.Sprintf("Delete template %s", name))
 	}
 }
 
 func showTemplate(name string) {
-	syncRepoState(context.Background())
+	shared.SyncRepoState(context.Background())
 
 	// Get repository path
 	repoMgr, err := repository.NewManager()
@@ -424,7 +404,7 @@ func showTemplate(name string) {
 
 func executeTemplate(templateName, clusterName, org, account, vpcName, eksRole, nodeRole, subscription, resourceGroup, project string) {
 	ctx := context.Background()
-	syncRepoState(ctx)
+	shared.SyncRepoState(ctx)
 
 	// Get repository path
 	repoMgr, err := repository.NewManager()
@@ -440,7 +420,7 @@ func executeTemplate(templateName, clusterName, org, account, vpcName, eksRole, 
 	}
 
 	// Get authentication
-	authUsername, authToken := getAuthCredentials(currentRepo)
+	authUsername, authToken := shared.GetAuthCredentials(currentRepo)
 
 	// Create template manager
 	templateMgr := template.NewManager(currentRepo.LocalPath)
@@ -560,16 +540,16 @@ func executeTemplate(templateName, clusterName, org, account, vpcName, eksRole, 
 		log.Printf("⚠️  Warning: Failed to create state manager: %v", err)
 		log.Println("💡 Cluster definition saved locally but not pushed to git")
 	} else {
-		commitStateChanges(ctx, stateMgr, fmt.Sprintf("Create cluster %s from template %s", clusterName, templateName))
+		shared.CommitStateChanges(ctx, stateMgr, fmt.Sprintf("Create cluster %s from template %s", clusterName, templateName))
 	}
 
 	// Create cluster manager
-	prov, err := createProviderForClusterDef(*clusterDef)
+	prov, err := cluster.CreateProviderForClusterDef(*clusterDef)
 	if err != nil {
 		log.Fatalf("Failed to create provider: %v", err)
 	}
 
-	clusterMgr := cluster.NewManager(prov)
+	clusterMgr := internalcluster.NewManager(prov)
 
 	// Create cluster
 	log.Println("\n1️⃣ Creating cluster...")
@@ -635,7 +615,7 @@ func executeTemplate(templateName, clusterName, org, account, vpcName, eksRole, 
 		log.Printf("\n4️⃣ Executing %d onCreated workflow(s)...\n", len(tmpl.Spec.Workflows.OnCreated))
 
 		// Create workflow manager
-		workflowMgr, err := workflow.NewManager(getWorkflowLocalPath())
+		workflowMgr, err := workflow.NewManager(shared.GetLocalPath())
 		if err != nil {
 			log.Printf("⚠️  Failed to create workflow manager: %v", err)
 			return
@@ -796,7 +776,7 @@ func validateTemplate(name string) {
 	// Validate workflows exist
 	allWorkflows := append(tmpl.Spec.Workflows.OnCreated, tmpl.Spec.Workflows.OnDestroy...)
 	if len(allWorkflows) > 0 {
-		workflowMgr, err := workflow.NewManager(getWorkflowLocalPath())
+		workflowMgr, err := workflow.NewManager(shared.GetLocalPath())
 		if err == nil {
 			availableWorkflows, err := workflowMgr.ListWorkflows()
 			if err == nil {

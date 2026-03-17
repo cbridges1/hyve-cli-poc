@@ -1,4 +1,4 @@
-package cmd
+package cluster
 
 import (
 	gocontext "context"
@@ -6,13 +6,20 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/huh"
+
+	"hyve/cmd/shared"
 	"hyve/internal/types"
 )
+
+// RunInteractive runs the interactive cluster menu.
+func RunInteractive() error {
+	return runInteractiveCluster()
+}
 
 func runInteractiveCluster() error {
 	for {
 		var action string
-		err := newForm(
+		err := shared.NewForm(
 			huh.NewGroup(
 				huh.NewSelect[string]().
 					Title("Cluster — what would you like to do?").
@@ -35,31 +42,31 @@ func runInteractiveCluster() error {
 
 		switch action {
 		case "back":
-			return errBack
+			return shared.ErrBack
 		case "list":
 			listClusters()
 		case "add":
-			if err := interactiveClusterAdd(); err != nil && err != errBack {
+			if err := interactiveClusterAdd(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		case "import":
-			if err := interactiveClusterImport(); err != nil && err != errBack {
+			if err := interactiveClusterImport(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		case "release":
-			if err := interactiveClusterRelease(); err != nil && err != errBack {
+			if err := interactiveClusterRelease(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		case "modify":
-			if err := interactiveClusterModify(); err != nil && err != errBack {
+			if err := interactiveClusterModify(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		case "delete":
-			if err := interactiveClusterDelete(); err != nil && err != errBack {
+			if err := interactiveClusterDelete(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		case "force-delete":
-			if err := interactiveClusterForceDelete(); err != nil && err != errBack {
+			if err := interactiveClusterForceDelete(); err != nil && err != shared.ErrBack {
 				return err
 			}
 		}
@@ -82,7 +89,7 @@ func interactiveClusterAdd() error {
 		nodeRoleName     string
 	)
 
-	err := newForm(
+	err := shared.NewForm(
 		huh.NewGroup(
 			huh.NewInput().
 				Title("Cluster name").
@@ -104,20 +111,19 @@ func interactiveClusterAdd() error {
 		return err
 	}
 	if providerName == "back" {
-		return errBack
+		return shared.ErrBack
 	}
 
 	ctx := gocontext.Background()
-	if err := selectFromGroups("Region", fetchRegionGroups(ctx, providerName, ""), "us-east-1", &region); err != nil {
+	if err := shared.SelectFromGroups("Region", shared.FetchRegionGroups(ctx, providerName, ""), "us-east-1", &region); err != nil {
 		return err
 	}
-	if err := selectFromGroups("Node size", fetchNodeGroups(ctx, providerName, region, ""), "g4s.kube.medium", &nodesStr); err != nil {
+	if err := shared.SelectFromGroups("Node size", shared.FetchNodeGroups(ctx, providerName, region, ""), "g4s.kube.medium", &nodesStr); err != nil {
 		return err
 	}
 
-	// Cluster type is only applicable to Civo
 	if providerName == "civo" {
-		err = newForm(
+		err = shared.NewForm(
 			huh.NewGroup(
 				huh.NewSelect[string]().
 					Title("Cluster type").
@@ -133,31 +139,30 @@ func interactiveClusterAdd() error {
 		}
 	}
 
-	// Provider-specific fields — use selects populated from config
 	switch providerName {
 	case "civo":
-		if err := selectFromList("Civo organization", fetchCivoOrgNames(), &orgName); err != nil {
+		if err := shared.SelectFromList("Civo organization", shared.FetchCivoOrgNames(), &orgName); err != nil {
 			return err
 		}
 	case "aws":
-		if err := selectFromList("AWS account alias", fetchAWSAccountNames(), &accountName); err != nil {
+		if err := shared.SelectFromList("AWS account alias", shared.FetchAWSAccountNames(), &accountName); err != nil {
 			return err
 		}
-		if err := selectFromList("VPC alias", fetchAWSVPCNames(accountName), &vpcName); err != nil {
+		if err := shared.SelectFromList("VPC alias", shared.FetchAWSVPCNames(accountName), &vpcName); err != nil {
 			return err
 		}
-		if err := selectFromList("EKS role alias", fetchAWSEKSRoleNames(accountName), &eksRoleName); err != nil {
+		if err := shared.SelectFromList("EKS role alias", shared.FetchAWSEKSRoleNames(accountName), &eksRoleName); err != nil {
 			return err
 		}
-		if err := selectFromList("Node role alias", fetchAWSNodeRoleNames(accountName), &nodeRoleName); err != nil {
+		if err := shared.SelectFromList("Node role alias", shared.FetchAWSNodeRoleNames(accountName), &nodeRoleName); err != nil {
 			return err
 		}
 	case "gcp":
-		if err := selectFromList("GCP project alias", fetchGCPProjectNames(), &projectName); err != nil {
+		if err := shared.SelectFromList("GCP project alias", shared.FetchGCPProjectNames(), &projectName); err != nil {
 			return err
 		}
 	case "azure":
-		if err := selectFromList("Azure subscription alias", fetchAzureSubscriptionNames(), &subscriptionName); err != nil {
+		if err := shared.SelectFromList("Azure subscription alias", shared.FetchAzureSubscriptionNames(), &subscriptionName); err != nil {
 			return err
 		}
 	}
@@ -165,7 +170,7 @@ func interactiveClusterAdd() error {
 	nodes := splitAndTrim(nodesStr, ",")
 	var confirm bool
 	summary := fmt.Sprintf("Add cluster '%s' on %s in %s with nodes: %s", clusterName, providerName, region, strings.Join(nodes, ", "))
-	err = newForm(
+	err = shared.NewForm(
 		huh.NewGroup(
 			huh.NewConfirm().
 				Title(summary).
@@ -187,13 +192,12 @@ func interactiveClusterAdd() error {
 
 func interactiveClusterModify() error {
 	clusterName := ""
-	if err := selectFromList("Cluster to modify", fetchClusterNames(), &clusterName); err != nil {
+	if err := shared.SelectFromList("Cluster to modify", shared.FetchClusterNames(), &clusterName); err != nil {
 		return err
 	}
 
-	// Determine provider from existing cluster definition so we can offer the right lists.
 	var region, nodesStr, providerForModify string
-	sm, _ := createStateManager(gocontext.Background())
+	sm, _ := shared.CreateStateManager(gocontext.Background())
 	if sm != nil {
 		defs, _ := sm.LoadClusterDefinitions()
 		for _, d := range defs {
@@ -205,10 +209,10 @@ func interactiveClusterModify() error {
 	}
 
 	ctx2 := gocontext.Background()
-	if err := selectFromGroupsOptional("New region", fetchRegionGroups(ctx2, providerForModify, ""), &region); err != nil {
+	if err := shared.SelectFromGroupsOptional("New region", shared.FetchRegionGroups(ctx2, providerForModify, ""), &region); err != nil {
 		return err
 	}
-	if err := selectFromGroupsOptional("New node size", fetchNodeGroups(ctx2, providerForModify, region, ""), &nodesStr); err != nil {
+	if err := shared.SelectFromGroupsOptional("New node size", shared.FetchNodeGroups(ctx2, providerForModify, region, ""), &nodesStr); err != nil {
 		return err
 	}
 
@@ -224,12 +228,12 @@ func interactiveClusterModify() error {
 
 func interactiveClusterDelete() error {
 	clusterName := ""
-	if err := selectFromList("Cluster to delete", fetchClusterNames(), &clusterName); err != nil {
+	if err := shared.SelectFromList("Cluster to delete", shared.FetchClusterNames(), &clusterName); err != nil {
 		return err
 	}
 
 	var forceCloud bool
-	err := newForm(
+	err := shared.NewForm(
 		huh.NewGroup(
 			huh.NewConfirm().
 				Title("Delete from cloud immediately?").
@@ -248,7 +252,7 @@ func interactiveClusterDelete() error {
 		action = "DELETE from cloud immediately"
 	}
 	var confirm bool
-	err = newForm(
+	err = shared.NewForm(
 		huh.NewGroup(
 			huh.NewConfirm().
 				Title(fmt.Sprintf("Confirm: %s cluster '%s'?", action, clusterName)).
@@ -264,20 +268,18 @@ func interactiveClusterDelete() error {
 		return nil
 	}
 
-	// forceCloud = user chose "Yes — delete from cloud now"
-	// allowNoConfig=false: the cluster was selected from the local list so a config always exists
 	deleteClusterFromCLI(clusterName, false, forceCloud)
 	return nil
 }
 
 func interactiveClusterForceDelete() error {
 	clusterName := ""
-	if err := selectFromList("Cluster to force-delete", fetchClusterNames(), &clusterName); err != nil {
+	if err := shared.SelectFromList("Cluster to force-delete", shared.FetchClusterNames(), &clusterName); err != nil {
 		return err
 	}
 
 	var providerName string
-	err := newForm(
+	err := shared.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Cloud provider").
@@ -294,37 +296,36 @@ func interactiveClusterForceDelete() error {
 		return err
 	}
 
-	// Account / org / project / subscription selection
 	var accountAlias, projectName string
 	switch providerName {
 	case "civo":
-		if err := selectFromList("Civo organization", fetchCivoOrgNames(), &accountAlias); err != nil {
+		if err := shared.SelectFromList("Civo organization", shared.FetchCivoOrgNames(), &accountAlias); err != nil {
 			return err
 		}
-		projectName = accountAlias // used for token lookup in forceDeleteClusterFromCloud
+		projectName = accountAlias
 	case "aws":
-		if err := selectFromList("AWS account alias", fetchAWSAccountNames(), &accountAlias); err != nil {
+		if err := shared.SelectFromList("AWS account alias", shared.FetchAWSAccountNames(), &accountAlias); err != nil {
 			return err
 		}
 	case "gcp":
-		if err := selectFromList("GCP project alias", fetchGCPProjectNames(), &projectName); err != nil {
+		if err := shared.SelectFromList("GCP project alias", shared.FetchGCPProjectNames(), &projectName); err != nil {
 			return err
 		}
 		accountAlias = projectName
 	case "azure":
-		if err := selectFromList("Azure subscription alias", fetchAzureSubscriptionNames(), &accountAlias); err != nil {
+		if err := shared.SelectFromList("Azure subscription alias", shared.FetchAzureSubscriptionNames(), &accountAlias); err != nil {
 			return err
 		}
 	}
 
 	ctxFD := gocontext.Background()
 	var region string
-	if err := selectFromGroups("Region", fetchRegionGroups(ctxFD, providerName, accountAlias), "us-east-1", &region); err != nil {
+	if err := shared.SelectFromGroups("Region", shared.FetchRegionGroups(ctxFD, providerName, accountAlias), "us-east-1", &region); err != nil {
 		return err
 	}
 
 	var confirm bool
-	err = newForm(
+	err = shared.NewForm(
 		huh.NewGroup(
 			huh.NewConfirm().
 				Title(fmt.Sprintf("Force-delete '%s' from %s/%s? This cannot be undone.", clusterName, providerName, region)).
@@ -344,7 +345,6 @@ func interactiveClusterForceDelete() error {
 	return nil
 }
 
-// splitAndTrim splits s by sep and trims whitespace from each element.
 func splitAndTrim(s, sep string) []string {
 	parts := strings.Split(s, sep)
 	var out []string
@@ -358,7 +358,7 @@ func splitAndTrim(s, sep string) []string {
 }
 
 func interactiveClusterImport() error {
-	if sm, _ := createStateManager(gocontext.Background()); sm != nil {
+	if sm, _ := shared.CreateStateManager(gocontext.Background()); sm != nil {
 		if repoCfg, err := sm.LoadRepoConfig(); err == nil && repoCfg.Reconcile.StrictDelete {
 			fmt.Println("❌ Import is disabled: this repository has strictDelete enabled.")
 			fmt.Println("   In strict-delete mode hyve owns the full desired-state; importing an unmanaged cluster would cause it to be deleted on the next reconciliation.")
@@ -376,8 +376,7 @@ func interactiveClusterImport() error {
 		nodeRoleName string
 	)
 
-	// Step 1: provider
-	err := newForm(
+	err := shared.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Cloud provider").
@@ -395,46 +394,43 @@ func interactiveClusterImport() error {
 		return err
 	}
 	if providerName == "back" {
-		return errBack
+		return shared.ErrBack
 	}
 
-	// Step 2: account / org / project / subscription
 	switch providerName {
 	case "civo":
-		if err := selectFromList("Civo organization", fetchCivoOrgNames(), &accountAlias); err != nil {
+		if err := shared.SelectFromList("Civo organization", shared.FetchCivoOrgNames(), &accountAlias); err != nil {
 			return err
 		}
 	case "aws":
-		if err := selectFromList("AWS account alias", fetchAWSAccountNames(), &accountAlias); err != nil {
+		if err := shared.SelectFromList("AWS account alias", shared.FetchAWSAccountNames(), &accountAlias); err != nil {
 			return err
 		}
-		if err := selectFromList("VPC alias", fetchAWSVPCNames(accountAlias), &vpcName); err != nil {
+		if err := shared.SelectFromList("VPC alias", shared.FetchAWSVPCNames(accountAlias), &vpcName); err != nil {
 			return err
 		}
-		if err := selectFromList("EKS role alias", fetchAWSEKSRoleNames(accountAlias), &eksRoleName); err != nil {
+		if err := shared.SelectFromList("EKS role alias", shared.FetchAWSEKSRoleNames(accountAlias), &eksRoleName); err != nil {
 			return err
 		}
-		if err := selectFromList("Node role alias", fetchAWSNodeRoleNames(accountAlias), &nodeRoleName); err != nil {
+		if err := shared.SelectFromList("Node role alias", shared.FetchAWSNodeRoleNames(accountAlias), &nodeRoleName); err != nil {
 			return err
 		}
 	case "gcp":
-		if err := selectFromList("GCP project alias", fetchGCPProjectNames(), &accountAlias); err != nil {
+		if err := shared.SelectFromList("GCP project alias", shared.FetchGCPProjectNames(), &accountAlias); err != nil {
 			return err
 		}
 	case "azure":
-		if err := selectFromList("Azure subscription alias", fetchAzureSubscriptionNames(), &accountAlias); err != nil {
+		if err := shared.SelectFromList("Azure subscription alias", shared.FetchAzureSubscriptionNames(), &accountAlias); err != nil {
 			return err
 		}
 	}
 
-	// Step 3: region (pass accountAlias so we use the right credentials)
 	ctx := gocontext.Background()
-	if err := selectFromGroups("Region", fetchRegionGroups(ctx, providerName, accountAlias), "us-east-1", &region); err != nil {
+	if err := shared.SelectFromGroups("Region", shared.FetchRegionGroups(ctx, providerName, accountAlias), "us-east-1", &region); err != nil {
 		return err
 	}
 
-	// Step 4: cluster name — select from cloud or enter manually
-	cloudNames := fetchCloudClusterNames(ctx, providerName, region, accountAlias)
+	cloudNames := shared.FetchCloudClusterNames(ctx, providerName, region, accountAlias)
 	const manualKey = "__manual__"
 	if len(cloudNames) > 0 {
 		opts := make([]huh.Option[string], 0, len(cloudNames)+2)
@@ -445,7 +441,7 @@ func interactiveClusterImport() error {
 		opts = append(opts, huh.NewOption("← Back", "__back__"))
 
 		selection := ""
-		if err := newForm(
+		if err := shared.NewForm(
 			huh.NewGroup(
 				huh.NewSelect[string]().
 					Title("Select cluster to import").
@@ -457,7 +453,7 @@ func interactiveClusterImport() error {
 		}
 		switch selection {
 		case "__back__":
-			return errBack
+			return shared.ErrBack
 		case manualKey:
 			// fall through to manual input below
 		default:
@@ -466,7 +462,7 @@ func interactiveClusterImport() error {
 	}
 
 	if clusterName == "" {
-		if err := newForm(
+		if err := shared.NewForm(
 			huh.NewGroup(
 				huh.NewInput().
 					Title("Cluster name (must match the name in your cloud provider)").
@@ -478,8 +474,6 @@ func interactiveClusterImport() error {
 		}
 	}
 
-	// Step 5: confirm
-	// Map accountAlias back to the right field for importClusterFromCLI
 	var orgName, projectName, subscriptionName, accountName string
 	switch providerName {
 	case "civo":
@@ -494,7 +488,7 @@ func interactiveClusterImport() error {
 
 	var confirm bool
 	summary := fmt.Sprintf("Import '%s' (%s, %s) into hyve — cloud cluster will NOT be reprovisioned", clusterName, providerName, region)
-	err = newForm(
+	err = shared.NewForm(
 		huh.NewGroup(
 			huh.NewConfirm().
 				Title(summary).
@@ -515,7 +509,7 @@ func interactiveClusterImport() error {
 }
 
 func interactiveClusterRelease() error {
-	if sm, _ := createStateManager(gocontext.Background()); sm != nil {
+	if sm, _ := shared.CreateStateManager(gocontext.Background()); sm != nil {
 		if repoCfg, err := sm.LoadRepoConfig(); err == nil && repoCfg.Reconcile.StrictDelete {
 			fmt.Println("❌ Release is disabled: this repository has strictDelete enabled.")
 			fmt.Println("   In strict-delete mode removing a cluster definition would cause the cloud cluster to be deleted on the next reconciliation.")
@@ -525,12 +519,12 @@ func interactiveClusterRelease() error {
 	}
 
 	clusterName := ""
-	if err := selectFromList("Cluster to release from management", fetchClusterNames(), &clusterName); err != nil {
+	if err := shared.SelectFromList("Cluster to release from management", shared.FetchClusterNames(), &clusterName); err != nil {
 		return err
 	}
 
 	var confirm bool
-	err := newForm(
+	err := shared.NewForm(
 		huh.NewGroup(
 			huh.NewConfirm().
 				Title(fmt.Sprintf("Release '%s' from hyve management? The cloud cluster will NOT be deleted.", clusterName)).
