@@ -1,4 +1,4 @@
-package wf
+package workflow
 
 import (
 	"fmt"

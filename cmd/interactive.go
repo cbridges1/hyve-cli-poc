@@ -4,13 +4,13 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
 
-	"hyve/cmd/cfg"
 	"hyve/cmd/cluster"
+	"hyve/cmd/config"
 	gitpkg "hyve/cmd/git"
-	"hyve/cmd/kube"
+	"hyve/cmd/kubeconfig"
 	"hyve/cmd/shared"
-	"hyve/cmd/tpl"
-	"hyve/cmd/wf"
+	"hyve/cmd/template"
+	"hyve/cmd/workflow"
 )
 
 var interactiveCmd = &cobra.Command{
@@ -54,13 +54,13 @@ var interactiveCmd = &cobra.Command{
 			case "git":
 				runErr = gitpkg.RunInteractive()
 			case "config":
-				runErr = cfg.RunInteractive()
+				runErr = config.RunInteractive()
 			case "workflow":
-				runErr = wf.RunInteractive()
+				runErr = workflow.RunInteractive()
 			case "template":
-				runErr = tpl.RunInteractive()
+				runErr = template.RunInteractive()
 			case "kubeconfig":
-				runErr = kube.RunInteractive()
+				runErr = kubeconfig.RunInteractive()
 			}
 			// ErrBack from a top-level section just returns to this menu
 			if runErr == huh.ErrUserAborted {

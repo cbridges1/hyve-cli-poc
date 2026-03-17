@@ -6,12 +6,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"hyve/cmd/cfg"
 	"hyve/cmd/cluster"
+	"hyve/cmd/config"
 	gitpkg "hyve/cmd/git"
-	"hyve/cmd/kube"
-	"hyve/cmd/tpl"
-	"hyve/cmd/wf"
+	"hyve/cmd/kubeconfig"
+	"hyve/cmd/template"
+	"hyve/cmd/workflow"
 	"hyve/internal/database"
 )
 
@@ -69,11 +69,11 @@ func init() {
 	rootCmd.AddCommand(reconcileCmd)
 	rootCmd.AddCommand(cluster.Cmd)
 	rootCmd.AddCommand(gitpkg.Cmd)
-	rootCmd.AddCommand(kube.Cmd)
-	rootCmd.AddCommand(cfg.Cmd)
+	rootCmd.AddCommand(kubeconfig.Cmd)
+	rootCmd.AddCommand(config.Cmd)
 	rootCmd.AddCommand(useCmd)
 	rootCmd.AddCommand(runCmd)
-	rootCmd.AddCommand(wf.Cmd)
-	rootCmd.AddCommand(tpl.Cmd)
+	rootCmd.AddCommand(workflow.Cmd)
+	rootCmd.AddCommand(template.Cmd)
 	rootCmd.AddCommand(interactiveCmd)
 }

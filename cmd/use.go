@@ -3,7 +3,7 @@ package cmd
 import (
 	"github.com/spf13/cobra"
 
-	"hyve/cmd/kube"
+	"hyve/cmd/kubeconfig"
 )
 
 var useCmd = &cobra.Command{
@@ -13,6 +13,6 @@ var useCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		clusterName := args[0]
-		kube.UseKubeconfig(clusterName)
+		kubeconfig.UseKubeconfig(clusterName)
 	},
 }
