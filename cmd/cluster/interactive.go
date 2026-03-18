@@ -94,6 +94,7 @@ func interactiveClusterAdd() error {
 			huh.NewInput().
 				Title("Cluster name").
 				Placeholder("my-cluster").
+				Validate(shared.RequireNotEmpty).
 				Value(&clusterName),
 			huh.NewSelect[string]().
 				Title("Cloud provider").
@@ -497,6 +498,7 @@ func interactiveClusterImport() error {
 				huh.NewInput().
 					Title("Cluster name (must match the name in your cloud provider)").
 					Placeholder("my-cluster").
+					Validate(shared.RequireNotEmpty).
 					Value(&clusterName),
 			),
 		).Run(); err != nil {

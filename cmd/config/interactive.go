@@ -89,7 +89,7 @@ func interactiveConfigCivo() error {
 			var org, token string
 			err = shared.NewForm(
 				huh.NewGroup(
-					huh.NewInput().Title("Organization alias").Value(&org),
+					huh.NewInput().Title("Organization alias").Validate(shared.RequireNotEmpty).Value(&org),
 					huh.NewInput().Title("Token (leave blank to be prompted)").Value(&token),
 				),
 			).Run()
@@ -165,8 +165,8 @@ func interactiveConfigGCP() error {
 			var name, id string
 			err = shared.NewForm(
 				huh.NewGroup(
-					huh.NewInput().Title("Project alias").Placeholder("dev").Value(&name),
-					huh.NewInput().Title("GCP project ID").Placeholder("my-project-123").Value(&id),
+					huh.NewInput().Title("Project alias").Placeholder("dev").Validate(shared.RequireNotEmpty).Value(&name),
+					huh.NewInput().Title("GCP project ID").Placeholder("my-project-123").Validate(shared.RequireNotEmpty).Value(&id),
 				),
 			).Run()
 			if err != nil {
@@ -276,8 +276,8 @@ func interactiveConfigAWSAccount() error {
 			var name, id string
 			err = shared.NewForm(
 				huh.NewGroup(
-					huh.NewInput().Title("Account alias").Placeholder("prod").Value(&name),
-					huh.NewInput().Title("AWS account ID").Placeholder("123456789012").Value(&id),
+					huh.NewInput().Title("Account alias").Placeholder("prod").Validate(shared.RequireNotEmpty).Value(&name),
+					huh.NewInput().Title("AWS account ID").Placeholder("123456789012").Validate(shared.RequireNotEmpty).Value(&id),
 				),
 			).Run()
 			if err != nil {
@@ -356,8 +356,8 @@ func interactiveConfigAWSEKSRole() error {
 			var name, roleARN string
 			err = shared.NewForm(
 				huh.NewGroup(
-					huh.NewInput().Title("Role alias").Value(&name),
-					huh.NewInput().Title("IAM role ARN").Placeholder("arn:aws:iam::123456789012:role/...").Value(&roleARN),
+					huh.NewInput().Title("Role alias").Validate(shared.RequireNotEmpty).Value(&name),
+					huh.NewInput().Title("IAM role ARN").Placeholder("arn:aws:iam::123456789012:role/...").Validate(shared.RequireNotEmpty).Value(&roleARN),
 				),
 			).Run()
 			if err != nil {
@@ -375,8 +375,8 @@ func interactiveConfigAWSEKSRole() error {
 			var name, roleName, region string
 			err = shared.NewForm(
 				huh.NewGroup(
-					huh.NewInput().Title("Role alias").Value(&name),
-					huh.NewInput().Title("IAM role name in AWS").Placeholder("hyve-eks-role").Value(&roleName),
+					huh.NewInput().Title("Role alias").Validate(shared.RequireNotEmpty).Value(&name),
+					huh.NewInput().Title("IAM role name in AWS").Placeholder("hyve-eks-role").Validate(shared.RequireNotEmpty).Value(&roleName),
 					huh.NewInput().Title("Region").Placeholder("us-east-1").Value(&region),
 				),
 			).Run()
@@ -470,8 +470,8 @@ func interactiveConfigAWSVPC() error {
 			var name, id string
 			err = shared.NewForm(
 				huh.NewGroup(
-					huh.NewInput().Title("VPC alias").Value(&name),
-					huh.NewInput().Title("VPC ID").Placeholder("vpc-0123456789abcdef0").Value(&id),
+					huh.NewInput().Title("VPC alias").Validate(shared.RequireNotEmpty).Value(&name),
+					huh.NewInput().Title("VPC ID").Placeholder("vpc-0123456789abcdef0").Validate(shared.RequireNotEmpty).Value(&id),
 				),
 			).Run()
 			if err != nil {
@@ -489,7 +489,7 @@ func interactiveConfigAWSVPC() error {
 			var name, region, cidr, subnets string
 			err = shared.NewForm(
 				huh.NewGroup(
-					huh.NewInput().Title("VPC alias").Value(&name),
+					huh.NewInput().Title("VPC alias").Validate(shared.RequireNotEmpty).Value(&name),
 					huh.NewInput().Title("Region").Placeholder("us-east-1").Value(&region),
 					huh.NewInput().Title("CIDR block (optional)").Placeholder("10.0.0.0/16").Value(&cidr),
 					huh.NewInput().Title("Subnet CIDRs, comma-separated (optional)").Placeholder("10.0.1.0/24,10.0.2.0/24").Value(&subnets),
@@ -615,8 +615,8 @@ func interactiveConfigAzureSubscription() error {
 			var name, id string
 			err = shared.NewForm(
 				huh.NewGroup(
-					huh.NewInput().Title("Subscription alias").Placeholder("prod-sub").Value(&name),
-					huh.NewInput().Title("Azure subscription ID").Placeholder("xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx").Value(&id),
+					huh.NewInput().Title("Subscription alias").Placeholder("prod-sub").Validate(shared.RequireNotEmpty).Value(&name),
+					huh.NewInput().Title("Azure subscription ID").Placeholder("xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx").Validate(shared.RequireNotEmpty).Value(&id),
 				),
 			).Run()
 			if err != nil {
@@ -687,7 +687,7 @@ func interactiveConfigAzureResourceGroup() error {
 			var name, location string
 			err = shared.NewForm(
 				huh.NewGroup(
-					huh.NewInput().Title("Resource group name").Placeholder("hyve-rg").Value(&name),
+					huh.NewInput().Title("Resource group name").Placeholder("hyve-rg").Validate(shared.RequireNotEmpty).Value(&name),
 					huh.NewInput().Title("Location/region").Placeholder("eastus").Value(&location),
 				),
 			).Run()

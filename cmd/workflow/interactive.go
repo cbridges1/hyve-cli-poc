@@ -90,7 +90,7 @@ func interactiveWorkflowCreate() error {
 		var fromFile string
 		err = shared.NewForm(
 			huh.NewGroup(
-				huh.NewInput().Title("Path to YAML file").Placeholder("./workflow.yaml").Value(&fromFile),
+				huh.NewInput().Title("Path to YAML file").Placeholder("./workflow.yaml").Validate(shared.RequireNotEmpty).Value(&fromFile),
 			),
 		).Run()
 		if err != nil {
@@ -103,7 +103,7 @@ func interactiveWorkflowCreate() error {
 	var name, description string
 	err = shared.NewForm(
 		huh.NewGroup(
-			huh.NewInput().Title("Workflow name").Placeholder("deploy-app").Value(&name),
+			huh.NewInput().Title("Workflow name").Placeholder("deploy-app").Validate(shared.RequireNotEmpty).Value(&name),
 			huh.NewInput().Title("Description (optional)").Value(&description),
 		),
 	).Run()

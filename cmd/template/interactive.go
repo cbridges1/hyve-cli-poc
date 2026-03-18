@@ -83,7 +83,7 @@ func interactiveTemplateCreate() error {
 
 	err := shared.NewForm(
 		huh.NewGroup(
-			huh.NewInput().Title("Template name").Placeholder("my-template").Value(&name),
+			huh.NewInput().Title("Template name").Placeholder("my-template").Validate(shared.RequireNotEmpty).Value(&name),
 			huh.NewInput().Title("Description (optional)").Value(&description),
 			huh.NewSelect[string]().
 				Title("Cloud provider").
@@ -216,7 +216,7 @@ func interactiveTemplateExecute() error {
 	var clusterName string
 	if err := shared.NewForm(
 		huh.NewGroup(
-			huh.NewInput().Title("New cluster name").Value(&clusterName),
+			huh.NewInput().Title("New cluster name").Validate(shared.RequireNotEmpty).Value(&clusterName),
 		),
 	).Run(); err != nil {
 		return err

@@ -109,8 +109,8 @@ func interactiveGitRepoAdd() error {
 
 	err := shared.NewForm(
 		huh.NewGroup(
-			huh.NewInput().Title("Repository alias").Placeholder("production").Value(&name),
-			huh.NewInput().Title("Repository URL").Placeholder("https://github.com/org/hyve-state.git").Value(&repoURL),
+			huh.NewInput().Title("Repository alias").Placeholder("production").Validate(shared.RequireNotEmpty).Value(&name),
+			huh.NewInput().Title("Repository URL").Placeholder("https://github.com/org/hyve-state.git").Validate(shared.RequireNotEmpty).Value(&repoURL),
 			huh.NewInput().Title("Git username (optional)").Value(&username),
 			huh.NewConfirm().
 				Title("Set as current active repository?").
@@ -216,7 +216,7 @@ func interactiveGitBranchCreate() error {
 
 	err := shared.NewForm(
 		huh.NewGroup(
-			huh.NewInput().Title("New branch name").Placeholder("feature/my-feature").Value(&branchName),
+			huh.NewInput().Title("New branch name").Placeholder("feature/my-feature").Validate(shared.RequireNotEmpty).Value(&branchName),
 			huh.NewConfirm().
 				Title("Switch to new branch after creating?").
 				Affirmative("Yes").
@@ -245,7 +245,7 @@ func interactiveGitBranchSwitch() error {
 
 	err := shared.NewForm(
 		huh.NewGroup(
-			huh.NewInput().Title("Branch name to switch to").Value(&branchName),
+			huh.NewInput().Title("Branch name to switch to").Validate(shared.RequireNotEmpty).Value(&branchName),
 			huh.NewConfirm().
 				Title("Pull latest changes after switching?").
 				Affirmative("Yes").
@@ -269,7 +269,7 @@ func interactiveGitBranchDelete() error {
 
 	err := shared.NewForm(
 		huh.NewGroup(
-			huh.NewInput().Title("Branch name to delete").Value(&branchName),
+			huh.NewInput().Title("Branch name to delete").Validate(shared.RequireNotEmpty).Value(&branchName),
 			huh.NewConfirm().
 				Title("Force delete (even if not merged)?").
 				Affirmative("Force delete").
@@ -345,7 +345,7 @@ func interactiveGitPush() error {
 	var message string
 	err := shared.NewForm(
 		huh.NewGroup(
-			huh.NewInput().Title("Commit message").Placeholder("Update cluster config").Value(&message),
+			huh.NewInput().Title("Commit message").Placeholder("Update cluster config").Validate(shared.RequireNotEmpty).Value(&message),
 		),
 	).Run()
 	if err != nil {
@@ -359,7 +359,7 @@ func interactiveGitSyncChanges() error {
 	var message string
 	err := shared.NewForm(
 		huh.NewGroup(
-			huh.NewInput().Title("Commit message").Placeholder("Update cluster config").Value(&message),
+			huh.NewInput().Title("Commit message").Placeholder("Update cluster config").Validate(shared.RequireNotEmpty).Value(&message),
 		),
 	).Run()
 	if err != nil {

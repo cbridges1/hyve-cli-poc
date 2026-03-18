@@ -2,6 +2,7 @@ package shared
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
@@ -66,6 +67,15 @@ func HyveTheme() *huh.Theme {
 	t.Group.Description = t.Focused.Description
 
 	return t
+}
+
+// RequireNotEmpty is a huh validation function that rejects blank input.
+// Use with huh.NewInput().Validate(shared.RequireNotEmpty).
+func RequireNotEmpty(s string) error {
+	if strings.TrimSpace(s) == "" {
+		return errors.New("this field is required")
+	}
+	return nil
 }
 
 // NewForm wraps huh.NewForm and applies the Hyve theme automatically.
