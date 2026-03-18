@@ -124,10 +124,12 @@ func interactiveTemplateCreate() error {
 				huh.NewInput().
 					Title("Node group name").
 					Placeholder("default").
+					Validate(shared.RequireNotEmpty).
 					Value(&ngName),
 				huh.NewInput().
 					Title("Node count").
 					Placeholder("1").
+					Validate(shared.RequireNotEmpty).
 					Value(&ngCountStr),
 				huh.NewInput().
 					Title("Min count (leave blank to match count)").

@@ -87,9 +87,11 @@ func interactiveConfigCivo() error {
 			configCivoOrgListCmd.Run(configCivoOrgListCmd, nil)
 		case "set":
 			var org, token string
+			if err := shared.SelectFromList("Organization", shared.FetchCivoOrgNames(), &org); err != nil {
+				return err
+			}
 			err = shared.NewForm(
 				huh.NewGroup(
-					huh.NewInput().Title("Organization alias").Validate(shared.RequireNotEmpty).Value(&org),
 					huh.NewInput().Title("Token (leave blank to be prompted)").Value(&token),
 				),
 			).Run()
@@ -377,7 +379,7 @@ func interactiveConfigAWSEKSRole() error {
 				huh.NewGroup(
 					huh.NewInput().Title("Role alias").Validate(shared.RequireNotEmpty).Value(&name),
 					huh.NewInput().Title("IAM role name in AWS").Placeholder("hyve-eks-role").Validate(shared.RequireNotEmpty).Value(&roleName),
-					huh.NewInput().Title("Region").Placeholder("us-east-1").Value(&region),
+					huh.NewInput().Title("Region").Placeholder("us-east-1").Validate(shared.RequireNotEmpty).Value(&region),
 				),
 			).Run()
 			if err != nil {
@@ -490,7 +492,7 @@ func interactiveConfigAWSVPC() error {
 			err = shared.NewForm(
 				huh.NewGroup(
 					huh.NewInput().Title("VPC alias").Validate(shared.RequireNotEmpty).Value(&name),
-					huh.NewInput().Title("Region").Placeholder("us-east-1").Value(&region),
+					huh.NewInput().Title("Region").Placeholder("us-east-1").Validate(shared.RequireNotEmpty).Value(&region),
 					huh.NewInput().Title("CIDR block (optional)").Placeholder("10.0.0.0/16").Value(&cidr),
 					huh.NewInput().Title("Subnet CIDRs, comma-separated (optional)").Placeholder("10.0.1.0/24,10.0.2.0/24").Value(&subnets),
 				),
@@ -688,7 +690,7 @@ func interactiveConfigAzureResourceGroup() error {
 			err = shared.NewForm(
 				huh.NewGroup(
 					huh.NewInput().Title("Resource group name").Placeholder("hyve-rg").Validate(shared.RequireNotEmpty).Value(&name),
-					huh.NewInput().Title("Location/region").Placeholder("eastus").Value(&location),
+					huh.NewInput().Title("Location/region").Placeholder("eastus").Validate(shared.RequireNotEmpty).Value(&location),
 				),
 			).Run()
 			if err != nil {
