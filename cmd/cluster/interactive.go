@@ -115,10 +115,10 @@ func interactiveClusterAdd() error {
 	}
 
 	ctx := gocontext.Background()
-	if err := shared.SelectFromGroups("Region", shared.FetchRegionGroups(ctx, providerName, ""), "us-east-1", &region); err != nil {
+	if err := shared.SelectFromGroups("Region", shared.FetchRegionGroups(ctx, providerName, ""), defaultRegionPlaceholder(providerName), &region); err != nil {
 		return err
 	}
-	if err := shared.SelectFromGroups("Node size", shared.FetchNodeGroups(ctx, providerName, region, ""), "g4s.kube.medium", &nodesStr); err != nil {
+	if err := shared.SelectFromGroups("Node size", shared.FetchNodeGroups(ctx, providerName, region, ""), defaultNodePlaceholder(providerName), &nodesStr); err != nil {
 		return err
 	}
 
@@ -320,7 +320,7 @@ func interactiveClusterForceDelete() error {
 
 	ctxFD := gocontext.Background()
 	var region string
-	if err := shared.SelectFromGroups("Region", shared.FetchRegionGroups(ctxFD, providerName, accountAlias), "us-east-1", &region); err != nil {
+	if err := shared.SelectFromGroups("Region", shared.FetchRegionGroups(ctxFD, providerName, accountAlias), defaultRegionPlaceholder(providerName), &region); err != nil {
 		return err
 	}
 
@@ -343,6 +343,36 @@ func interactiveClusterForceDelete() error {
 
 	forceDeleteClusterFromCloud(clusterName, region, providerName, projectName, accountAlias)
 	return nil
+}
+
+func defaultRegionPlaceholder(provider string) string {
+	switch provider {
+	case "aws":
+		return "us-east-1"
+	case "gcp":
+		return "us-central1"
+	case "azure":
+		return "eastus"
+	case "civo":
+		return "PHX1"
+	default:
+		return "region"
+	}
+}
+
+func defaultNodePlaceholder(provider string) string {
+	switch provider {
+	case "aws":
+		return "t3.medium"
+	case "gcp":
+		return "e2-medium"
+	case "azure":
+		return "Standard_B2s"
+	case "civo":
+		return "g4s.kube.medium"
+	default:
+		return "machine"
+	}
 }
 
 func splitAndTrim(s, sep string) []string {
@@ -426,7 +456,7 @@ func interactiveClusterImport() error {
 	}
 
 	ctx := gocontext.Background()
-	if err := shared.SelectFromGroups("Region", shared.FetchRegionGroups(ctx, providerName, accountAlias), "us-east-1", &region); err != nil {
+	if err := shared.SelectFromGroups("Region", shared.FetchRegionGroups(ctx, providerName, accountAlias), defaultRegionPlaceholder(providerName), &region); err != nil {
 		return err
 	}
 
