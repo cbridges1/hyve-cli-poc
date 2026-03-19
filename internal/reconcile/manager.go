@@ -48,8 +48,8 @@ func (r *Reconciler) ReconcileAll(ctx context.Context, clusterDefs []types.Clust
 	}
 
 	if len(clusterDefs) == 0 {
-		log.Println("No cluster definitions found in state/clusters directory")
-		r.cleanupAllRegions(ctx, clusterDefs)
+		log.Println("No cluster definitions found in state/clusters directory — skipping reconcile")
+		return nil
 	} else {
 		for region, clusters := range regionClusters {
 			err := r.reconcileRegion(ctx, region, clusters)
