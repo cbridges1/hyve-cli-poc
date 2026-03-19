@@ -98,7 +98,10 @@ Use --account-name, --project-name, --subscription-name, or --org-name to specif
 			nodeGroups = append(nodeGroups, ng)
 		}
 
-		addClusterFromCLI(clusterName, region, providerName, nodes, nodeGroups, clusterType, accountName, projectName, subscriptionName, orgName, vpcName, eksRoleName, nodeRoleName)
+		onCreated, _ := cmd.Flags().GetStringArray("on-created")
+		onDestroy, _ := cmd.Flags().GetStringArray("on-destroy")
+
+		addClusterFromCLI(clusterName, region, providerName, nodes, nodeGroups, clusterType, accountName, projectName, subscriptionName, orgName, vpcName, eksRoleName, nodeRoleName, onCreated, onDestroy)
 	},
 }
 
@@ -240,6 +243,9 @@ func init() {
 	addCmd.Flags().String("node-role-name", "", "AWS EKS node IAM role name alias (required for AWS provider)")
 
 	addCmd.Flags().StringArrayP("node-group", "g", nil, `Node group spec (repeatable): name=workers,type=t3.medium,count=3[,min=1,max=5,disk=50,spot=true,mode=System]`)
+
+	addCmd.Flags().StringArray("on-created", nil, "Workflow name(s) to run after cluster creation (repeatable)")
+	addCmd.Flags().StringArray("on-destroy", nil, "Workflow name(s) to run before cluster destruction (repeatable)")
 
 	modifyCmd.Flags().StringP("region", "r", "", "Region for the cluster")
 	modifyCmd.Flags().StringP("provider", "p", "", "Cloud provider")

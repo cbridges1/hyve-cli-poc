@@ -18,7 +18,7 @@ import (
 	"hyve/internal/types"
 )
 
-func addClusterFromCLI(clusterName, region, providerName string, nodes []string, nodeGroups []types.NodeGroup, clusterType, accountName, projectName, subscriptionName, orgName, vpcName, eksRoleName, nodeRoleName string) {
+func addClusterFromCLI(clusterName, region, providerName string, nodes []string, nodeGroups []types.NodeGroup, clusterType, accountName, projectName, subscriptionName, orgName, vpcName, eksRoleName, nodeRoleName string, onCreated, onDestroy []string) {
 	ctx := gocontext.Background()
 	stateMgr, stateDir := shared.CreateStateManager(ctx)
 
@@ -116,6 +116,10 @@ func addClusterFromCLI(clusterName, region, providerName string, nodes []string,
 			AWSNodeRoleARN:    awsNodeRoleARN,
 			AzureSubscription: subscriptionName,
 			CivoOrganization:  orgName,
+			Workflows: types.WorkflowsSpec{
+				OnCreated: onCreated,
+				OnDestroy: onDestroy,
+			},
 			Ingress: types.IngressSpec{
 				Enabled:      true,
 				LoadBalancer: true,

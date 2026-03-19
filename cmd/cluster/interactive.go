@@ -87,6 +87,8 @@ func interactiveClusterAdd() error {
 		vpcName          string
 		eksRoleName      string
 		nodeRoleName     string
+		onCreatedNames   []string
+		onDestroyNames   []string
 	)
 
 	err := shared.NewForm(
@@ -168,6 +170,31 @@ func interactiveClusterAdd() error {
 		}
 	}
 
+	// Workflow attachment — optional
+	if wfNames := shared.FetchWorkflowNames(); len(wfNames) > 0 {
+		makeOpts := func() []huh.Option[string] {
+			opts := make([]huh.Option[string], len(wfNames))
+			for i, wf := range wfNames {
+				opts[i] = huh.NewOption(wf, wf)
+			}
+			return opts
+		}
+		if err := shared.NewForm(
+			huh.NewGroup(
+				huh.NewMultiSelect[string]().
+					Title("On-created workflows (optional — space to select, enter to confirm)").
+					Options(makeOpts()...).
+					Value(&onCreatedNames),
+				huh.NewMultiSelect[string]().
+					Title("On-destroy workflows (optional — space to select, enter to confirm)").
+					Options(makeOpts()...).
+					Value(&onDestroyNames),
+			),
+		).Run(); err != nil {
+			return err
+		}
+	}
+
 	nodes := splitAndTrim(nodesStr, ",")
 	var confirm bool
 	summary := fmt.Sprintf("Add cluster '%s' on %s in %s with nodes: %s", clusterName, providerName, region, strings.Join(nodes, ", "))
@@ -187,7 +214,7 @@ func interactiveClusterAdd() error {
 		return nil
 	}
 
-	addClusterFromCLI(clusterName, region, providerName, nodes, []types.NodeGroup{}, clusterType, accountName, projectName, subscriptionName, orgName, vpcName, eksRoleName, nodeRoleName)
+	addClusterFromCLI(clusterName, region, providerName, nodes, []types.NodeGroup{}, clusterType, accountName, projectName, subscriptionName, orgName, vpcName, eksRoleName, nodeRoleName, onCreatedNames, onDestroyNames)
 	return nil
 }
 
