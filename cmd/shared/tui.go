@@ -119,7 +119,7 @@ func SelectFromGroups(title string, groups []OptionGroup, placeholder string, va
 		if selectedGroup == manualKey {
 			return NewForm(
 				huh.NewGroup(
-					huh.NewInput().Title(title).Placeholder(placeholder).Value(value),
+					huh.NewInput().Title(title).Placeholder(placeholder).Validate(RequireNotEmpty).Value(value),
 				),
 			).Run()
 		}
