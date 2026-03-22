@@ -38,10 +38,6 @@ func (m *Manager) DetermineAction(ctx context.Context, desired types.ClusterDefi
 	log.Printf("Found existing cluster %s with ID %s", desired.Metadata.Name, cluster.ID)
 
 	if cluster.Status == "ACTIVE" {
-		if m.needsUpdate(cluster, desired) {
-			log.Printf("Cluster %s configuration differs from desired state, will update", desired.Metadata.Name)
-			return types.ActionUpdate
-		}
 		log.Printf("Cluster %s is up to date", desired.Metadata.Name)
 		return types.ActionNone
 	}
@@ -55,11 +51,6 @@ func (m *Manager) DetermineAction(ctx context.Context, desired types.ClusterDefi
 	return types.ActionNone
 }
 
-// needsUpdate checks if cluster needs to be updated
-func (m *Manager) needsUpdate(actual *provider.Cluster, desired types.ClusterDefinition) bool {
-	return false
-}
-
 // FindByName finds a cluster by name
 func (m *Manager) FindByName(ctx context.Context, name string) (*provider.Cluster, error) {
 	return m.provider.FindClusterByName(ctx, name)
@@ -71,6 +62,7 @@ func (m *Manager) Create(ctx context.Context, clusterDef types.ClusterDefinition
 		Name:        clusterDef.Metadata.Name,
 		Region:      clusterDef.Metadata.Region,
 		Nodes:       clusterDef.Spec.Nodes,
+		NodeGroups:  clusterDef.Spec.NodeGroups,
 		ClusterType: clusterDef.Spec.ClusterType,
 		// AWS-specific configuration
 		AWSRoleARN:     clusterDef.Spec.AWSEKSRoleARN,
@@ -93,8 +85,9 @@ func (m *Manager) Update(ctx context.Context, clusterDef types.ClusterDefinition
 	}
 
 	config := &provider.ClusterUpdateConfig{
-		Name:  clusterDef.Metadata.Name,
-		Nodes: clusterDef.Spec.Nodes,
+		Name:       clusterDef.Metadata.Name,
+		Nodes:      clusterDef.Spec.Nodes,
+		NodeGroups: clusterDef.Spec.NodeGroups,
 	}
 
 	_, err = m.provider.UpdateCluster(ctx, cluster.ID, config)

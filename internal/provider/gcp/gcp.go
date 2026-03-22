@@ -41,19 +41,12 @@ type FirewallRule struct {
 	Direction string
 }
 
-// LoadBalancer represents a generic load balancer
-type LoadBalancer struct {
-	ID        string
-	Name      string
-	PublicIP  string
-	ClusterID string
-}
-
 // ClusterConfig represents cluster creation configuration
 type ClusterConfig struct {
 	Name         string
 	Region       string
 	Nodes        []string
+	NodeGroups   []types.NodeGroup
 	ClusterType  string
 	FirewallID   string
 	Applications []string
@@ -61,8 +54,9 @@ type ClusterConfig struct {
 
 // ClusterUpdateConfig represents cluster update configuration
 type ClusterUpdateConfig struct {
-	Name  string
-	Nodes []string
+	Name       string
+	Nodes      []string
+	NodeGroups []types.NodeGroup
 }
 
 // FirewallConfig represents firewall creation configuration
@@ -79,6 +73,7 @@ type ClusterInfo struct {
 	Kubeconfig string
 	Status     string
 	ID         string
+	NodeGroups []types.NodeGroup
 }
 
 // Provider implements the provider interfaces for GCP
@@ -170,64 +165,118 @@ func (p *Provider) GetCluster(ctx context.Context, clusterID string) (*Cluster, 
 
 // FindClusterByName finds a cluster by name
 func (p *Provider) FindClusterByName(ctx context.Context, name string) (*Cluster, error) {
-	// First try to find in the default zone (for clusters we created)
-	cluster, err := p.containerService.Projects.Locations.Clusters.Get(p.clusterPath(name)).Context(ctx).Do()
-	if err == nil {
-		return p.convertCluster(cluster), nil
+	// When using the wildcard location "-", skip the zone-specific GET (which would
+	// produce an invalid zone like "--b") and go straight to listing all clusters.
+	if p.region != "-" {
+		cluster, err := p.containerService.Projects.Locations.Clusters.Get(p.clusterPath(name)).Context(ctx).Do()
+		if err == nil {
+			return p.convertCluster(cluster), nil
+		}
+		if !strings.Contains(err.Error(), "notFound") && !strings.Contains(err.Error(), "404") {
+			return nil, fmt.Errorf("failed to find GKE cluster: %w", err)
+		}
 	}
 
-	// If not found in default zone, list all clusters in region and find by name
-	if strings.Contains(err.Error(), "notFound") || strings.Contains(err.Error(), "404") {
-		// List all clusters in the region
-		resp, listErr := p.containerService.Projects.Locations.Clusters.List(p.parentPath()).Context(ctx).Do()
-		if listErr != nil {
-			return nil, nil // Cluster not found
-		}
-
-		for _, c := range resp.Clusters {
-			if c.Name == name {
-				return p.convertClusterWithLocation(c), nil
-			}
-		}
+	// List all clusters in the location (or all locations when region == "-") and find by name
+	resp, listErr := p.containerService.Projects.Locations.Clusters.List(p.parentPath()).Context(ctx).Do()
+	if listErr != nil {
 		return nil, nil // Cluster not found
 	}
 
-	return nil, fmt.Errorf("failed to find GKE cluster: %w", err)
+	for _, c := range resp.Clusters {
+		if c.Name == name {
+			return p.convertClusterWithLocation(c), nil
+		}
+	}
+	return nil, nil // Cluster not found
 }
 
 // CreateCluster creates a new cluster
 func (p *Provider) CreateCluster(ctx context.Context, config *ClusterConfig) (*Cluster, error) {
 	log.Printf("Creating GKE cluster %s in region %s", config.Name, p.region)
 
-	// Determine machine type and node count from nodes config
-	// The nodes slice contains machine types - use the first one and count the total
-	machineType := "e2-medium"
-	nodeCount := int64(len(config.Nodes))
-	if nodeCount == 0 {
-		nodeCount = 1
-	}
-	if len(config.Nodes) > 0 {
-		machineType = config.Nodes[0]
-	}
-
-	log.Printf("Creating GKE cluster with %d nodes of type %s", nodeCount, machineType)
-
 	// Create a zonal cluster for precise node count control
-	// Regional clusters multiply nodes across zones (3 zones = 3x nodes)
-	// We'll create the cluster in a specific zone derived from the region
 	zone := p.getDefaultZone()
-
-	// For zonal clusters, use the zone as the location
 	zonalPath := fmt.Sprintf("projects/%s/locations/%s", p.projectID, zone)
 
-	createReq := &container.CreateClusterRequest{
-		Cluster: &container.Cluster{
-			Name:             config.Name,
-			InitialNodeCount: nodeCount,
-			NodeConfig: &container.NodeConfig{
-				MachineType: machineType,
+	var createReq *container.CreateClusterRequest
+
+	if len(config.NodeGroups) > 0 {
+		// Multi-pool cluster from NodeGroups
+		var nodePools []*container.NodePool
+		for _, ng := range config.NodeGroups {
+			poolName := ng.Name
+			if poolName == "" {
+				poolName = "default-pool"
+			}
+			machineType := ng.InstanceType
+			if machineType == "" {
+				machineType = "e2-medium"
+			}
+			count := int64(ng.Count)
+			if count < 1 {
+				count = 1
+			}
+			pool := &container.NodePool{
+				Name:             poolName,
+				InitialNodeCount: count,
+				Config: &container.NodeConfig{
+					MachineType: machineType,
+				},
+			}
+			if ng.Spot {
+				pool.Config.Spot = true
+			}
+			if ng.DiskSize > 0 {
+				pool.Config.DiskSizeGb = int64(ng.DiskSize)
+			}
+			if len(ng.Labels) > 0 {
+				pool.Config.Labels = ng.Labels
+			}
+			if ng.MinCount > 0 || ng.MaxCount > 0 {
+				minCount := int64(ng.MinCount)
+				if minCount < 1 {
+					minCount = 1
+				}
+				maxCount := int64(ng.MaxCount)
+				if maxCount < count {
+					maxCount = count + 2
+				}
+				pool.Autoscaling = &container.NodePoolAutoscaling{
+					Enabled:      true,
+					MinNodeCount: minCount,
+					MaxNodeCount: maxCount,
+				}
+			}
+			nodePools = append(nodePools, pool)
+		}
+		log.Printf("Creating GKE cluster with %d node pool(s)", len(nodePools))
+		createReq = &container.CreateClusterRequest{
+			Cluster: &container.Cluster{
+				Name:      config.Name,
+				NodePools: nodePools,
 			},
-		},
+		}
+	} else {
+		// Legacy single pool from Nodes slice
+		machineType := "e2-medium"
+		nodeCount := int64(len(config.Nodes))
+		if nodeCount == 0 {
+			nodeCount = 1
+		}
+		if len(config.Nodes) > 0 {
+			machineType = config.Nodes[0]
+		}
+		log.Printf("Creating GKE cluster with %d nodes of type %s", nodeCount, machineType)
+		createReq = &container.CreateClusterRequest{
+			Cluster: &container.Cluster{
+				Name:             config.Name,
+				InitialNodeCount: nodeCount,
+				NodeConfig: &container.NodeConfig{
+					MachineType: machineType,
+				},
+			},
+		}
 	}
 
 	op, err := p.containerService.Projects.Locations.Clusters.Create(zonalPath, createReq).Context(ctx).Do()
@@ -351,12 +400,49 @@ func (p *Provider) GetClusterInfo(ctx context.Context, name string) (*ClusterInf
 		return nil, fmt.Errorf("cluster %s not found", name)
 	}
 
+	// Fetch the raw GKE cluster to extract node pool details.
+	// Use the cluster's actual location (set by convertClusterWithLocation) so
+	// both zonal and regional clusters are found correctly.
+	location := p.region
+	if cluster.Location != "" {
+		location = cluster.Location
+	}
+	clusterPath := fmt.Sprintf("projects/%s/locations/%s/clusters/%s", p.projectID, location, name)
+	rawCluster, rawErr := p.containerService.Projects.Locations.Clusters.Get(clusterPath).Context(ctx).Do()
+
+	var nodeGroups []types.NodeGroup
+	if rawErr == nil && rawCluster != nil {
+		for _, np := range rawCluster.NodePools {
+			if np == nil {
+				continue
+			}
+			instanceType := ""
+			if np.Config != nil {
+				instanceType = np.Config.MachineType
+			}
+			count := int(np.InitialNodeCount)
+			min, max := 0, 0
+			if np.Autoscaling != nil && np.Autoscaling.Enabled {
+				min = int(np.Autoscaling.MinNodeCount)
+				max = int(np.Autoscaling.MaxNodeCount)
+			}
+			nodeGroups = append(nodeGroups, types.NodeGroup{
+				Name:         np.Name,
+				InstanceType: instanceType,
+				Count:        count,
+				MinCount:     min,
+				MaxCount:     max,
+			})
+		}
+	}
+
 	return &ClusterInfo{
 		Name:       cluster.Name,
 		IPAddress:  cluster.MasterIP,
 		AccessPort: "443",
 		Status:     cluster.Status,
 		ID:         cluster.ID,
+		NodeGroups: nodeGroups,
 	}, nil
 }
 
@@ -386,32 +472,6 @@ func (p *Provider) DeleteFirewall(ctx context.Context, firewallID string) error 
 func (p *Provider) FindFirewallByName(ctx context.Context, name string) (*Firewall, error) {
 	// GKE manages firewall rules automatically
 	return nil, nil
-}
-
-// ListLoadBalancers lists all load balancers
-func (p *Provider) ListLoadBalancers(ctx context.Context) ([]*LoadBalancer, error) {
-	// Load balancers are managed by Kubernetes services in GKE
-	return []*LoadBalancer{}, nil
-}
-
-// DeployIngressController deploys ingress controller
-func (p *Provider) DeployIngressController(ctx context.Context, clusterID string, spec types.IngressSpec) (*LoadBalancer, error) {
-	if !spec.LoadBalancer {
-		return nil, nil
-	}
-	// GKE has built-in ingress controller
-	return nil, nil
-}
-
-// RemoveIngressController removes ingress controller
-func (p *Provider) RemoveIngressController(ctx context.Context, clusterID string) error {
-	return nil
-}
-
-// GetLoadBalancerIP gets load balancer IP for cluster
-func (p *Provider) GetLoadBalancerIP(ctx context.Context, clusterID string) (string, error) {
-	// Would need to query Kubernetes services
-	return "", nil
 }
 
 // convertCluster converts a GKE cluster to provider cluster

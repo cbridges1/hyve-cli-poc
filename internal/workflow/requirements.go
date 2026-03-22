@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"strings"
 
-	"hyve/internal/context"
 	"hyve/internal/credentials"
 )
 
@@ -140,7 +139,7 @@ func (v *RequirementValidator) validateSecret(secret SecretRequirement) error {
 		suggestions := []string{}
 		switch secret.Provider {
 		case "civo":
-			suggestions = append(suggestions, "hyve config civo set-token")
+			suggestions = append(suggestions, "hyve config civo token set")
 		case "aws":
 			suggestions = append(suggestions, "aws configure")
 		case "gcp":
@@ -258,11 +257,8 @@ func (v *RequirementValidator) LoadSecretsIntoEnvironment(requirements *Workflow
 	return nil
 }
 
-// getCivoOrgName returns the current Civo organization name from context
+// getCivoOrgName returns the current Civo organization name.
+// Without a context system, this returns empty string; callers handle the empty case gracefully.
 func getCivoOrgName() string {
-	ctxMgr, err := context.NewManager()
-	if err != nil {
-		return ""
-	}
-	return ctxMgr.GetCivoOrganization()
+	return ""
 }

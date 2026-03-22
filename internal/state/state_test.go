@@ -90,6 +90,16 @@ func TestLoadRepoConfig_InvalidYAML(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestLoadClusterDefinitions_MissingDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	stateDir := filepath.Join(tmpDir, "clusters") // directory never created
+
+	mgr := newTestManager(stateDir)
+	clusters, err := mgr.LoadClusterDefinitions()
+	require.NoError(t, err)
+	assert.Empty(t, clusters)
+}
+
 func TestLoadClusterDefinitions_EmptyDir(t *testing.T) {
 	tmpDir := t.TempDir()
 	stateDir := filepath.Join(tmpDir, "clusters")

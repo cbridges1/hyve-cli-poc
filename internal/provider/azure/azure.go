@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/containerservice/armcontainerservice/v4"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources"
 
 	"hyve/internal/types"
 )
@@ -39,19 +41,12 @@ type FirewallRule struct {
 	Direction string
 }
 
-// LoadBalancer represents a generic load balancer
-type LoadBalancer struct {
-	ID        string
-	Name      string
-	PublicIP  string
-	ClusterID string
-}
-
 // ClusterConfig represents cluster creation configuration
 type ClusterConfig struct {
 	Name         string
 	Region       string
 	Nodes        []string
+	NodeGroups   []types.NodeGroup
 	ClusterType  string
 	FirewallID   string
 	Applications []string
@@ -59,8 +54,9 @@ type ClusterConfig struct {
 
 // ClusterUpdateConfig represents cluster update configuration
 type ClusterUpdateConfig struct {
-	Name  string
-	Nodes []string
+	Name       string
+	Nodes      []string
+	NodeGroups []types.NodeGroup
 }
 
 // FirewallConfig represents firewall creation configuration
@@ -77,6 +73,7 @@ type ClusterInfo struct {
 	Kubeconfig string
 	Status     string
 	ID         string
+	NodeGroups []types.NodeGroup
 }
 
 // Provider implements the provider interfaces for Azure
@@ -131,19 +128,38 @@ func (p *Provider) Region() string {
 	return p.region
 }
 
-// ListClusters lists all clusters
+// ListClusters lists all clusters. When no resource group is configured it
+// falls back to listing all AKS clusters in the subscription so that import
+// and other discovery flows work without requiring a resource group.
 func (p *Provider) ListClusters(ctx context.Context) ([]*Cluster, error) {
-	pager := p.aksClient.NewListByResourceGroupPager(p.resourceGroupName, nil)
+	type pageResult struct {
+		Value []*armcontainerservice.ManagedCluster
+	}
 
 	var clusters []*Cluster
-	for pager.More() {
-		page, err := pager.NextPage(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to list AKS clusters: %w", err)
-		}
 
-		for _, cluster := range page.Value {
-			clusters = append(clusters, p.convertCluster(cluster))
+	if p.resourceGroupName != "" {
+		pager := p.aksClient.NewListByResourceGroupPager(p.resourceGroupName, nil)
+		for pager.More() {
+			page, err := pager.NextPage(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("failed to list AKS clusters: %w", err)
+			}
+			for _, cluster := range page.Value {
+				clusters = append(clusters, p.convertCluster(cluster))
+			}
+		}
+	} else {
+		// No resource group — list all clusters in the subscription.
+		pager := p.aksClient.NewListPager(nil)
+		for pager.More() {
+			page, err := pager.NextPage(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("failed to list AKS clusters: %w", err)
+			}
+			for _, cluster := range page.Value {
+				clusters = append(clusters, p.convertCluster(cluster))
+			}
 		}
 	}
 
@@ -160,43 +176,147 @@ func (p *Provider) GetCluster(ctx context.Context, clusterID string) (*Cluster, 
 	return p.convertCluster(&resp.ManagedCluster), nil
 }
 
-// FindClusterByName finds a cluster by name
+// FindClusterByName finds a cluster by name. It first tries a direct Get using
+// the configured resource group (fast path). On any failure it falls through to
+// a subscription-wide scan, which also handles the case where resourceGroupName
+// is empty or points to the wrong resource group. When the cluster is found via
+// the subscription-wide scan, p.resourceGroupName is updated from the cluster's
+// ARM ID so that DeleteCluster / GetClusterInfo work without extra parameters.
 func (p *Provider) FindClusterByName(ctx context.Context, name string) (*Cluster, error) {
-	resp, err := p.aksClient.Get(ctx, p.resourceGroupName, name, nil)
-	if err != nil {
-		// Check if it's a not found error
-		return nil, nil
+	if p.resourceGroupName != "" {
+		resp, err := p.aksClient.Get(ctx, p.resourceGroupName, name, nil)
+		if err == nil {
+			return p.convertCluster(&resp.ManagedCluster), nil
+		}
+		// Fast path failed — fall through to subscription-wide scan below.
 	}
 
-	return p.convertCluster(&resp.ManagedCluster), nil
+	// Scan all clusters in the subscription.
+	pager := p.aksClient.NewListPager(nil)
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			return nil, nil
+		}
+		for _, c := range page.Value {
+			if c.Name != nil && *c.Name == name {
+				// Extract the resource group from the ARM resource ID so
+				// DeleteCluster and GetClusterInfo work after this call.
+				if c.ID != nil {
+					p.resourceGroupName = resourceGroupFromID(*c.ID)
+				}
+				return p.convertCluster(c), nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+// resourceGroupFromID parses the resource group name from an Azure ARM resource ID.
+// Example ID: /subscriptions/{sub}/resourceGroups/{rg}/providers/.../clusters/{name}
+func resourceGroupFromID(id string) string {
+	parts := strings.Split(id, "/")
+	for i, p := range parts {
+		if strings.EqualFold(p, "resourceGroups") && i+1 < len(parts) {
+			return parts[i+1]
+		}
+	}
+	return ""
+}
+
+// agentPoolMode converts a mode string to the AKS enum value
+func agentPoolMode(mode string) armcontainerservice.AgentPoolMode {
+	if strings.EqualFold(mode, "User") {
+		return armcontainerservice.AgentPoolModeUser
+	}
+	return armcontainerservice.AgentPoolModeSystem
 }
 
 // CreateCluster creates a new cluster
 func (p *Provider) CreateCluster(ctx context.Context, config *ClusterConfig) (*Cluster, error) {
 	log.Printf("Creating AKS cluster %s in region %s", config.Name, p.region)
 
-	// Determine VM size from nodes config
-	vmSize := "Standard_DS2_v2"
-	nodeCount := int32(len(config.Nodes))
-	if nodeCount == 0 {
-		nodeCount = 1
-	}
-	if len(config.Nodes) > 0 {
-		vmSize = config.Nodes[0]
+	var agentPoolProfiles []*armcontainerservice.ManagedClusterAgentPoolProfile
+
+	if len(config.NodeGroups) > 0 {
+		// Multi-pool cluster from NodeGroups
+		for i, ng := range config.NodeGroups {
+			poolName := ng.Name
+			if poolName == "" {
+				poolName = fmt.Sprintf("nodepool%d", i+1)
+			}
+			// AKS pool names must be lowercase alphanumeric, max 12 chars
+			if len(poolName) > 12 {
+				poolName = poolName[:12]
+			}
+			vmSize := ng.InstanceType
+			if vmSize == "" {
+				vmSize = "Standard_DS2_v2"
+			}
+			count := int32(ng.Count)
+			if count < 1 {
+				count = 1
+			}
+			mode := agentPoolMode(ng.Mode)
+			// First pool must be System mode
+			if i == 0 {
+				mode = armcontainerservice.AgentPoolModeSystem
+			}
+			profile := &armcontainerservice.ManagedClusterAgentPoolProfile{
+				Name:   strPtr(poolName),
+				Count:  &count,
+				VMSize: &vmSize,
+				Mode:   ptr(mode),
+			}
+			if ng.MinCount > 0 || ng.MaxCount > 0 {
+				minCount := int32(ng.MinCount)
+				if minCount < 1 {
+					minCount = 1
+				}
+				maxCount := int32(ng.MaxCount)
+				if maxCount < count {
+					maxCount = count + 2
+				}
+				enableAutoScale := true
+				profile.EnableAutoScaling = &enableAutoScale
+				profile.MinCount = &minCount
+				profile.MaxCount = &maxCount
+			}
+			if ng.DiskSize > 0 {
+				diskSize := int32(ng.DiskSize)
+				profile.OSDiskSizeGB = &diskSize
+			}
+			agentPoolProfiles = append(agentPoolProfiles, profile)
+		}
+		log.Printf("Creating AKS cluster with %d agent pool(s)", len(agentPoolProfiles))
+	} else {
+		// Legacy single pool from Nodes slice
+		vmSize := "Standard_DS2_v2"
+		nodeCount := int32(len(config.Nodes))
+		if nodeCount == 0 {
+			nodeCount = 1
+		}
+		if len(config.Nodes) > 0 {
+			vmSize = config.Nodes[0]
+		}
+		agentPoolProfiles = []*armcontainerservice.ManagedClusterAgentPoolProfile{
+			{
+				Name:   strPtr("nodepool1"),
+				Count:  &nodeCount,
+				VMSize: &vmSize,
+				Mode:   ptr(armcontainerservice.AgentPoolModeSystem),
+			},
+		}
 	}
 
 	parameters := armcontainerservice.ManagedCluster{
 		Location: &p.region,
+		Identity: &armcontainerservice.ManagedClusterIdentity{
+			Type: ptr(armcontainerservice.ResourceIdentityTypeSystemAssigned),
+		},
 		Properties: &armcontainerservice.ManagedClusterProperties{
-			DNSPrefix: &config.Name,
-			AgentPoolProfiles: []*armcontainerservice.ManagedClusterAgentPoolProfile{
-				{
-					Name:   strPtr("nodepool1"),
-					Count:  &nodeCount,
-					VMSize: &vmSize,
-					Mode:   ptr(armcontainerservice.AgentPoolModeSystem),
-				},
-			},
+			DNSPrefix:         &config.Name,
+			AgentPoolProfiles: agentPoolProfiles,
 		},
 	}
 
@@ -273,6 +393,13 @@ func (p *Provider) WaitForClusterReady(ctx context.Context, clusterID string) er
 
 // GetClusterInfo gets cluster information for export
 func (p *Provider) GetClusterInfo(ctx context.Context, name string) (*ClusterInfo, error) {
+	// Ensure resourceGroupName is resolved; FindClusterByName does a
+	// subscription-wide scan and sets p.resourceGroupName when necessary.
+	if p.resourceGroupName == "" {
+		if _, err := p.FindClusterByName(ctx, name); err != nil || p.resourceGroupName == "" {
+			return nil, fmt.Errorf("cluster %s not found in subscription", name)
+		}
+	}
 	resp, err := p.aksClient.Get(ctx, p.resourceGroupName, name, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get AKS cluster info: %w", err)
@@ -294,12 +421,57 @@ func (p *Provider) GetClusterInfo(ctx context.Context, name string) (*ClusterInf
 		clusterName = *cluster.Name
 	}
 
+	// Fetch admin kubeconfig
+	kubeconfig := ""
+	credResp, err := p.aksClient.ListClusterAdminCredentials(ctx, p.resourceGroupName, name, nil)
+	if err != nil {
+		log.Printf("Warning: failed to fetch admin credentials for cluster %s: %v", name, err)
+	} else if len(credResp.Kubeconfigs) > 0 && credResp.Kubeconfigs[0].Value != nil {
+		kubeconfig = string(credResp.Kubeconfigs[0].Value)
+	}
+
+	var nodeGroups []types.NodeGroup
+	if cluster.Properties != nil {
+		for _, pool := range cluster.Properties.AgentPoolProfiles {
+			if pool == nil {
+				continue
+			}
+			name := ""
+			if pool.Name != nil {
+				name = *pool.Name
+			}
+			vmSize := ""
+			if pool.VMSize != nil {
+				vmSize = *pool.VMSize
+			}
+			count, min, max := 0, 0, 0
+			if pool.Count != nil {
+				count = int(*pool.Count)
+			}
+			if pool.MinCount != nil {
+				min = int(*pool.MinCount)
+			}
+			if pool.MaxCount != nil {
+				max = int(*pool.MaxCount)
+			}
+			nodeGroups = append(nodeGroups, types.NodeGroup{
+				Name:         name,
+				InstanceType: vmSize,
+				Count:        count,
+				MinCount:     min,
+				MaxCount:     max,
+			})
+		}
+	}
+
 	return &ClusterInfo{
 		Name:       clusterName,
 		IPAddress:  fqdn,
 		AccessPort: "443",
+		Kubeconfig: kubeconfig,
 		Status:     status,
 		ID:         clusterName,
+		NodeGroups: nodeGroups,
 	}, nil
 }
 
@@ -331,42 +503,11 @@ func (p *Provider) FindFirewallByName(ctx context.Context, name string) (*Firewa
 	return nil, nil
 }
 
-// ListLoadBalancers lists all load balancers
-func (p *Provider) ListLoadBalancers(ctx context.Context) ([]*LoadBalancer, error) {
-	// Load balancers are managed by Kubernetes services in AKS
-	return []*LoadBalancer{}, nil
-}
-
-// DeployIngressController deploys ingress controller
-func (p *Provider) DeployIngressController(ctx context.Context, clusterID string, spec types.IngressSpec) (*LoadBalancer, error) {
-	if !spec.LoadBalancer {
-		return nil, nil
-	}
-	// Azure Load Balancer handles this in AKS
-	return nil, nil
-}
-
-// RemoveIngressController removes ingress controller
-func (p *Provider) RemoveIngressController(ctx context.Context, clusterID string) error {
-	return nil
-}
-
-// GetLoadBalancerIP gets load balancer IP for cluster
-func (p *Provider) GetLoadBalancerIP(ctx context.Context, clusterID string) (string, error) {
-	// Would need to query Kubernetes services
-	return "", nil
-}
-
 // convertCluster converts an AKS cluster to provider cluster
 func (p *Provider) convertCluster(aksCluster *armcontainerservice.ManagedCluster) *Cluster {
 	name := ""
 	if aksCluster.Name != nil {
 		name = *aksCluster.Name
-	}
-
-	id := ""
-	if aksCluster.ID != nil {
-		id = *aksCluster.ID
 	}
 
 	status := "Unknown"
@@ -381,12 +522,66 @@ func (p *Provider) convertCluster(aksCluster *armcontainerservice.ManagedCluster
 	}
 
 	return &Cluster{
-		ID:        id,
+		ID:        name,
 		Name:      name,
 		Status:    status,
 		MasterIP:  fqdn,
 		CreatedAt: time.Now(),
 	}
+}
+
+func newResourceGroupsClient(subscriptionID, tenantID, clientID, clientSecret string) (*armresources.ResourceGroupsClient, error) {
+	if tenantID != "" && clientID != "" && clientSecret != "" {
+		spCred, err := azidentity.NewClientSecretCredential(tenantID, clientID, clientSecret, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create Azure service principal credentials: %w", err)
+		}
+		return armresources.NewResourceGroupsClient(subscriptionID, spCred, nil)
+	}
+
+	defaultCred, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Azure default credentials: %w", err)
+	}
+	return armresources.NewResourceGroupsClient(subscriptionID, defaultCred, nil)
+}
+
+// CreateResourceGroup creates an Azure resource group in the given subscription.
+func CreateResourceGroup(ctx context.Context, subscriptionID, resourceGroupName, location, tenantID, clientID, clientSecret string) error {
+	client, err := newResourceGroupsClient(subscriptionID, tenantID, clientID, clientSecret)
+	if err != nil {
+		return err
+	}
+
+	_, err = client.CreateOrUpdate(ctx, resourceGroupName, armresources.ResourceGroup{
+		Location: &location,
+	}, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create resource group '%s': %w", resourceGroupName, err)
+	}
+
+	log.Printf("Azure resource group '%s' created in '%s'", resourceGroupName, location)
+	return nil
+}
+
+// DeleteResourceGroup deletes an Azure resource group from the given subscription.
+func DeleteResourceGroup(ctx context.Context, subscriptionID, resourceGroupName, tenantID, clientID, clientSecret string) error {
+	client, err := newResourceGroupsClient(subscriptionID, tenantID, clientID, clientSecret)
+	if err != nil {
+		return err
+	}
+
+	poller, err := client.BeginDelete(ctx, resourceGroupName, nil)
+	if err != nil {
+		return fmt.Errorf("failed to delete resource group '%s': %w", resourceGroupName, err)
+	}
+
+	if _, err = poller.PollUntilDone(ctx, nil); err != nil {
+		return fmt.Errorf("failed to wait for resource group deletion: %w", err)
+	}
+
+	log.Printf("Azure resource group '%s' deleted", resourceGroupName)
+	return nil
 }
 
 // Helper functions

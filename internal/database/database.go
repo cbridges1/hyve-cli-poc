@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -15,10 +16,17 @@ const (
 )
 
 var (
-	instance *DB
-	once     sync.Once
-	initErr  error
+	instance          *DB
+	once              sync.Once
+	initErr           error
+	configDirOverride string
 )
+
+// SetConfigDir overrides the config directory used by the singleton database.
+// Must be called before the first GetDB() call (e.g. from a PersistentPreRun hook).
+func SetConfigDir(dir string) {
+	configDirOverride = dir
+}
 
 // DB represents the unified database connection
 type DB struct {
@@ -30,7 +38,7 @@ type DB struct {
 // GetDB returns the singleton database instance
 func GetDB() (*DB, error) {
 	once.Do(func() {
-		instance, initErr = newDB("")
+		instance, initErr = newDB(configDirOverride)
 	})
 	return instance, initErr
 }
@@ -76,7 +84,7 @@ func newDB(configDir string) (*DB, error) {
 	// Run migrations from old databases
 	if err := d.migrateFromOldDatabases(); err != nil {
 		// Log but don't fail - migration is best-effort
-		fmt.Printf("Note: Could not migrate from old databases: %v\n", err)
+		log.Printf("Note: Could not migrate from old databases: %v\n", err)
 	}
 
 	return d, nil
@@ -200,7 +208,7 @@ func (d *DB) migrateFromCredentialsDB() error {
 	// We intentionally do NOT migrate encrypted credentials or tokens
 	// because the encryption keys have changed with the database consolidation.
 	// Users will need to re-enter their credentials with:
-	//   hyve config set-token civo
+	//   hyve config civo token set --org <org-name>
 	//   hyve config set-credentials
 	return nil
 }

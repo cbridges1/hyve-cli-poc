@@ -152,23 +152,6 @@ func (m *mockProvider) FindFirewallByName(ctx context.Context, name string) (*pr
 	return nil, nil
 }
 
-// IngressProvider methods (not used in cluster manager but required by interface)
-func (m *mockProvider) ListLoadBalancers(ctx context.Context) ([]*provider.LoadBalancer, error) {
-	return nil, nil
-}
-
-func (m *mockProvider) DeployIngressController(ctx context.Context, clusterID string, spec types.IngressSpec) (*provider.LoadBalancer, error) {
-	return nil, nil
-}
-
-func (m *mockProvider) RemoveIngressController(ctx context.Context, clusterID string) error {
-	return nil
-}
-
-func (m *mockProvider) GetLoadBalancerIP(ctx context.Context, clusterID string) (string, error) {
-	return "", nil
-}
-
 // Provider metadata
 func (m *mockProvider) Name() string {
 	return "mock"

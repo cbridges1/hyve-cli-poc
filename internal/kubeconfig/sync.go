@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 
 	"hyve/internal/provider"
 	"hyve/internal/types"
@@ -75,10 +76,18 @@ func (s *Syncer) SyncKubeconfigs(ctx context.Context, clusterDefinitions []types
 		successCount++
 	}
 
-	// Clean up orphaned kubeconfigs (those without corresponding cluster definitions)
+	// Determine which stored kubeconfigs are orphaned before removing them from the DB
+	orphanedNames := s.findOrphanedKubeconfigs(activeClusterNames)
+
+	// Clean up orphaned kubeconfigs from the database
 	err := s.manager.CleanupOrphanedKubeconfigs(activeClusterNames)
 	if err != nil {
 		log.Printf("⚠️  Failed to cleanup orphaned kubeconfigs: %v", err)
+	}
+
+	// Remove orphaned clusters from ~/.kube/config
+	for _, name := range orphanedNames {
+		s.removeKubeconfigContext(name)
 	}
 
 	log.Printf("Kubeconfig sync completed: %d/%d clusters synced successfully",
@@ -147,4 +156,51 @@ func (s *Syncer) GetKubeconfigContent(clusterName string) (string, error) {
 // ListStoredKubeconfigs lists all stored kubeconfigs for the current repository
 func (s *Syncer) ListStoredKubeconfigs() ([]*Kubeconfig, error) {
 	return s.manager.ListKubeconfigs()
+}
+
+// findOrphanedKubeconfigs returns the names of stored kubeconfigs not in activeClusterNames.
+func (s *Syncer) findOrphanedKubeconfigs(activeClusterNames []string) []string {
+	stored, err := s.manager.ListKubeconfigs()
+	if err != nil {
+		log.Printf("⚠️  Failed to list stored kubeconfigs for orphan detection: %v", err)
+		return nil
+	}
+
+	activeSet := make(map[string]bool, len(activeClusterNames))
+	for _, name := range activeClusterNames {
+		activeSet[name] = true
+	}
+
+	var orphaned []string
+	for _, kc := range stored {
+		if !activeSet[kc.ClusterName] {
+			orphaned = append(orphaned, kc.ClusterName)
+		}
+	}
+	return orphaned
+}
+
+// removeKubeconfigContext removes a cluster's context from ~/.kube/config.
+func (s *Syncer) removeKubeconfigContext(clusterName string) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		log.Printf("⚠️  Failed to determine home directory for kubeconfig cleanup: %v", err)
+		return
+	}
+
+	kubeConfigPath := homeDir + "/.kube/config"
+	data, err := os.ReadFile(kubeConfigPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("⚠️  Failed to read ~/.kube/config for context cleanup: %v", err)
+		}
+		return
+	}
+
+	if err := RemoveKubeconfigContext(string(data), clusterName, kubeConfigPath); err != nil {
+		log.Printf("⚠️  Failed to remove context '%s' from ~/.kube/config: %v", clusterName, err)
+		return
+	}
+
+	log.Printf("🗑️  Removed context '%s' from ~/.kube/config", clusterName)
 }

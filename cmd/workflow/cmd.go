@@ -1,4 +1,4 @@
-package cmd
+package workflow
 
 import (
 	"context"
@@ -12,9 +12,12 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
-	"hyve/internal/repository"
+	"hyve/cmd/shared"
 	"hyve/internal/workflow"
 )
+
+// Cmd is the root workflow command exposed to the parent.
+var Cmd = workflowCmd
 
 var workflowCmd = &cobra.Command{
 	Use:   "workflow",
@@ -104,15 +107,15 @@ var workflowValidateCmd = &cobra.Command{
 }
 
 func init() {
-	workflowCreateCmd.Flags().Bool("template", false, "Create from default template")
+	workflowCreateCmd.Flags().BoolP("template", "t", false, "Create from default template")
 	workflowCreateCmd.Flags().StringP("description", "d", "", "Workflow description")
 	workflowCreateCmd.Flags().StringP("file", "f", "", "Create workflow from existing YAML file")
 
 	workflowRunCmd.Flags().StringP("cluster", "c", "", "Cluster to run workflow on")
-	workflowRunCmd.Flags().Bool("logs", true, "Show execution logs")
-	workflowRunCmd.Flags().Bool("output", false, "Show step outputs")
+	workflowRunCmd.Flags().BoolP("logs", "l", true, "Show execution logs")
+	workflowRunCmd.Flags().BoolP("output", "o", false, "Show step outputs")
 
-	workflowDeleteCmd.Flags().Bool("force", false, "Delete without confirmation")
+	workflowDeleteCmd.Flags().BoolP("force", "f", false, "Delete without confirmation")
 
 	workflowCmd.AddCommand(workflowCreateCmd)
 	workflowCmd.AddCommand(workflowListCmd)
@@ -123,16 +126,7 @@ func init() {
 }
 
 func getWorkflowLocalPath() string {
-	repoMgr, err := repository.NewManager()
-	if err != nil {
-		log.Fatalf("Failed to create repository manager: %v", err)
-	}
-	defer repoMgr.Close()
-	currentRepo, err := repoMgr.GetCurrentRepository()
-	if err != nil {
-		log.Fatal("No Git repository configured. Use 'hyve git add' to configure a repository")
-	}
-	return currentRepo.LocalPath
+	return shared.GetLocalPath()
 }
 
 func createWorkflowTemplate(name, description string) {
@@ -145,7 +139,6 @@ func createWorkflowTemplate(name, description string) {
 		log.Fatalf("Failed to create workflow manager: %v", err)
 	}
 
-	// Create template workflow
 	wf := workflow.CreateWorkflowTemplate(name, description)
 
 	if err := manager.CreateWorkflow(wf); err != nil {
@@ -163,19 +156,16 @@ func createWorkflowFromFile(filePath string) {
 		log.Fatalf("Failed to create workflow manager: %v", err)
 	}
 
-	// Read file
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		log.Fatalf("Failed to read file '%s': %v", filePath, err)
 	}
 
-	// Parse workflow
 	var wf workflow.Workflow
 	if err := yaml.Unmarshal(data, &wf); err != nil {
 		log.Fatalf("Failed to parse workflow file: %v", err)
 	}
 
-	// Create workflow
 	if err := manager.CreateWorkflow(&wf); err != nil {
 		log.Fatalf("Failed to create workflow: %v", err)
 	}
@@ -341,7 +331,7 @@ func runWorkflow(name, cluster string, showLogs, showOutput bool) {
 
 func deleteWorkflow(name string, force bool) {
 	if !force {
-		fmt.Printf("Are you sure you want to delete workflow '%s'? (y/N): ", name)
+		log.Printf("Are you sure you want to delete workflow '%s'? (y/N): ", name)
 		var response string
 		fmt.Scanln(&response)
 		if strings.ToLower(response) != "y" && strings.ToLower(response) != "yes" {
@@ -378,7 +368,6 @@ func validateWorkflow(name string) {
 	errors := []string{}
 	warnings := []string{}
 
-	// Validate required fields
 	if wf.APIVersion == "" {
 		errors = append(errors, "Missing apiVersion")
 	} else if wf.APIVersion != "v1" {
@@ -399,7 +388,6 @@ func validateWorkflow(name string) {
 		errors = append(errors, "No jobs defined in workflow")
 	}
 
-	// Validate jobs
 	jobNames := make(map[string]bool)
 	for i, job := range wf.Spec.Jobs {
 		if job.Name == "" {
@@ -407,38 +395,25 @@ func validateWorkflow(name string) {
 			continue
 		}
 
-		// Check for duplicate job names
 		if jobNames[job.Name] {
 			errors = append(errors, fmt.Sprintf("Duplicate job name: %s", job.Name))
 		}
 		jobNames[job.Name] = true
 
-		// Validate job has steps
 		if len(job.Steps) == 0 {
 			errors = append(errors, fmt.Sprintf("Job '%s' has no steps", job.Name))
 		}
 
-		// Validate dependencies
-		for _, dep := range job.DependsOn {
-			if !jobNames[dep] {
-				// Might not be an error if the dependency is defined later
-				// We'll do a second pass for this
-			}
-		}
-
-		// Validate steps
 		for j, step := range job.Steps {
 			if step.Name == "" {
 				warnings = append(warnings, fmt.Sprintf("Job '%s', step %d is missing a name", job.Name, j+1))
 			}
 
-			// Check that step has at least one execution method
 			hasExecution := step.Command != "" || step.Script != "" || step.Action != ""
 			if !hasExecution {
 				errors = append(errors, fmt.Sprintf("Job '%s', step '%s' has no command, script, or action", job.Name, step.Name))
 			}
 
-			// Check for multiple execution methods
 			methods := 0
 			if step.Command != "" {
 				methods++
@@ -453,7 +428,6 @@ func validateWorkflow(name string) {
 				errors = append(errors, fmt.Sprintf("Job '%s', step '%s' has multiple execution methods (command/script/action)", job.Name, step.Name))
 			}
 
-			// Validate action parameters
 			if step.Action != "" {
 				switch step.Action {
 				case "kubectl-apply":
@@ -471,7 +445,6 @@ func validateWorkflow(name string) {
 		}
 	}
 
-	// Second pass: validate all job dependencies exist
 	for _, job := range wf.Spec.Jobs {
 		for _, dep := range job.DependsOn {
 			if !jobNames[dep] {
@@ -480,12 +453,10 @@ func validateWorkflow(name string) {
 		}
 	}
 
-	// Check for circular dependencies
 	if hasCircularDependencies(wf.Spec.Jobs) {
 		errors = append(errors, "Circular dependency detected in job dependencies")
 	}
 
-	// Print results
 	if len(errors) > 0 {
 		log.Println("\n❌ Validation Failed")
 		log.Println("\nErrors:")
@@ -518,15 +489,12 @@ func validateWorkflow(name string) {
 	}
 }
 
-// hasCircularDependencies checks for circular dependencies in job dependencies
 func hasCircularDependencies(jobs []workflow.WorkflowJob) bool {
-	// Build adjacency list
 	graph := make(map[string][]string)
 	for _, job := range jobs {
 		graph[job.Name] = job.DependsOn
 	}
 
-	// Check each job for circular dependencies using DFS
 	visited := make(map[string]bool)
 	recStack := make(map[string]bool)
 

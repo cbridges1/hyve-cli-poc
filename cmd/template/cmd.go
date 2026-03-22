@@ -1,4 +1,4 @@
-package cmd
+package template
 
 import (
 	"context"
@@ -11,17 +11,20 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
-	"hyve/internal/cluster"
-	"hyve/internal/config"
-	"hyve/internal/credentials"
+	"hyve/cmd/cluster"
+	"hyve/cmd/shared"
+	internalcluster "hyve/internal/cluster"
 	"hyve/internal/kubeconfig"
-	"hyve/internal/provider"
+	"hyve/internal/providerconfig"
 	"hyve/internal/repository"
 	"hyve/internal/state"
 	"hyve/internal/template"
 	"hyve/internal/types"
 	"hyve/internal/workflow"
 )
+
+// Cmd is the root template command exposed to the parent.
+var Cmd = templateCmd
 
 var templateCmd = &cobra.Command{
 	Use:   "template",
@@ -44,12 +47,21 @@ and workflows to execute upon cluster creation or destruction.`,
 		region, _ := cmd.Flags().GetString("region")
 		nodes, _ := cmd.Flags().GetString("nodes")
 		clusterType, _ := cmd.Flags().GetString("cluster-type")
-		ingressEnabled, _ := cmd.Flags().GetBool("ingress")
-		loadBalancer, _ := cmd.Flags().GetBool("load-balancer")
 		onCreatedWorkflows, _ := cmd.Flags().GetString("on-created")
 		onDestroyWorkflows, _ := cmd.Flags().GetString("on-destroy")
 
-		createTemplate(templateName, description, provider, region, nodes, clusterType, ingressEnabled, loadBalancer, onCreatedWorkflows, onDestroyWorkflows)
+		var nodeGroups []types.NodeGroup
+		if ngStrs, _ := cmd.Flags().GetStringArray("node-group"); len(ngStrs) > 0 {
+			for _, s := range ngStrs {
+				ng, err := shared.ParseNodeGroup(s)
+				if err != nil {
+					log.Fatalf("Invalid --node-group value '%s': %v", s, err)
+				}
+				nodeGroups = append(nodeGroups, ng)
+			}
+		}
+
+		createTemplate(templateName, description, provider, region, nodes, clusterType, nodeGroups, onCreatedWorkflows, onDestroyWorkflows)
 	},
 }
 
@@ -78,6 +90,16 @@ var templateExecuteCmd = &cobra.Command{
 	Short: "Create a cluster from a template",
 	Long: `Execute a cluster template to create a new cluster.
 
+The provider type in the template determines which account flag is required:
+  --org         Civo organization name    (required for civo)
+  --account     AWS account alias         (required for aws)
+  --vpc-name    AWS VPC alias             (required for aws)
+  --eks-role    AWS EKS cluster role alias (required for aws)
+  --node-role   AWS node role alias        (required for aws)
+  --subscription  Azure subscription alias  (required for azure)
+  --resource-group Azure resource group    (required for azure)
+  --project     GCP project alias          (required for gcp)
+
 This command:
   1. Creates a cluster based on the template specifications
   2. Waits for the cluster to become ready
@@ -86,7 +108,15 @@ This command:
 	Run: func(cmd *cobra.Command, args []string) {
 		templateName := args[0]
 		clusterName := args[1]
-		executeTemplate(templateName, clusterName)
+		org, _ := cmd.Flags().GetString("org")
+		account, _ := cmd.Flags().GetString("account")
+		vpcName, _ := cmd.Flags().GetString("vpc-name")
+		eksRole, _ := cmd.Flags().GetString("eks-role")
+		nodeRole, _ := cmd.Flags().GetString("node-role")
+		subscription, _ := cmd.Flags().GetString("subscription")
+		resourceGroup, _ := cmd.Flags().GetString("resource-group")
+		project, _ := cmd.Flags().GetString("project")
+		executeTemplate(templateName, clusterName, org, account, vpcName, eksRole, nodeRole, subscription, resourceGroup, project)
 	},
 }
 
@@ -112,40 +142,24 @@ var templateValidateCmd = &cobra.Command{
 	},
 }
 
-// getAuthCredentials retrieves authentication credentials for git operations
-func getAuthCredentials(currentRepo *repository.Repository) (username, token string) {
-	username = currentRepo.Username
-
-	credsMgr, err := credentials.NewManager()
-	if err == nil {
-		defer credsMgr.Close()
-		if creds, _ := credsMgr.GetCredentials(); creds != nil {
-			if password, err := creds.GetPassword(); err == nil && password != "" {
-				token = password
-				if username == "" {
-					username = creds.Username
-				}
-			}
-		}
-	}
-
-	if token == "" {
-		token = os.Getenv("HYVE_GIT_TOKEN")
-	}
-
-	return username, token
-}
-
 func init() {
 	templateCreateCmd.Flags().StringP("description", "d", "", "Template description")
 	templateCreateCmd.Flags().StringP("provider", "p", "civo", "Cloud provider")
 	templateCreateCmd.Flags().StringP("region", "r", "PHX1", "Region")
-	templateCreateCmd.Flags().StringP("nodes", "n", "g4s.kube.small", "Node sizes (comma-separated)")
+	templateCreateCmd.Flags().StringP("nodes", "n", "g4s.kube.small", "Node sizes (comma-separated, Civo only)")
+	templateCreateCmd.Flags().StringArrayP("node-group", "g", nil, `Node group spec (repeatable): name=workers,type=t3.medium,count=3[,min=1,max=5,disk=50,spot=true,mode=System]`)
 	templateCreateCmd.Flags().StringP("cluster-type", "t", "k3s", "Kubernetes cluster type")
-	templateCreateCmd.Flags().Bool("ingress", true, "Enable ingress controller")
-	templateCreateCmd.Flags().Bool("load-balancer", true, "Enable load balancer for ingress")
-	templateCreateCmd.Flags().String("on-created", "", "Workflows to run after cluster creation (comma-separated)")
+	templateCreateCmd.Flags().StringP("on-created", "c", "", "Workflows to run after cluster creation (comma-separated)")
 	templateCreateCmd.Flags().String("on-destroy", "", "Workflows to run before cluster destruction (comma-separated)")
+
+	templateExecuteCmd.Flags().StringP("org", "o", "", "Civo organization name (required for civo provider)")
+	templateExecuteCmd.Flags().StringP("account", "a", "", "AWS account alias (required for aws provider)")
+	templateExecuteCmd.Flags().StringP("vpc-name", "v", "", "AWS VPC alias (required for aws provider)")
+	templateExecuteCmd.Flags().StringP("eks-role", "e", "", "AWS EKS cluster role alias (required for aws provider)")
+	templateExecuteCmd.Flags().StringP("node-role", "n", "", "AWS node role alias (required for aws provider)")
+	templateExecuteCmd.Flags().StringP("subscription", "s", "", "Azure subscription alias (required for azure provider)")
+	templateExecuteCmd.Flags().StringP("resource-group", "g", "", "Azure resource group name (required for azure provider)")
+	templateExecuteCmd.Flags().StringP("project", "p", "", "GCP project alias (required for gcp provider)")
 
 	templateCmd.AddCommand(templateCreateCmd)
 	templateCmd.AddCommand(templateListCmd)
@@ -155,8 +169,17 @@ func init() {
 	templateCmd.AddCommand(templateValidateCmd)
 }
 
-func createTemplate(name, description, provider, region, nodesSizes, clusterType string, ingressEnabled, loadBalancer bool, onCreatedStr, onDestroyStr string) {
+func createTemplate(name, description, provider, region, nodesSizes, clusterType string, nodeGroups []types.NodeGroup, onCreatedStr, onDestroyStr string) {
+	// cluster-type is only meaningful for Civo
+	if strings.ToLower(provider) != "civo" {
+		if clusterType != "" && clusterType != "k3s" {
+			log.Printf("⚠️  cluster-type is only supported for the Civo provider and will be ignored for '%s'", provider)
+		}
+		clusterType = ""
+	}
+
 	ctx := context.Background()
+	shared.SyncRepoState(ctx)
 
 	// Get repository path
 	repoMgr, err := repository.NewManager()
@@ -210,6 +233,7 @@ func createTemplate(name, description, provider, region, nodesSizes, clusterType
 			Provider:    provider,
 			Region:      region,
 			Nodes:       nodes,
+			NodeGroups:  nodeGroups,
 			ClusterType: clusterType,
 			Workflows: template.TemplateWorkflowsSpec{
 				OnCreated: onCreatedWorkflows,
@@ -217,9 +241,6 @@ func createTemplate(name, description, provider, region, nodesSizes, clusterType
 			},
 		},
 	}
-
-	tmpl.Spec.Ingress.Enabled = ingressEnabled
-	tmpl.Spec.Ingress.LoadBalancer = loadBalancer
 
 	// Save template
 	if err := templateMgr.CreateTemplate(tmpl); err != nil {
@@ -229,13 +250,13 @@ func createTemplate(name, description, provider, region, nodesSizes, clusterType
 	log.Printf("✅ Template '%s' created successfully", name)
 
 	// Commit and push template to Git
-	authUsername, authToken := getAuthCredentials(currentRepo)
+	authUsername, authToken := shared.GetAuthCredentials(currentRepo)
 	stateMgr, err := state.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
 	if err != nil {
 		log.Printf("⚠️  Warning: Failed to create state manager: %v", err)
 		log.Println("💡 Template saved locally but not pushed to git")
 	} else {
-		commitStateChanges(ctx, stateMgr, fmt.Sprintf("Create template %s", name))
+		shared.CommitStateChanges(ctx, stateMgr, fmt.Sprintf("Create template %s", name))
 	}
 	log.Printf("Template path: %s", templateMgr.GetTemplatePath(name))
 	log.Println("\n📋 Template Details:")
@@ -243,7 +264,6 @@ func createTemplate(name, description, provider, region, nodesSizes, clusterType
 	log.Printf("  Region: %s", region)
 	log.Printf("  Nodes: %s", strings.Join(nodes, ", "))
 	log.Printf("  Cluster Type: %s", clusterType)
-	log.Printf("  Ingress: %v", ingressEnabled)
 	if len(onCreatedWorkflows) > 0 {
 		log.Printf("  OnCreated Workflows: %s", strings.Join(onCreatedWorkflows, ", "))
 	}
@@ -256,6 +276,8 @@ func createTemplate(name, description, provider, region, nodesSizes, clusterType
 }
 
 func listTemplates() {
+	shared.SyncRepoState(context.Background())
+
 	// Get repository path
 	repoMgr, err := repository.NewManager()
 	if err != nil {
@@ -286,7 +308,7 @@ func listTemplates() {
 
 	log.Printf("📋 Available templates (%d):\n", len(templates))
 	for _, tmpl := range templates {
-		log.Printf("  %s", tmpl.Metadata.Name)
+		log.Printf("  %s  (file: %s)", tmpl.Metadata.Name, tmpl.Filename)
 		if tmpl.Metadata.Description != "" {
 			log.Printf("    Description: %s", tmpl.Metadata.Description)
 		}
@@ -309,6 +331,7 @@ func listTemplates() {
 
 func deleteTemplate(name string) {
 	ctx := context.Background()
+	shared.SyncRepoState(ctx)
 
 	// Get repository path
 	repoMgr, err := repository.NewManager()
@@ -334,17 +357,19 @@ func deleteTemplate(name string) {
 	log.Printf("✅ Template '%s' deleted successfully", name)
 
 	// Commit and push deletion to Git
-	authUsername, authToken := getAuthCredentials(currentRepo)
+	authUsername, authToken := shared.GetAuthCredentials(currentRepo)
 	stateMgr, err := state.NewManager(currentRepo.RepoURL, currentRepo.LocalPath, authUsername, authToken)
 	if err != nil {
 		log.Printf("⚠️  Warning: Failed to create state manager: %v", err)
 		log.Println("💡 Template deleted locally but not pushed to git")
 	} else {
-		commitStateChanges(ctx, stateMgr, fmt.Sprintf("Delete template %s", name))
+		shared.CommitStateChanges(ctx, stateMgr, fmt.Sprintf("Delete template %s", name))
 	}
 }
 
 func showTemplate(name string) {
+	shared.SyncRepoState(context.Background())
+
 	// Get repository path
 	repoMgr, err := repository.NewManager()
 	if err != nil {
@@ -377,15 +402,9 @@ func showTemplate(name string) {
 	log.Println(string(data))
 }
 
-func executeTemplate(templateName, clusterName string) {
+func executeTemplate(templateName, clusterName, org, account, vpcName, eksRole, nodeRole, subscription, resourceGroup, project string) {
 	ctx := context.Background()
-
-	// Get configuration
-	configMgr := config.NewManager()
-	apiKey := configMgr.GetCivoToken()
-	if apiKey == "" {
-		log.Fatal("CIVO API token not found. Please run 'hyve config set-token civo' or set CIVO_TOKEN environment variable")
-	}
+	shared.SyncRepoState(ctx)
 
 	// Get repository path
 	repoMgr, err := repository.NewManager()
@@ -401,7 +420,7 @@ func executeTemplate(templateName, clusterName string) {
 	}
 
 	// Get authentication
-	authUsername, authToken := getAuthCredentials(currentRepo)
+	authUsername, authToken := shared.GetAuthCredentials(currentRepo)
 
 	// Create template manager
 	templateMgr := template.NewManager(currentRepo.LocalPath)
@@ -414,6 +433,42 @@ func executeTemplate(templateName, clusterName string) {
 		log.Fatalf("Failed to execute template: %v", err)
 	}
 
+	// Apply provider-specific account flags: a flag overrides the template value;
+	// if neither the template nor the flag supplies a value, execution fails.
+	resolve := func(flagVal, templateVal, flag, hint string) string {
+		if flagVal != "" {
+			return flagVal
+		}
+		if templateVal != "" {
+			return templateVal
+		}
+		log.Fatalf("Missing required value: set %s in the template or pass --%s. %s", flag, flag, hint)
+		return ""
+	}
+
+	switch strings.ToLower(tmpl.Spec.Provider) {
+	case "civo":
+		clusterDef.Spec.CivoOrganization = resolve(org, clusterDef.Spec.CivoOrganization,
+			"org", "Use 'hyve config civo org list' to see available organizations.")
+	case "aws":
+		clusterDef.Spec.AWSAccount = resolve(account, clusterDef.Spec.AWSAccount,
+			"account", "Use 'hyve config aws account list' to see available accounts.")
+		clusterDef.Spec.AWSVPCName = resolve(vpcName, clusterDef.Spec.AWSVPCName,
+			"vpc-name", fmt.Sprintf("Use 'hyve config aws vpc list --account %s'.", clusterDef.Spec.AWSAccount))
+		clusterDef.Spec.AWSEKSRole = resolve(eksRole, clusterDef.Spec.AWSEKSRole,
+			"eks-role", fmt.Sprintf("Use 'hyve config aws eks-role list --account %s'.", clusterDef.Spec.AWSAccount))
+		clusterDef.Spec.AWSNodeRole = resolve(nodeRole, clusterDef.Spec.AWSNodeRole,
+			"node-role", fmt.Sprintf("Use 'hyve config aws node-role list --account %s'.", clusterDef.Spec.AWSAccount))
+	case "azure":
+		clusterDef.Spec.AzureSubscription = resolve(subscription, clusterDef.Spec.AzureSubscription,
+			"subscription", "Use 'hyve config azure subscription list' to see available subscriptions.")
+		clusterDef.Spec.AzureResourceGroup = resolve(resourceGroup, clusterDef.Spec.AzureResourceGroup,
+			"resource-group", "")
+	case "gcp":
+		clusterDef.Spec.GCPProject = resolve(project, clusterDef.Spec.GCPProject,
+			"project", "Use 'hyve config gcp project list' to see available projects.")
+	}
+
 	log.Println("📋 Template Details:")
 	log.Printf("  Provider: %s", tmpl.Spec.Provider)
 	log.Printf("  Region: %s", tmpl.Spec.Region)
@@ -424,6 +479,39 @@ func executeTemplate(templateName, clusterName string) {
 	}
 	if len(tmpl.Spec.Workflows.OnDestroy) > 0 {
 		log.Printf("  OnDestroy Workflows: %s", strings.Join(tmpl.Spec.Workflows.OnDestroy, ", "))
+	}
+
+	// Resolve AWS aliases to actual IDs/ARNs before writing the cluster definition.
+	if strings.ToLower(clusterDef.Spec.Provider) == "aws" && clusterDef.Spec.AWSAccount != "" {
+		pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
+		accountName := clusterDef.Spec.AWSAccount
+
+		if clusterDef.Spec.AWSVPCName != "" && clusterDef.Spec.AWSVPCID == "" {
+			vpcID, err := pcMgr.GetAWSVPCID(accountName, clusterDef.Spec.AWSVPCName)
+			if err != nil {
+				log.Fatalf("AWS VPC '%s' not found in account '%s': %v", clusterDef.Spec.AWSVPCName, accountName, err)
+			}
+			clusterDef.Spec.AWSVPCID = vpcID
+			log.Printf("  Resolved VPC '%s' → %s", clusterDef.Spec.AWSVPCName, vpcID)
+		}
+
+		if clusterDef.Spec.AWSEKSRole != "" && clusterDef.Spec.AWSEKSRoleARN == "" {
+			roleARN, err := pcMgr.GetAWSEKSRoleARN(accountName, clusterDef.Spec.AWSEKSRole)
+			if err != nil {
+				log.Fatalf("AWS EKS role '%s' not found in account '%s': %v", clusterDef.Spec.AWSEKSRole, accountName, err)
+			}
+			clusterDef.Spec.AWSEKSRoleARN = roleARN
+			log.Printf("  Resolved EKS role '%s' → %s", clusterDef.Spec.AWSEKSRole, roleARN)
+		}
+
+		if clusterDef.Spec.AWSNodeRole != "" && clusterDef.Spec.AWSNodeRoleARN == "" {
+			roleARN, err := pcMgr.GetAWSNodeRoleARN(accountName, clusterDef.Spec.AWSNodeRole)
+			if err != nil {
+				log.Fatalf("AWS node role '%s' not found in account '%s': %v", clusterDef.Spec.AWSNodeRole, accountName, err)
+			}
+			clusterDef.Spec.AWSNodeRoleARN = roleARN
+			log.Printf("  Resolved node role '%s' → %s", clusterDef.Spec.AWSNodeRole, roleARN)
+		}
 	}
 
 	// Save cluster definition to clusters directory
@@ -452,17 +540,16 @@ func executeTemplate(templateName, clusterName string) {
 		log.Printf("⚠️  Warning: Failed to create state manager: %v", err)
 		log.Println("💡 Cluster definition saved locally but not pushed to git")
 	} else {
-		commitStateChanges(ctx, stateMgr, fmt.Sprintf("Create cluster %s from template %s", clusterName, templateName))
+		shared.CommitStateChanges(ctx, stateMgr, fmt.Sprintf("Create cluster %s from template %s", clusterName, templateName))
 	}
 
 	// Create cluster manager
-	factory := provider.NewFactory()
-	prov, err := factory.CreateProvider(clusterDef.Spec.Provider, apiKey, clusterDef.Metadata.Region)
+	prov, err := cluster.CreateProviderForClusterDef(*clusterDef)
 	if err != nil {
 		log.Fatalf("Failed to create provider: %v", err)
 	}
 
-	clusterMgr := cluster.NewManager(prov)
+	clusterMgr := internalcluster.NewManager(prov)
 
 	// Create cluster
 	log.Println("\n1️⃣ Creating cluster...")
@@ -504,17 +591,21 @@ func executeTemplate(templateName, clusterName string) {
 		log.Printf("⚠️  Warning: Failed to get cluster info: %v", err)
 		log.Println("Workflows may fail without valid kubeconfig")
 	} else {
-		// Save kubeconfig to database
-		kubeconfigMgr, err := kubeconfig.NewManager(currentRepo.Name)
-		if err != nil {
-			log.Printf("⚠️  Warning: Failed to create kubeconfig manager: %v", err)
+		if clusterInfo.Kubeconfig == "" {
+			log.Printf("⚠️  Warning: Kubeconfig not yet available for cluster '%s', skipping storage", clusterName)
 		} else {
-			defer kubeconfigMgr.Close()
-
-			if _, err := kubeconfigMgr.StoreKubeconfig(clusterName, clusterInfo.Kubeconfig); err != nil {
-				log.Printf("⚠️  Warning: Failed to store kubeconfig: %v", err)
+			// Save kubeconfig to database
+			kubeconfigMgr, err := kubeconfig.NewManager(currentRepo.Name)
+			if err != nil {
+				log.Printf("⚠️  Warning: Failed to create kubeconfig manager: %v", err)
 			} else {
-				log.Printf("✅ Kubeconfig synced and stored for cluster '%s'", clusterName)
+				defer kubeconfigMgr.Close()
+
+				if _, err := kubeconfigMgr.StoreKubeconfig(clusterName, clusterInfo.Kubeconfig); err != nil {
+					log.Printf("⚠️  Warning: Failed to store kubeconfig: %v", err)
+				} else {
+					log.Printf("✅ Kubeconfig synced and stored for cluster '%s'", clusterName)
+				}
 			}
 		}
 	}
@@ -524,7 +615,7 @@ func executeTemplate(templateName, clusterName string) {
 		log.Printf("\n4️⃣ Executing %d onCreated workflow(s)...\n", len(tmpl.Spec.Workflows.OnCreated))
 
 		// Create workflow manager
-		workflowMgr, err := workflow.NewManager(getWorkflowLocalPath())
+		workflowMgr, err := workflow.NewManager(shared.GetLocalPath())
 		if err != nil {
 			log.Printf("⚠️  Failed to create workflow manager: %v", err)
 			return
@@ -685,7 +776,7 @@ func validateTemplate(name string) {
 	// Validate workflows exist
 	allWorkflows := append(tmpl.Spec.Workflows.OnCreated, tmpl.Spec.Workflows.OnDestroy...)
 	if len(allWorkflows) > 0 {
-		workflowMgr, err := workflow.NewManager(getWorkflowLocalPath())
+		workflowMgr, err := workflow.NewManager(shared.GetLocalPath())
 		if err == nil {
 			availableWorkflows, err := workflowMgr.ListWorkflows()
 			if err == nil {

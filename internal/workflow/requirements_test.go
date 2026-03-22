@@ -178,6 +178,91 @@ func TestRequirementValidator_Close(t *testing.T) {
 	assert.NoError(t, validator2.Close())
 }
 
+func TestValidateSecret_CivoProvider_Required_NoEnvVar(t *testing.T) {
+	// getCivoOrgName() returns "" so the DB path is skipped.
+	// A required Civo secret absent from the environment must fail.
+	validator, err := NewRequirementValidator()
+	require.NoError(t, err)
+	defer validator.Close()
+
+	err = validator.validateSecret(SecretRequirement{
+		Name:     "CIVO_TOKEN",
+		Provider: "civo",
+		Required: true,
+	})
+	assert.Error(t, err)
+}
+
+func TestValidateSecret_CivoProvider_Optional_NoEnvVar(t *testing.T) {
+	// Optional Civo secret absent from env should pass gracefully.
+	validator, err := NewRequirementValidator()
+	require.NoError(t, err)
+	defer validator.Close()
+
+	err = validator.validateSecret(SecretRequirement{
+		Name:     "CIVO_TOKEN",
+		Provider: "civo",
+		Required: false,
+	})
+	assert.NoError(t, err)
+}
+
+func TestValidateSecret_CivoProvider_PresentInEnv(t *testing.T) {
+	validator, err := NewRequirementValidator()
+	require.NoError(t, err)
+	defer validator.Close()
+
+	os.Setenv("CIVO_TOKEN", "test-token")
+	defer os.Unsetenv("CIVO_TOKEN")
+
+	err = validator.validateSecret(SecretRequirement{
+		Name:     "CIVO_TOKEN",
+		Provider: "civo",
+		Required: true,
+	})
+	assert.NoError(t, err)
+}
+
+func TestValidateSecret_AWSProvider_AlwaysPass(t *testing.T) {
+	// AWS uses native CLI auth — secret validation is skipped regardless.
+	validator, err := NewRequirementValidator()
+	require.NoError(t, err)
+	defer validator.Close()
+
+	err = validator.validateSecret(SecretRequirement{
+		Name:     "AWS_SECRET_ACCESS_KEY",
+		Provider: "aws",
+		Required: true,
+	})
+	assert.NoError(t, err)
+}
+
+func TestValidateSecret_AzureProvider_AlwaysPass(t *testing.T) {
+	validator, err := NewRequirementValidator()
+	require.NoError(t, err)
+	defer validator.Close()
+
+	err = validator.validateSecret(SecretRequirement{
+		Name:     "AZURE_CLIENT_SECRET",
+		Provider: "azure",
+		Required: true,
+	})
+	assert.NoError(t, err)
+}
+
+func TestValidateSecret_GCPProvider_AlwaysPass(t *testing.T) {
+	validator, err := NewRequirementValidator()
+	require.NoError(t, err)
+	defer validator.Close()
+
+	err = validator.validateSecret(SecretRequirement{
+		Name:     "GOOGLE_APPLICATION_CREDENTIALS",
+		Provider: "gcp",
+		Required: true,
+	})
+	assert.NoError(t, err)
+}
+
 func TestValidateRequirements_MultipleErrors(t *testing.T) {
 	validator, err := NewRequirementValidator()
 	require.NoError(t, err)

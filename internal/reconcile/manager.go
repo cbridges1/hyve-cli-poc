@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"hyve/internal/cluster"
-	"hyve/internal/ingress"
 	"hyve/internal/kubeconfig"
 	"hyve/internal/provider"
 	"hyve/internal/providerconfig"
@@ -21,15 +20,13 @@ import (
 type Reconciler struct {
 	providerFactory *provider.Factory
 	stateMgr        *state.Manager
-	apiKey          string
 }
 
 // NewReconciler creates a new reconciler
-func NewReconciler(apiKey string, stateMgr *state.Manager) *Reconciler {
+func NewReconciler(stateMgr *state.Manager) *Reconciler {
 	return &Reconciler{
 		providerFactory: provider.NewFactory(),
 		stateMgr:        stateMgr,
-		apiKey:          apiKey,
 	}
 }
 
@@ -51,8 +48,8 @@ func (r *Reconciler) ReconcileAll(ctx context.Context, clusterDefs []types.Clust
 	}
 
 	if len(clusterDefs) == 0 {
-		log.Println("No cluster definitions found in state/clusters directory")
-		r.cleanupAllRegions(ctx, clusterDefs)
+		log.Println("No cluster definitions found in state/clusters directory — skipping reconcile")
+		return nil
 	} else {
 		for region, clusters := range regionClusters {
 			err := r.reconcileRegion(ctx, region, clusters)
@@ -97,9 +94,8 @@ func (r *Reconciler) reconcileRegion(ctx context.Context, region string, cluster
 		}
 
 		clusterMgr := cluster.NewManager(prov)
-		ingressMgr := ingress.NewManager(prov)
 
-		err = r.reconcileCluster(ctx, clusterMgr, ingressMgr, clusterDef)
+		err = r.reconcileCluster(ctx, clusterMgr, clusterDef)
 		if err != nil {
 			log.Printf("Failed to reconcile cluster %s: %v", clusterDef.Metadata.Name, err)
 		}
@@ -123,9 +119,9 @@ func (r *Reconciler) reconcileRegion(ctx context.Context, region string, cluster
 	return nil
 }
 
-// createProviderForCluster creates a provider with the appropriate options for a cluster.
-// opts.AccountName is populated from the cluster spec's account/project/subscription alias so
-// that the factory can look up named environment variables (e.g. MY_ACCOUNT_AWS_ACCESS_KEY_ID).
+// createProviderForCluster creates a provider with credentials resolved from the provider
+// config YAML files (provider-configs/*.yaml). Values may be literal strings or
+// ${ENV_VAR} references that are expanded at resolution time.
 func (r *Reconciler) createProviderForCluster(clusterDef types.ClusterDefinition) (provider.Provider, error) {
 	providerName := clusterDef.Spec.Provider
 	if providerName == "" {
@@ -133,105 +129,84 @@ func (r *Reconciler) createProviderForCluster(clusterDef types.ClusterDefinition
 	}
 
 	opts := provider.ProviderOptions{
-		Region: clusterDef.Metadata.Region,
-		APIKey: r.apiKey,
+		Region:      clusterDef.Metadata.Region,
+		AccountName: clusterDef.Spec.CivoOrganization, // overridden below per-provider
 	}
 
-	// Populate AccountName from the cluster spec so named env vars can be resolved.
+	pcMgr := providerconfig.NewManager(r.stateMgr.GetStateRoot())
+
 	switch strings.ToLower(providerName) {
 	case "civo":
 		opts.AccountName = clusterDef.Spec.CivoOrganization
+		if opts.AccountName != "" {
+			if token, err := pcMgr.GetCivoToken(opts.AccountName); err == nil && token != "" {
+				opts.APIKey = token
+			}
+		}
+
 	case "aws":
 		opts.AccountName = clusterDef.Spec.AWSAccount
+		if opts.AccountName != "" {
+			keyID, secret, session, _ := pcMgr.GetAWSCredentials(opts.AccountName)
+			opts.AccessKeyID = keyID
+			opts.SecretAccessKey = secret
+			opts.SessionToken = session
+		}
+
 	case "gcp":
 		opts.AccountName = clusterDef.Spec.GCPProject
-	case "azure":
-		opts.AccountName = clusterDef.Spec.AzureSubscription
-	}
-
-	// Handle GCP-specific configuration
-	if providerName == "gcp" {
-		// Use stored project ID if available, otherwise resolve from alias
 		if clusterDef.Spec.GCPProjectID != "" {
 			opts.ProjectID = clusterDef.Spec.GCPProjectID
-			log.Printf("Using GCP project ID '%s' for cluster %s",
-				clusterDef.Spec.GCPProjectID, clusterDef.Metadata.Name)
-		} else if clusterDef.Spec.GCPProject != "" {
-			projectID, err := r.resolveGCPProjectID(clusterDef.Spec.GCPProject)
+			log.Printf("Using GCP project ID '%s' for cluster %s", clusterDef.Spec.GCPProjectID, clusterDef.Metadata.Name)
+		} else if opts.AccountName != "" {
+			projectID, err := pcMgr.GetGCPProjectID(opts.AccountName)
 			if err != nil {
-				return nil, fmt.Errorf("failed to resolve GCP project '%s': %w", clusterDef.Spec.GCPProject, err)
+				return nil, fmt.Errorf("failed to resolve GCP project '%s': %w", opts.AccountName, err)
 			}
 			opts.ProjectID = projectID
-			log.Printf("Using GCP project '%s' (ID: %s) for cluster %s",
-				clusterDef.Spec.GCPProject, projectID, clusterDef.Metadata.Name)
+			log.Printf("Using GCP project '%s' (ID: %s) for cluster %s", opts.AccountName, projectID, clusterDef.Metadata.Name)
 		}
-	}
+		if opts.AccountName != "" {
+			credJSON, _ := pcMgr.GetGCPCredentialsJSON(opts.AccountName)
+			opts.GCPCredentialsJSON = credJSON
+		}
 
-	// Handle Azure-specific configuration
-	if providerName == "azure" {
+	case "azure":
+		opts.AccountName = clusterDef.Spec.AzureSubscription
 		if clusterDef.Spec.AzureSubscriptionID != "" {
 			opts.AzureSubscriptionID = clusterDef.Spec.AzureSubscriptionID
-			log.Printf("Using Azure subscription ID '%s' for cluster %s",
-				clusterDef.Spec.AzureSubscriptionID, clusterDef.Metadata.Name)
-		} else if clusterDef.Spec.AzureSubscription != "" {
-			subscriptionID, err := r.resolveAzureSubscriptionID(clusterDef.Spec.AzureSubscription)
+			log.Printf("Using Azure subscription ID '%s' for cluster %s", clusterDef.Spec.AzureSubscriptionID, clusterDef.Metadata.Name)
+		} else if opts.AccountName != "" {
+			subID, err := pcMgr.GetAzureSubscriptionID(opts.AccountName)
 			if err != nil {
-				return nil, fmt.Errorf("failed to resolve Azure subscription '%s': %w", clusterDef.Spec.AzureSubscription, err)
+				return nil, fmt.Errorf("failed to resolve Azure subscription '%s': %w", opts.AccountName, err)
 			}
-			opts.AzureSubscriptionID = subscriptionID
-			log.Printf("Using Azure subscription '%s' (ID: %s) for cluster %s",
-				clusterDef.Spec.AzureSubscription, subscriptionID, clusterDef.Metadata.Name)
+			opts.AzureSubscriptionID = subID
+			log.Printf("Using Azure subscription '%s' (ID: %s) for cluster %s", opts.AccountName, subID, clusterDef.Metadata.Name)
 		}
+		if opts.AccountName != "" {
+			tenantID, clientID, clientSecret, _ := pcMgr.GetAzureCredentials(opts.AccountName)
+			opts.AzureTenantID = tenantID
+			opts.AzureClientID = clientID
+			opts.AzureClientSecret = clientSecret
+		}
+		opts.AzureResourceGroup = clusterDef.Spec.AzureResourceGroup
 	}
 
 	return r.providerFactory.CreateProviderWithOptions(providerName, opts)
 }
 
-// resolveGCPProjectID resolves a GCP project alias to its project ID
-func (r *Reconciler) resolveGCPProjectID(projectAlias string) (string, error) {
-	repoMgr, err := repository.NewManager()
-	if err != nil {
-		return "", fmt.Errorf("failed to create repository manager: %w", err)
-	}
-	defer repoMgr.Close()
-
-	currentRepo, err := repoMgr.GetCurrentRepository()
-	if err != nil {
-		return "", fmt.Errorf("failed to get current repository: %w", err)
-	}
-
-	pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
-	return pcMgr.GetGCPProjectID(projectAlias)
-}
-
-// resolveAzureSubscriptionID resolves an Azure subscription alias to its subscription ID
-func (r *Reconciler) resolveAzureSubscriptionID(subscriptionAlias string) (string, error) {
-	repoMgr, err := repository.NewManager()
-	if err != nil {
-		return "", fmt.Errorf("failed to create repository manager: %w", err)
-	}
-	defer repoMgr.Close()
-
-	currentRepo, err := repoMgr.GetCurrentRepository()
-	if err != nil {
-		return "", fmt.Errorf("failed to get current repository: %w", err)
-	}
-
-	pcMgr := providerconfig.NewManager(currentRepo.LocalPath)
-	return pcMgr.GetAzureSubscriptionID(subscriptionAlias)
-}
-
 // reconcileCluster handles the reconciliation of a single cluster
-func (r *Reconciler) reconcileCluster(ctx context.Context, clusterMgr *cluster.Manager, ingressMgr *ingress.Manager, clusterDef types.ClusterDefinition) error {
+func (r *Reconciler) reconcileCluster(ctx context.Context, clusterMgr *cluster.Manager, clusterDef types.ClusterDefinition) error {
 	action := clusterMgr.DetermineAction(ctx, clusterDef)
 
 	switch action {
 	case types.ActionCreate:
-		return r.createCluster(ctx, clusterMgr, ingressMgr, clusterDef)
+		return r.createCluster(ctx, clusterMgr, clusterDef)
 	case types.ActionUpdate:
-		return r.updateCluster(ctx, clusterMgr, ingressMgr, clusterDef)
+		return r.updateCluster(ctx, clusterMgr, clusterDef)
 	case types.ActionDelete:
-		return r.deleteCluster(ctx, clusterMgr, ingressMgr, clusterDef)
+		return r.deleteCluster(ctx, clusterMgr, clusterDef)
 	case types.ActionNone:
 		log.Printf("Cluster %s is up to date, no action needed", clusterDef.Metadata.Name)
 		return nil
@@ -241,8 +216,8 @@ func (r *Reconciler) reconcileCluster(ctx context.Context, clusterMgr *cluster.M
 	}
 }
 
-// createCluster creates a new cluster with optional ingress controller
-func (r *Reconciler) createCluster(ctx context.Context, clusterMgr *cluster.Manager, ingressMgr *ingress.Manager, clusterDef types.ClusterDefinition) error {
+// createCluster creates a new cluster
+func (r *Reconciler) createCluster(ctx context.Context, clusterMgr *cluster.Manager, clusterDef types.ClusterDefinition) error {
 	existingCluster, err := clusterMgr.FindByName(ctx, clusterDef.Metadata.Name)
 	if err != nil {
 		return err
@@ -267,17 +242,6 @@ func (r *Reconciler) createCluster(ctx context.Context, clusterMgr *cluster.Mana
 	}
 	log.Println("Cluster is ready!")
 
-	var loadBalancerIP string
-	if clusterDef.Spec.Ingress.Enabled {
-		lb, err := ingressMgr.DeployIngressController(ctx, createdCluster.ID, clusterDef.Spec.Ingress)
-		if err != nil {
-			log.Printf("Failed to deploy ingress controller: %v", err)
-		} else if lb != nil {
-			loadBalancerIP = lb.PublicIP
-			log.Printf("Ingress controller deployed with load balancer IP: %s", loadBalancerIP)
-		}
-	}
-
 	log.Printf("Cluster %s created successfully!", clusterDef.Metadata.Name)
 
 	// Run onCreated workflows if defined
@@ -290,12 +254,12 @@ func (r *Reconciler) createCluster(ctx context.Context, clusterMgr *cluster.Mana
 }
 
 // updateCluster updates an existing cluster
-func (r *Reconciler) updateCluster(ctx context.Context, clusterMgr *cluster.Manager, ingressMgr *ingress.Manager, clusterDef types.ClusterDefinition) error {
+func (r *Reconciler) updateCluster(ctx context.Context, clusterMgr *cluster.Manager, clusterDef types.ClusterDefinition) error {
 	return clusterMgr.Update(ctx, clusterDef)
 }
 
 // deleteCluster deletes a cluster and its associated resources
-func (r *Reconciler) deleteCluster(ctx context.Context, clusterMgr *cluster.Manager, ingressMgr *ingress.Manager, clusterDef types.ClusterDefinition) error {
+func (r *Reconciler) deleteCluster(ctx context.Context, clusterMgr *cluster.Manager, clusterDef types.ClusterDefinition) error {
 	existingCluster, err := clusterMgr.FindByName(ctx, clusterDef.Metadata.Name)
 	if err != nil {
 		return err
@@ -313,13 +277,6 @@ func (r *Reconciler) deleteCluster(ctx context.Context, clusterMgr *cluster.Mana
 	}
 
 	log.Printf("Deleting cluster %s with ID %s", clusterDef.Metadata.Name, existingCluster.ID)
-
-	if clusterDef.Spec.Ingress.Enabled {
-		err := ingressMgr.RemoveIngressController(ctx, existingCluster.ID)
-		if err != nil {
-			log.Printf("Failed to remove ingress controller: %v", err)
-		}
-	}
 
 	err = clusterMgr.Delete(ctx, existingCluster.ID)
 	if err != nil {
@@ -359,8 +316,8 @@ func (r *Reconciler) strictDeleteSweep(ctx context.Context) {
 	if err != nil {
 		log.Printf("strict-delete: failed to list Civo organizations: %v", err)
 	}
-	// When no named organizations are configured, fall back to global credentials
-	// (r.apiKey / CIVO_TOKEN) so clusters in unregistered accounts are still found.
+	// When no named organizations are configured, sweep with empty credentials
+	// so clusters in unregistered accounts are still found.
 	if len(civoOrgs) == 0 {
 		civoOrgs = []providerconfig.CivoOrganization{{Name: "", Regions: nil}}
 	}
@@ -370,10 +327,9 @@ func (r *Reconciler) strictDeleteSweep(ctx context.Context) {
 			regions = []string{"PHX1", "NYC1", "FRA1", "LON1"}
 		}
 		for _, region := range dedupRegions(regions) {
-			prov, err := r.providerFactory.CreateProviderWithOptions("civo", provider.ProviderOptions{
-				APIKey:      r.apiKey,
-				Region:      region,
-				AccountName: org.Name,
+			prov, err := r.createProviderForCluster(types.ClusterDefinition{
+				Metadata: types.ClusterMetadata{Region: region},
+				Spec:     types.ClusterSpec{Provider: "civo", CivoOrganization: org.Name},
 			})
 			if err != nil {
 				log.Printf("strict-delete: Civo org=%q region=%s: failed to create provider: %v", org.Name, region, err)
@@ -403,9 +359,9 @@ func (r *Reconciler) strictDeleteSweep(ctx context.Context) {
 			regions = []string{"us-east-1", "us-west-2", "eu-west-1", "eu-central-1", "ap-southeast-1"}
 		}
 		for _, region := range dedupRegions(regions) {
-			prov, err := r.providerFactory.CreateProviderWithOptions("aws", provider.ProviderOptions{
-				Region:      region,
-				AccountName: account.Name,
+			prov, err := r.createProviderForCluster(types.ClusterDefinition{
+				Metadata: types.ClusterMetadata{Region: region},
+				Spec:     types.ClusterSpec{Provider: "aws", AWSAccount: account.Name},
 			})
 			if err != nil {
 				log.Printf("strict-delete: AWS account=%q region=%s: failed to create provider: %v", account.Name, region, err)
@@ -419,27 +375,24 @@ func (r *Reconciler) strictDeleteSweep(ctx context.Context) {
 	}
 
 	// --- GCP projects ---
-	// GCPProject has no region list; derive regions from cluster definitions for that
-	// project, supplemented by common GCP regions.
+	// Use "-" as the location to list all clusters across all zones and regions
+	// in a single API call per project (GCP wildcard location).
 	gcpProjects, err := pcMgr.ListGCPProjects()
 	if err != nil {
 		log.Printf("strict-delete: failed to list GCP projects: %v", err)
 	}
 	for _, project := range gcpProjects {
-		for _, region := range gcpRegionsForProject(project.Name, desiredClusters) {
-			prov, err := r.providerFactory.CreateProviderWithOptions("gcp", provider.ProviderOptions{
-				Region:      region,
-				ProjectID:   project.ProjectID,
-				AccountName: project.Name,
-			})
-			if err != nil {
-				log.Printf("strict-delete: GCP project=%q region=%s: failed to create provider: %v", project.Name, region, err)
-				continue
-			}
-			log.Printf("strict-delete: sweeping GCP project=%q region=%s", project.Name, region)
-			if err := cluster.NewManager(prov).StrictDeleteOrphans(ctx, desiredClusters); err != nil {
-				log.Printf("strict-delete: GCP project=%q region=%s: %v", project.Name, region, err)
-			}
+		prov, err := r.createProviderForCluster(types.ClusterDefinition{
+			Metadata: types.ClusterMetadata{Region: "-"},
+			Spec:     types.ClusterSpec{Provider: "gcp", GCPProject: project.Name},
+		})
+		if err != nil {
+			log.Printf("strict-delete: GCP project=%q: failed to create provider: %v", project.Name, err)
+			continue
+		}
+		log.Printf("strict-delete: sweeping GCP project=%q (all regions)", project.Name)
+		if err := cluster.NewManager(prov).StrictDeleteOrphans(ctx, desiredClusters); err != nil {
+			log.Printf("strict-delete: GCP project=%q: %v", project.Name, err)
 		}
 	}
 
@@ -459,11 +412,13 @@ func (r *Reconciler) strictDeleteSweep(ctx context.Context) {
 			if location == "" {
 				location = "eastus"
 			}
-			prov, err := r.providerFactory.CreateProviderWithOptions("azure", provider.ProviderOptions{
-				Region:              location,
-				AzureSubscriptionID: sub.SubscriptionID,
-				AzureResourceGroup:  rg.Name,
-				AccountName:         sub.Name,
+			prov, err := r.createProviderForCluster(types.ClusterDefinition{
+				Metadata: types.ClusterMetadata{Region: location},
+				Spec: types.ClusterSpec{
+					Provider:           "azure",
+					AzureSubscription:  sub.Name,
+					AzureResourceGroup: rg.Name,
+				},
 			})
 			if err != nil {
 				log.Printf("strict-delete: Azure sub=%q rg=%q: failed to create provider: %v", sub.Name, rg.Name, err)
@@ -475,27 +430,6 @@ func (r *Reconciler) strictDeleteSweep(ctx context.Context) {
 			}
 		}
 	}
-}
-
-// gcpRegionsForProject returns the regions used by the given GCP project in the desired
-// cluster definitions, supplemented by common GCP regions not already covered.
-func gcpRegionsForProject(projectName string, desired []types.ClusterDefinition) []string {
-	seen := make(map[string]bool)
-	var regions []string
-	for _, c := range desired {
-		if strings.ToLower(c.Spec.Provider) == "gcp" && c.Spec.GCPProject == projectName && c.Metadata.Region != "" {
-			if !seen[c.Metadata.Region] {
-				seen[c.Metadata.Region] = true
-				regions = append(regions, c.Metadata.Region)
-			}
-		}
-	}
-	for _, r := range []string{"us-central1", "us-east1", "us-west1", "europe-west1", "asia-east1"} {
-		if !seen[r] {
-			regions = append(regions, r)
-		}
-	}
-	return regions
 }
 
 // dedupRegions returns the input slice with duplicates removed, preserving order.
@@ -576,16 +510,24 @@ func (r *Reconciler) syncKubeconfigs(ctx context.Context, clusterDefs []types.Cl
 	}
 	defer kubeconfigMgr.Close()
 
-	// Group clusters by region to minimize provider creation
+	// Collect all active cluster names for orphan cleanup after syncing.
+	activeClusterNames := make([]string, 0, len(clusterDefs))
+	for _, cd := range clusterDefs {
+		activeClusterNames = append(activeClusterNames, cd.Metadata.Name)
+	}
+
+	// Group clusters by region so each cluster gets a provider with the right credentials.
 	regionClusters := make(map[string][]types.ClusterDefinition)
 	for _, clusterDef := range clusterDefs {
 		region := clusterDef.Metadata.Region
 		regionClusters[region] = append(regionClusters[region], clusterDef)
 	}
 
-	// Sync kubeconfigs for each region
+	// Sync kubeconfigs for each cluster individually (different credentials per cluster).
+	// Use SyncSingleKubeconfig so cleanup is NOT called per-iteration — calling
+	// CleanupOrphanedKubeconfigs with a single name inside a loop would delete every
+	// other cluster's kubeconfig before its iteration runs.
 	for region, clusters := range regionClusters {
-		// Sync kubeconfig for each cluster individually to handle different project IDs
 		for _, clusterDef := range clusters {
 			prov, err := r.createProviderForCluster(clusterDef)
 			if err != nil {
@@ -594,15 +536,17 @@ func (r *Reconciler) syncKubeconfigs(ctx context.Context, clusterDefs []types.Cl
 				continue
 			}
 
-			// Create syncer and sync kubeconfig for this cluster
 			syncer := kubeconfig.NewSyncer(kubeconfigMgr, prov)
-			err = syncer.SyncKubeconfigs(ctx, []types.ClusterDefinition{clusterDef})
-			if err != nil {
+			if err := syncer.SyncSingleKubeconfig(ctx, clusterDef.Metadata.Name); err != nil {
 				log.Printf("Failed to sync kubeconfig for cluster %s in region %s: %v",
 					clusterDef.Metadata.Name, region, err)
-				continue
 			}
 		}
+	}
+
+	// Clean up kubeconfigs for clusters no longer in the desired state.
+	if err := kubeconfigMgr.CleanupOrphanedKubeconfigs(activeClusterNames); err != nil {
+		log.Printf("Failed to cleanup orphaned kubeconfigs: %v", err)
 	}
 
 	return nil

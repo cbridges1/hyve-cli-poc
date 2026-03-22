@@ -1,5 +1,26 @@
 package types
 
+// NodeGroupTaint represents a Kubernetes node taint
+type NodeGroupTaint struct {
+	Key    string `yaml:"key"`
+	Value  string `yaml:"value"`
+	Effect string `yaml:"effect"` // NoSchedule, PreferNoSchedule, or NoExecute
+}
+
+// NodeGroup represents a named group of nodes with shared configuration
+type NodeGroup struct {
+	Name         string            `yaml:"name"`
+	InstanceType string            `yaml:"instanceType"`
+	Count        int               `yaml:"count"`
+	MinCount     int               `yaml:"minCount,omitempty"`
+	MaxCount     int               `yaml:"maxCount,omitempty"`
+	DiskSize     int               `yaml:"diskSize,omitempty"` // Disk size in GB
+	Labels       map[string]string `yaml:"labels,omitempty"`
+	Taints       []NodeGroupTaint  `yaml:"taints,omitempty"`
+	Mode         string            `yaml:"mode,omitempty"` // Azure: System or User
+	Spot         bool              `yaml:"spot,omitempty"`
+}
+
 // IngressSpec represents nginx ingress controller configuration
 type IngressSpec struct {
 	Enabled      bool   `yaml:"enabled"`
@@ -16,7 +37,8 @@ type WorkflowsSpec struct {
 // ClusterSpec represents the desired cluster configuration
 type ClusterSpec struct {
 	Provider    string        `yaml:"provider"`
-	Nodes       []string      `yaml:"nodes"`
+	Nodes       []string      `yaml:"nodes,omitempty"`
+	NodeGroups  []NodeGroup   `yaml:"nodeGroups,omitempty"`
 	ClusterType string        `yaml:"clusterType"`
 	Ingress     IngressSpec   `yaml:"ingress"`
 	Workflows   WorkflowsSpec `yaml:"workflows,omitempty"`
@@ -38,6 +60,7 @@ type ClusterSpec struct {
 	// Azure-specific configuration
 	AzureSubscription   string `yaml:"azureSubscription,omitempty"`   // Azure subscription name alias
 	AzureSubscriptionID string `yaml:"azureSubscriptionId,omitempty"` // Azure subscription ID (resolved from alias)
+	AzureResourceGroup  string `yaml:"azureResourceGroup,omitempty"`  // Azure resource group name
 
 	// Civo-specific configuration
 	CivoOrganization string `yaml:"civoOrganization,omitempty"` // Civo organization name alias

@@ -38,7 +38,7 @@ type RepoConfig struct {
 // Manager handles state file operations using Git repositories
 type Manager struct {
 	stateDir   string
-	gitManager git.GitBackend
+	gitManager *git.SystemBackend
 }
 
 // NewManager creates a new state manager with Git repository support
@@ -136,6 +136,11 @@ func (m *Manager) LoadClusterDefinitions() ([]types.ClusterDefinition, error) {
 	})
 
 	if err != nil {
+		if os.IsNotExist(err) {
+			// clusters/ directory doesn't exist — treat as empty desired state.
+			// ReconcileAll will still run strictDelete if enabled.
+			return nil, nil
+		}
 		return nil, err
 	}
 

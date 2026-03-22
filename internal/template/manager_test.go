@@ -304,6 +304,178 @@ func TestTemplateWithWorkflows(t *testing.T) {
 	assert.Equal(t, []string{"cleanup"}, retrieved.Spec.Workflows.OnDestroy)
 }
 
+// Provider-specific account fields are optional in templates.
+// If set in the template they are used directly; if a CLI flag is also provided
+// it overrides the template value. If neither is set, execution fails.
+
+func TestConvertToClusterDefinition_CivoOrganization(t *testing.T) {
+	manager, _ := setupTemplateTest(t)
+
+	template := &Template{
+		Metadata: TemplateMetadata{Name: "civo-org-template"},
+		Spec: TemplateSpec{
+			Provider:         "civo",
+			Region:           "NYC1",
+			ClusterType:      "k3s",
+			CivoOrganization: "my-org",
+		},
+	}
+
+	clusterDef := manager.ConvertToClusterDefinition(template, "my-cluster")
+	require.NotNil(t, clusterDef)
+	assert.Equal(t, "my-org", clusterDef.Spec.CivoOrganization)
+}
+
+func TestConvertToClusterDefinition_AzureFields(t *testing.T) {
+	manager, _ := setupTemplateTest(t)
+
+	template := &Template{
+		Metadata: TemplateMetadata{Name: "azure-template"},
+		Spec: TemplateSpec{
+			Provider:           "azure",
+			Region:             "eastus",
+			ClusterType:        "k3s",
+			AzureSubscription:  "my-subscription",
+			AzureResourceGroup: "my-rg",
+		},
+	}
+
+	clusterDef := manager.ConvertToClusterDefinition(template, "my-cluster")
+	require.NotNil(t, clusterDef)
+	assert.Equal(t, "my-subscription", clusterDef.Spec.AzureSubscription)
+	assert.Equal(t, "my-rg", clusterDef.Spec.AzureResourceGroup)
+	assert.Equal(t, "azure", clusterDef.Spec.Provider)
+}
+
+func TestConvertToClusterDefinition_GCPFields(t *testing.T) {
+	manager, _ := setupTemplateTest(t)
+
+	template := &Template{
+		Metadata: TemplateMetadata{Name: "gcp-template"},
+		Spec: TemplateSpec{
+			Provider:    "gcp",
+			Region:      "us-central1",
+			ClusterType: "gke",
+			GCPProject:  "my-gcp-project",
+		},
+	}
+
+	clusterDef := manager.ConvertToClusterDefinition(template, "my-cluster")
+	require.NotNil(t, clusterDef)
+	assert.Equal(t, "my-gcp-project", clusterDef.Spec.GCPProject)
+}
+
+func TestConvertToClusterDefinition_AWSFields(t *testing.T) {
+	manager, _ := setupTemplateTest(t)
+
+	template := &Template{
+		Metadata: TemplateMetadata{Name: "aws-template"},
+		Spec: TemplateSpec{
+			Provider:    "aws",
+			Region:      "us-east-1",
+			ClusterType: "eks",
+			AWSAccount:  "prod",
+			AWSVPCName:  "prod-vpc",
+			AWSEKSRole:  "eks-role",
+			AWSNodeRole: "node-role",
+		},
+	}
+
+	clusterDef := manager.ConvertToClusterDefinition(template, "my-cluster")
+	require.NotNil(t, clusterDef)
+	assert.Equal(t, "prod", clusterDef.Spec.AWSAccount)
+	assert.Equal(t, "prod-vpc", clusterDef.Spec.AWSVPCName)
+	assert.Equal(t, "eks-role", clusterDef.Spec.AWSEKSRole)
+	assert.Equal(t, "node-role", clusterDef.Spec.AWSNodeRole)
+}
+
+func TestConvertToClusterDefinition_FlagOverridesTemplateValue(t *testing.T) {
+	// Simulate the flag-override behaviour: template has a value, caller replaces it.
+	manager, _ := setupTemplateTest(t)
+
+	template := &Template{
+		Metadata: TemplateMetadata{Name: "override-template"},
+		Spec: TemplateSpec{
+			Provider:         "civo",
+			Region:           "NYC1",
+			ClusterType:      "k3s",
+			CivoOrganization: "template-org",
+		},
+	}
+
+	clusterDef := manager.ConvertToClusterDefinition(template, "my-cluster")
+	// Flag value overrides what the template supplied.
+	clusterDef.Spec.CivoOrganization = "flag-org"
+
+	assert.Equal(t, "flag-org", clusterDef.Spec.CivoOrganization)
+}
+
+func TestTemplateWithCivoOrganization_YAMLRoundtrip(t *testing.T) {
+	manager, _ := setupTemplateTest(t)
+
+	template := &Template{
+		Metadata: TemplateMetadata{Name: "civo-org-yaml-template"},
+		Spec: TemplateSpec{
+			Provider:         "civo",
+			Region:           "NYC1",
+			ClusterType:      "k3s",
+			Nodes:            []string{"g4s.kube.small"},
+			CivoOrganization: "prod-org",
+		},
+	}
+
+	err := manager.CreateTemplate(template)
+	require.NoError(t, err)
+
+	retrieved, err := manager.GetTemplate("civo-org-yaml-template")
+	require.NoError(t, err)
+	assert.Equal(t, "prod-org", retrieved.Spec.CivoOrganization)
+}
+
+func TestTemplateWithAzureConfig_YAMLRoundtrip(t *testing.T) {
+	manager, _ := setupTemplateTest(t)
+
+	template := &Template{
+		Metadata: TemplateMetadata{Name: "azure-yaml-template"},
+		Spec: TemplateSpec{
+			Provider:           "azure",
+			Region:             "eastus",
+			ClusterType:        "k3s",
+			AzureSubscription:  "prod-subscription",
+			AzureResourceGroup: "prod-rg",
+		},
+	}
+
+	err := manager.CreateTemplate(template)
+	require.NoError(t, err)
+
+	retrieved, err := manager.GetTemplate("azure-yaml-template")
+	require.NoError(t, err)
+	assert.Equal(t, "prod-subscription", retrieved.Spec.AzureSubscription)
+	assert.Equal(t, "prod-rg", retrieved.Spec.AzureResourceGroup)
+}
+
+func TestTemplateWithGCPConfig_YAMLRoundtrip(t *testing.T) {
+	manager, _ := setupTemplateTest(t)
+
+	template := &Template{
+		Metadata: TemplateMetadata{Name: "gcp-yaml-template"},
+		Spec: TemplateSpec{
+			Provider:    "gcp",
+			Region:      "us-central1",
+			ClusterType: "gke",
+			GCPProject:  "my-gcp-project",
+		},
+	}
+
+	err := manager.CreateTemplate(template)
+	require.NoError(t, err)
+
+	retrieved, err := manager.GetTemplate("gcp-yaml-template")
+	require.NoError(t, err)
+	assert.Equal(t, "my-gcp-project", retrieved.Spec.GCPProject)
+}
+
 func TestTemplateWithIngress(t *testing.T) {
 	manager, _ := setupTemplateTest(t)
 

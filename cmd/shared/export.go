@@ -1,4 +1,4 @@
-package cmd
+package shared
 
 import (
 	"context"
@@ -14,10 +14,10 @@ import (
 	"hyve/internal/types"
 )
 
-func exportClusterInfo(ctx context.Context, apiKey string, clusterDef types.ClusterDefinition) error {
+// ExportClusterInfo exports cluster information to environment variables and GitHub Actions.
+func ExportClusterInfo(ctx context.Context, apiKey string, clusterDef types.ClusterDefinition) error {
 	factory := provider.NewFactory()
 
-	// Build provider options based on cluster type
 	providerName := clusterDef.Spec.Provider
 	if providerName == "" {
 		providerName = "civo"
@@ -27,7 +27,6 @@ func exportClusterInfo(ctx context.Context, apiKey string, clusterDef types.Clus
 		Region: clusterDef.Metadata.Region,
 	}
 
-	// Populate AccountName so the factory can resolve named env vars.
 	switch strings.ToLower(providerName) {
 	case "civo":
 		opts.AccountName = clusterDef.Spec.CivoOrganization
@@ -39,12 +38,10 @@ func exportClusterInfo(ctx context.Context, apiKey string, clusterDef types.Clus
 		opts.AccountName = clusterDef.Spec.AzureSubscription
 	}
 
-	// Only set API key for Civo provider
 	if providerName == "civo" {
 		opts.APIKey = apiKey
 	}
 
-	// Handle GCP-specific configuration
 	if providerName == "gcp" {
 		if clusterDef.Spec.GCPProjectID != "" {
 			opts.ProjectID = clusterDef.Spec.GCPProjectID
@@ -62,7 +59,6 @@ func exportClusterInfo(ctx context.Context, apiKey string, clusterDef types.Clus
 		}
 	}
 
-	// Handle Azure-specific configuration
 	if providerName == "azure" {
 		if clusterDef.Spec.AzureSubscriptionID != "" {
 			opts.AzureSubscriptionID = clusterDef.Spec.AzureSubscriptionID
@@ -110,7 +106,7 @@ func exportClusterInfo(ctx context.Context, apiKey string, clusterDef types.Clus
 			fmt.Fprintf(file, "HYVE_CLUSTER_ACCESS_PORT=%s\n", clusterInfo.AccessPort)
 			fmt.Fprintf(file, "HYVE_CLUSTER_ID=%s\n", clusterInfo.ID)
 			fmt.Fprintf(file, "HYVE_CLUSTER_STATUS=%s\n", clusterInfo.Status)
-			fmt.Fprintf(file, "HYVE_CLUSTER_KUBECONFIG=%s\n", clusterInfo.Kubeconfig)
+			fmt.Fprintf(file, "HYVE_CLUSTER_KUBECONFIG<<HYVE_EOF\n%s\nHYVE_EOF\n", clusterInfo.Kubeconfig)
 
 			log.Printf("✅ Exported cluster information to GitHub Actions environment:")
 			log.Printf("  HYVE_CLUSTER_NAME=%s", clusterInfo.Name)

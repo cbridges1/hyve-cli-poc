@@ -58,6 +58,7 @@ type ClusterConfig struct {
 	Name         string
 	Region       string
 	Nodes        []string
+	NodeGroups   []types.NodeGroup
 	ClusterType  string
 	FirewallID   string
 	Applications []string
@@ -70,8 +71,9 @@ type ClusterConfig struct {
 
 // ClusterUpdateConfig represents cluster update configuration
 type ClusterUpdateConfig struct {
-	Name  string
-	Nodes []string
+	Name       string
+	Nodes      []string
+	NodeGroups []types.NodeGroup
 }
 
 // FirewallConfig represents firewall creation configuration
@@ -88,6 +90,7 @@ type ClusterInfo struct {
 	Kubeconfig string
 	Status     string
 	ID         string
+	NodeGroups []types.NodeGroup
 }
 
 // Provider implements the provider interfaces for AWS
@@ -339,13 +342,29 @@ func (p *Provider) CreateCluster(ctx context.Context, clusterConfig *ClusterConf
 		return nil, fmt.Errorf("failed waiting for cluster to be ready: %w", err)
 	}
 
-	// Create node group with the specified nodes
-	log.Printf("Creating node group for cluster %s...", clusterConfig.Name)
-	if err := p.createNodeGroup(ctx, clusterConfig.Name, clusterConfig.NodeRoleARN, subnetIDs, clusterConfig.Nodes); err != nil {
-		log.Printf("Warning: Failed to create node group: %v", err)
-		// Return the cluster even if node group creation fails - cluster is still usable
+	// Create node group(s) and wait for each to become ready
+	log.Printf("Creating node group(s) for cluster %s...", clusterConfig.Name)
+	if len(clusterConfig.NodeGroups) > 0 {
+		for _, ng := range clusterConfig.NodeGroups {
+			if err := p.createNodeGroupFromSpec(ctx, clusterConfig.Name, clusterConfig.NodeRoleARN, subnetIDs, ng); err != nil {
+				return nil, fmt.Errorf("failed to create node group '%s': %w", ng.Name, err)
+			}
+			log.Printf("Waiting for node group '%s' to become ready...", ng.Name)
+			if err := p.waitForNodeGroupReady(ctx, clusterConfig.Name, ng.Name); err != nil {
+				return nil, fmt.Errorf("node group '%s' did not become ready: %w", ng.Name, err)
+			}
+			log.Printf("Node group '%s' is ready", ng.Name)
+		}
 	} else {
-		log.Printf("Node group creation started for cluster %s", clusterConfig.Name)
+		nodeGroupName := fmt.Sprintf("%s-nodes", clusterConfig.Name)
+		if err := p.createNodeGroup(ctx, clusterConfig.Name, clusterConfig.NodeRoleARN, subnetIDs, clusterConfig.Nodes); err != nil {
+			return nil, fmt.Errorf("failed to create node group: %w", err)
+		}
+		log.Printf("Waiting for node group '%s' to become ready...", nodeGroupName)
+		if err := p.waitForNodeGroupReady(ctx, clusterConfig.Name, nodeGroupName); err != nil {
+			return nil, fmt.Errorf("node group '%s' did not become ready: %w", nodeGroupName, err)
+		}
+		log.Printf("Node group '%s' is ready", nodeGroupName)
 	}
 
 	// Refresh cluster info
@@ -419,7 +438,9 @@ func (p *Provider) getAvailabilityZones(ctx context.Context) ([]string, error) {
 	return azs, nil
 }
 
-// createClusterSubnets creates subnets for the EKS cluster in different AZs
+// createClusterSubnets creates subnets for the EKS cluster in different AZs,
+// then ensures an internet gateway exists and creates a public route table so
+// nodes can reach the EKS control plane and pull container images.
 func (p *Provider) createClusterSubnets(ctx context.Context, vpcID, clusterName, vpcCIDR string, azs []string) ([]string, error) {
 	// Parse the VPC CIDR to generate subnet CIDRs
 	// For a /16 VPC, we'll create /24 subnets
@@ -466,7 +487,7 @@ func (p *Provider) createClusterSubnets(ctx context.Context, vpcID, clusterName,
 		createdSubnetIDs = append(createdSubnetIDs, subnetID)
 		log.Printf("Created subnet %s (%s) in %s", subnetName, subnetID, az)
 
-		// Enable auto-assign public IP for the subnet (required for EKS nodes to access internet)
+		// Enable auto-assign public IP for the subnet (required for EKS nodes to reach internet)
 		_, err = p.ec2Client.ModifySubnetAttribute(ctx, &ec2.ModifySubnetAttributeInput{
 			SubnetId:            aws.String(subnetID),
 			MapPublicIpOnLaunch: &ec2types.AttributeBooleanValue{Value: aws.Bool(true)},
@@ -476,7 +497,124 @@ func (p *Provider) createClusterSubnets(ctx context.Context, vpcID, clusterName,
 		}
 	}
 
+	// Ensure the VPC has an internet gateway so nodes can reach the EKS control
+	// plane and pull container images. Without this, nodes boot but never register.
+	igwID, err := p.ensureInternetGateway(ctx, vpcID, clusterName)
+	if err != nil {
+		for _, subnetID := range createdSubnetIDs {
+			_ = p.deleteSubnet(ctx, subnetID)
+		}
+		return nil, fmt.Errorf("failed to ensure internet gateway: %w", err)
+	}
+
+	// Create a dedicated public route table (0.0.0.0/0 → igw) and associate it
+	// with the subnets we just created. We never modify the VPC's main route table.
+	if _, err := p.createPublicRouteTable(ctx, vpcID, igwID, clusterName, createdSubnetIDs); err != nil {
+		for _, subnetID := range createdSubnetIDs {
+			_ = p.deleteSubnet(ctx, subnetID)
+		}
+		return nil, fmt.Errorf("failed to create public route table: %w", err)
+	}
+
 	return createdSubnetIDs, nil
+}
+
+// ensureInternetGateway returns the ID of an internet gateway attached to the VPC.
+// If none exists, a new one is created, tagged, and attached.
+func (p *Provider) ensureInternetGateway(ctx context.Context, vpcID, clusterName string) (string, error) {
+	resp, err := p.ec2Client.DescribeInternetGateways(ctx, &ec2.DescribeInternetGatewaysInput{
+		Filters: []ec2types.Filter{
+			{Name: aws.String("attachment.vpc-id"), Values: []string{vpcID}},
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to describe internet gateways: %w", err)
+	}
+
+	if len(resp.InternetGateways) > 0 {
+		igwID := *resp.InternetGateways[0].InternetGatewayId
+		log.Printf("Using existing internet gateway %s for VPC %s", igwID, vpcID)
+		return igwID, nil
+	}
+
+	// No IGW attached — create one
+	createResp, err := p.ec2Client.CreateInternetGateway(ctx, &ec2.CreateInternetGatewayInput{
+		TagSpecifications: []ec2types.TagSpecification{
+			{
+				ResourceType: ec2types.ResourceTypeInternetGateway,
+				Tags: []ec2types.Tag{
+					{Key: aws.String("Name"), Value: aws.String(fmt.Sprintf("hyve-eks-%s-igw", clusterName))},
+					{Key: aws.String("CreatedBy"), Value: aws.String("hyve")},
+					{Key: aws.String("EKSCluster"), Value: aws.String(clusterName)},
+				},
+			},
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to create internet gateway: %w", err)
+	}
+
+	igwID := *createResp.InternetGateway.InternetGatewayId
+	log.Printf("Created internet gateway %s", igwID)
+
+	if _, err := p.ec2Client.AttachInternetGateway(ctx, &ec2.AttachInternetGatewayInput{
+		InternetGatewayId: aws.String(igwID),
+		VpcId:             aws.String(vpcID),
+	}); err != nil {
+		_, _ = p.ec2Client.DeleteInternetGateway(ctx, &ec2.DeleteInternetGatewayInput{
+			InternetGatewayId: aws.String(igwID),
+		})
+		return "", fmt.Errorf("failed to attach internet gateway to VPC: %w", err)
+	}
+
+	log.Printf("Attached internet gateway %s to VPC %s", igwID, vpcID)
+	return igwID, nil
+}
+
+// createPublicRouteTable creates a route table with a 0.0.0.0/0 → igw default route
+// and associates it with the given subnets. Returns the route table ID.
+func (p *Provider) createPublicRouteTable(ctx context.Context, vpcID, igwID, clusterName string, subnetIDs []string) (string, error) {
+	createResp, err := p.ec2Client.CreateRouteTable(ctx, &ec2.CreateRouteTableInput{
+		VpcId: aws.String(vpcID),
+		TagSpecifications: []ec2types.TagSpecification{
+			{
+				ResourceType: ec2types.ResourceTypeRouteTable,
+				Tags: []ec2types.Tag{
+					{Key: aws.String("Name"), Value: aws.String(fmt.Sprintf("hyve-eks-%s-rt", clusterName))},
+					{Key: aws.String("CreatedBy"), Value: aws.String("hyve")},
+					{Key: aws.String("EKSCluster"), Value: aws.String(clusterName)},
+				},
+			},
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to create route table: %w", err)
+	}
+
+	rtID := *createResp.RouteTable.RouteTableId
+	log.Printf("Created route table %s for cluster %s", rtID, clusterName)
+
+	if _, err := p.ec2Client.CreateRoute(ctx, &ec2.CreateRouteInput{
+		RouteTableId:         aws.String(rtID),
+		DestinationCidrBlock: aws.String("0.0.0.0/0"),
+		GatewayId:            aws.String(igwID),
+	}); err != nil {
+		_, _ = p.ec2Client.DeleteRouteTable(ctx, &ec2.DeleteRouteTableInput{RouteTableId: aws.String(rtID)})
+		return "", fmt.Errorf("failed to add internet route to route table: %w", err)
+	}
+
+	for _, subnetID := range subnetIDs {
+		if _, err := p.ec2Client.AssociateRouteTable(ctx, &ec2.AssociateRouteTableInput{
+			RouteTableId: aws.String(rtID),
+			SubnetId:     aws.String(subnetID),
+		}); err != nil {
+			log.Printf("Warning: Failed to associate subnet %s with route table %s: %v", subnetID, rtID, err)
+		} else {
+			log.Printf("Associated subnet %s with route table %s", subnetID, rtID)
+		}
+	}
+
+	return rtID, nil
 }
 
 // generateSubnetCIDRs generates subnet CIDRs from a VPC CIDR
@@ -666,6 +804,87 @@ func (p *Provider) createNodeGroup(ctx context.Context, clusterName, nodeRoleARN
 	return nil
 }
 
+// createNodeGroupFromSpec creates a managed node group from a NodeGroup spec
+func (p *Provider) createNodeGroupFromSpec(ctx context.Context, clusterName, nodeRoleARN string, subnetIDs []string, ng types.NodeGroup) error {
+	name := ng.Name
+	if name == "" {
+		name = fmt.Sprintf("%s-nodes", clusterName)
+	}
+
+	instanceType := ng.InstanceType
+	if instanceType == "" {
+		instanceType = "t3.medium"
+	}
+
+	desiredSize := int32(ng.Count)
+	if desiredSize < 1 {
+		desiredSize = 1
+	}
+	minSize := int32(ng.MinCount)
+	if minSize < 1 {
+		minSize = 1
+	}
+	maxSize := int32(ng.MaxCount)
+	if maxSize < desiredSize {
+		maxSize = desiredSize + 2
+	}
+
+	log.Printf("Creating node group %s with instance type %s and %d nodes", name, instanceType, desiredSize)
+
+	input := &eks.CreateNodegroupInput{
+		ClusterName:   aws.String(clusterName),
+		NodegroupName: aws.String(name),
+		NodeRole:      aws.String(nodeRoleARN),
+		Subnets:       subnetIDs,
+		ScalingConfig: &ekstypes.NodegroupScalingConfig{
+			DesiredSize: aws.Int32(desiredSize),
+			MinSize:     aws.Int32(minSize),
+			MaxSize:     aws.Int32(maxSize),
+		},
+		InstanceTypes: []string{instanceType},
+		Tags: map[string]string{
+			"CreatedBy":  "hyve",
+			"EKSCluster": clusterName,
+		},
+	}
+
+	if ng.Spot {
+		input.CapacityType = ekstypes.CapacityTypesSpot
+	}
+
+	if ng.DiskSize > 0 {
+		input.DiskSize = aws.Int32(int32(ng.DiskSize))
+	}
+
+	if len(ng.Labels) > 0 {
+		input.Labels = ng.Labels
+	}
+
+	if len(ng.Taints) > 0 {
+		for _, t := range ng.Taints {
+			effect := ekstypes.TaintEffectNoSchedule
+			switch t.Effect {
+			case "PreferNoSchedule":
+				effect = ekstypes.TaintEffectPreferNoSchedule
+			case "NoExecute":
+				effect = ekstypes.TaintEffectNoExecute
+			}
+			input.Taints = append(input.Taints, ekstypes.Taint{
+				Key:    aws.String(t.Key),
+				Value:  aws.String(t.Value),
+				Effect: effect,
+			})
+		}
+	}
+
+	_, err := p.eksClient.CreateNodegroup(ctx, input)
+	if err != nil {
+		return fmt.Errorf("failed to create node group '%s': %w", name, err)
+	}
+
+	return nil
+}
+
 // deleteNodeGroups deletes all node groups for a cluster
 func (p *Provider) deleteNodeGroups(ctx context.Context, clusterName string) error {
 	// List all node groups for the cluster
@@ -703,6 +922,48 @@ func (p *Provider) deleteNodeGroups(ctx context.Context, clusterName string) err
 	}
 
 	return nil
+}
+
+// waitForNodeGroupReady waits for a node group to reach ACTIVE status.
+// Returns an error if the node group reaches DEGRADED or CREATE_FAILED.
+func (p *Provider) waitForNodeGroupReady(ctx context.Context, clusterName, nodeGroupName string) error {
+	for {
+		resp, err := p.eksClient.DescribeNodegroup(ctx, &eks.DescribeNodegroupInput{
+			ClusterName:   aws.String(clusterName),
+			NodegroupName: aws.String(nodeGroupName),
+		})
+		if err != nil {
+			return fmt.Errorf("failed to check node group status: %w", err)
+		}
+
+		status := resp.Nodegroup.Status
+		log.Printf("Node group '%s' status: %s", nodeGroupName, status)
+
+		switch status {
+		case ekstypes.NodegroupStatusActive:
+			return nil
+		case ekstypes.NodegroupStatusDegraded:
+			issues := resp.Nodegroup.Health.Issues
+			if len(issues) > 0 {
+				return fmt.Errorf("node group '%s' is DEGRADED: %s - %s",
+					nodeGroupName, issues[0].Code, aws.ToString(issues[0].Message))
+			}
+			return fmt.Errorf("node group '%s' is DEGRADED", nodeGroupName)
+		case ekstypes.NodegroupStatusCreateFailed:
+			issues := resp.Nodegroup.Health.Issues
+			if len(issues) > 0 {
+				return fmt.Errorf("node group '%s' creation failed: %s - %s",
+					nodeGroupName, issues[0].Code, aws.ToString(issues[0].Message))
+			}
+			return fmt.Errorf("node group '%s' creation failed", nodeGroupName)
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(30 * time.Second):
+		}
+	}
 }
 
 // waitForNodeGroupDeleted waits for a node group to be fully deleted
@@ -753,6 +1014,16 @@ func (p *Provider) DeleteCluster(ctx context.Context, clusterID string) error {
 		log.Printf("Warning: Failed to find subnets for cluster %s: %v", clusterID, err)
 	}
 
+	routeTableIDs, err := p.findClusterRouteTables(ctx, clusterID)
+	if err != nil {
+		log.Printf("Warning: Failed to find route tables for cluster %s: %v", clusterID, err)
+	}
+
+	igwIDs, err := p.findClusterInternetGateways(ctx, clusterID)
+	if err != nil {
+		log.Printf("Warning: Failed to find internet gateways for cluster %s: %v", clusterID, err)
+	}
+
 	// Delete node groups first - EKS requires this before cluster deletion
 	log.Printf("Deleting node groups for cluster %s...", clusterID)
 	if err := p.deleteNodeGroups(ctx, clusterID); err != nil {
@@ -783,6 +1054,16 @@ func (p *Provider) DeleteCluster(ctx context.Context, clusterID string) error {
 		}
 	}
 
+	// Clean up route tables created by Hyve (disassociate subnets first)
+	for _, rtID := range routeTableIDs {
+		log.Printf("Deleting route table %s created for cluster %s", rtID, clusterID)
+		if err := p.deleteRouteTable(ctx, rtID); err != nil {
+			log.Printf("Warning: Failed to delete route table %s: %v", rtID, err)
+		} else {
+			log.Printf("Successfully deleted route table %s", rtID)
+		}
+	}
+
 	// Clean up subnets created by Hyve
 	for _, subnetID := range subnetIDs {
 		log.Printf("Deleting subnet %s created for cluster %s", subnetID, clusterID)
@@ -790,6 +1071,25 @@ func (p *Provider) DeleteCluster(ctx context.Context, clusterID string) error {
 			log.Printf("Warning: Failed to delete subnet %s: %v", subnetID, err)
 		} else {
 			log.Printf("Successfully deleted subnet %s", subnetID)
+		}
+	}
+
+	// Detach and delete internet gateways created by Hyve
+	for _, igw := range igwIDs {
+		log.Printf("Detaching and deleting internet gateway %s created for cluster %s", igw.id, clusterID)
+		if _, err := p.ec2Client.DetachInternetGateway(ctx, &ec2.DetachInternetGatewayInput{
+			InternetGatewayId: aws.String(igw.id),
+			VpcId:             aws.String(igw.vpcID),
+		}); err != nil {
+			log.Printf("Warning: Failed to detach internet gateway %s: %v", igw.id, err)
+			continue
+		}
+		if _, err := p.ec2Client.DeleteInternetGateway(ctx, &ec2.DeleteInternetGatewayInput{
+			InternetGatewayId: aws.String(igw.id),
+		}); err != nil {
+			log.Printf("Warning: Failed to delete internet gateway %s: %v", igw.id, err)
+		} else {
+			log.Printf("Successfully deleted internet gateway %s", igw.id)
 		}
 	}
 
@@ -840,6 +1140,90 @@ func (p *Provider) findClusterSubnets(ctx context.Context, clusterName string) (
 	}
 
 	return subnetIDs, nil
+}
+
+// igwRef holds an internet gateway ID together with the VPC it is attached to,
+// so the caller can detach before deleting.
+type igwRef struct {
+	id    string
+	vpcID string
+}
+
+// findClusterRouteTables finds route tables created by Hyve for a cluster.
+func (p *Provider) findClusterRouteTables(ctx context.Context, clusterName string) ([]string, error) {
+	resp, err := p.ec2Client.DescribeRouteTables(ctx, &ec2.DescribeRouteTablesInput{
+		Filters: []ec2types.Filter{
+			{Name: aws.String("tag:EKSCluster"), Values: []string{clusterName}},
+			{Name: aws.String("tag:CreatedBy"), Values: []string{"hyve"}},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to describe route tables: %w", err)
+	}
+
+	var ids []string
+	for _, rt := range resp.RouteTables {
+		if rt.RouteTableId != nil {
+			ids = append(ids, *rt.RouteTableId)
+		}
+	}
+	return ids, nil
+}
+
+// deleteRouteTable disassociates all explicit subnet associations then deletes the route table.
+func (p *Provider) deleteRouteTable(ctx context.Context, rtID string) error {
+	resp, err := p.ec2Client.DescribeRouteTables(ctx, &ec2.DescribeRouteTablesInput{
+		RouteTableIds: []string{rtID},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to describe route table %s: %w", rtID, err)
+	}
+	if len(resp.RouteTables) > 0 {
+		for _, assoc := range resp.RouteTables[0].Associations {
+			if assoc.Main != nil && *assoc.Main {
+				continue // never disassociate the main route table
+			}
+			if assoc.RouteTableAssociationId != nil {
+				if _, err := p.ec2Client.DisassociateRouteTable(ctx, &ec2.DisassociateRouteTableInput{
+					AssociationId: assoc.RouteTableAssociationId,
+				}); err != nil {
+					log.Printf("Warning: Failed to disassociate route table %s: %v", rtID, err)
+				}
+			}
+		}
+	}
+	if _, err := p.ec2Client.DeleteRouteTable(ctx, &ec2.DeleteRouteTableInput{
+		RouteTableId: aws.String(rtID),
+	}); err != nil {
+		return fmt.Errorf("failed to delete route table %s: %w", rtID, err)
+	}
+	return nil
+}
+
+// findClusterInternetGateways finds internet gateways created by Hyve for a cluster.
+func (p *Provider) findClusterInternetGateways(ctx context.Context, clusterName string) ([]igwRef, error) {
+	resp, err := p.ec2Client.DescribeInternetGateways(ctx, &ec2.DescribeInternetGatewaysInput{
+		Filters: []ec2types.Filter{
+			{Name: aws.String("tag:EKSCluster"), Values: []string{clusterName}},
+			{Name: aws.String("tag:CreatedBy"), Values: []string{"hyve"}},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to describe internet gateways: %w", err)
+	}
+
+	var refs []igwRef
+	for _, igw := range resp.InternetGateways {
+		if igw.InternetGatewayId == nil {
+			continue
+		}
+		vpcID := ""
+		if len(igw.Attachments) > 0 && igw.Attachments[0].VpcId != nil {
+			vpcID = *igw.Attachments[0].VpcId
+		}
+		refs = append(refs, igwRef{id: *igw.InternetGatewayId, vpcID: vpcID})
+	}
+	return refs, nil
 }
 
 // waitForClusterDeleted waits for a cluster to be fully deleted
@@ -926,6 +1310,45 @@ func (p *Provider) GetClusterInfo(ctx context.Context, name string) (*ClusterInf
 		kubeconfig = p.generateEKSKubeconfig(name, endpoint, *cluster.CertificateAuthority.Data)
 	}
 
+	// Fetch node groups
+	var nodeGroups []types.NodeGroup
+	listNG, err := p.eksClient.ListNodegroups(ctx, &eks.ListNodegroupsInput{ClusterName: cluster.Name})
+	if err == nil {
+		for _, ngName := range listNG.Nodegroups {
+			ngResp, err := p.eksClient.DescribeNodegroup(ctx, &eks.DescribeNodegroupInput{
+				ClusterName:   cluster.Name,
+				NodegroupName: aws.String(ngName),
+			})
+			if err != nil || ngResp.Nodegroup == nil {
+				continue
+			}
+			ng := ngResp.Nodegroup
+			instanceType := ""
+			if len(ng.InstanceTypes) > 0 {
+				instanceType = ng.InstanceTypes[0]
+			}
+			count, min, max := 0, 0, 0
+			if ng.ScalingConfig != nil {
+				if ng.ScalingConfig.DesiredSize != nil {
+					count = int(*ng.ScalingConfig.DesiredSize)
+				}
+				if ng.ScalingConfig.MinSize != nil {
+					min = int(*ng.ScalingConfig.MinSize)
+				}
+				if ng.ScalingConfig.MaxSize != nil {
+					max = int(*ng.ScalingConfig.MaxSize)
+				}
+			}
+			nodeGroups = append(nodeGroups, types.NodeGroup{
+				Name:         ngName,
+				InstanceType: instanceType,
+				Count:        count,
+				MinCount:     min,
+				MaxCount:     max,
+			})
+		}
+	}
+
 	return &ClusterInfo{
 		Name:       *cluster.Name,
 		IPAddress:  endpoint,
@@ -933,6 +1356,7 @@ func (p *Provider) GetClusterInfo(ctx context.Context, name string) (*ClusterInf
 		Kubeconfig: kubeconfig,
 		Status:     string(cluster.Status),
 		ID:         *cluster.Name,
+		NodeGroups: nodeGroups,
 	}, nil
 }
 
@@ -996,32 +1420,6 @@ func (p *Provider) DeleteFirewall(ctx context.Context, firewallID string) error 
 func (p *Provider) FindFirewallByName(ctx context.Context, name string) (*Firewall, error) {
 	// EKS manages security groups automatically
 	return nil, nil
-}
-
-// ListLoadBalancers lists all load balancers
-func (p *Provider) ListLoadBalancers(ctx context.Context) ([]*LoadBalancer, error) {
-	// Load balancers are managed by Kubernetes services in EKS
-	return []*LoadBalancer{}, nil
-}
-
-// DeployIngressController deploys ingress controller
-func (p *Provider) DeployIngressController(ctx context.Context, clusterID string, spec types.IngressSpec) (*LoadBalancer, error) {
-	if !spec.LoadBalancer {
-		return nil, nil
-	}
-	// AWS Load Balancer Controller handles this in EKS
-	return nil, nil
-}
-
-// RemoveIngressController removes ingress controller
-func (p *Provider) RemoveIngressController(ctx context.Context, clusterID string) error {
-	return nil
-}
-
-// GetLoadBalancerIP gets load balancer IP for cluster
-func (p *Provider) GetLoadBalancerIP(ctx context.Context, clusterID string) (string, error) {
-	// Would need to query Kubernetes services
-	return "", nil
 }
 
 // convertCluster converts an EKS cluster to provider cluster

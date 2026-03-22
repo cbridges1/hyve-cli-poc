@@ -51,6 +51,7 @@ type ClusterConfig struct {
 	Name         string
 	Region       string
 	Nodes        []string
+	NodeGroups   []types.NodeGroup
 	ClusterType  string
 	FirewallID   string
 	Applications []string
@@ -58,8 +59,9 @@ type ClusterConfig struct {
 
 // ClusterUpdateConfig represents cluster update configuration
 type ClusterUpdateConfig struct {
-	Name  string
-	Nodes []string
+	Name       string
+	Nodes      []string
+	NodeGroups []types.NodeGroup
 }
 
 // FirewallConfig represents firewall creation configuration
@@ -76,6 +78,7 @@ type ClusterInfo struct {
 	Kubeconfig string
 	Status     string
 	ID         string
+	NodeGroups []types.NodeGroup
 }
 
 // Provider implements the provider interfaces for Civo
@@ -152,17 +155,38 @@ func (p *Provider) FindClusterByName(ctx context.Context, name string) (*Cluster
 func (p *Provider) CreateCluster(ctx context.Context, config *ClusterConfig) (*Cluster, error) {
 	log.Printf("Creating cluster %s in region %s", config.Name, config.Region)
 
+	// Resolve node size and count from NodeGroups or legacy Nodes
+	nodeSize := "g4s.kube.small"
+	nodeCount := len(config.Nodes)
+
+	if len(config.NodeGroups) > 0 {
+		// Civo only supports a single homogeneous pool; use the first node group
+		ng := config.NodeGroups[0]
+		if ng.InstanceType != "" {
+			nodeSize = ng.InstanceType
+		}
+		if ng.Count > 0 {
+			nodeCount = ng.Count
+		}
+		if len(config.NodeGroups) > 1 {
+			log.Printf("Warning: Civo only supports a single node pool; using first node group '%s'", ng.Name)
+		}
+	} else if len(config.Nodes) > 0 {
+		nodeSize = config.Nodes[0]
+	}
+	if nodeCount < 1 {
+		nodeCount = 1
+	}
+
 	clusterConfig := &civogo.KubernetesClusterConfig{
 		Name:            config.Name,
 		Region:          config.Region,
-		NumTargetNodes:  len(config.Nodes),
-		TargetNodesSize: config.Nodes[0], // Use first node size
-		//KubernetesVersion: config.ClusterType,
-		NodeDestroy:  "",
-		NetworkID:    "",
-		Tags:         "",
-		Applications: "",
-		//FirewallID:        config.FirewallID,
+		NumTargetNodes:  nodeCount,
+		TargetNodesSize: nodeSize,
+		NodeDestroy:     "",
+		NetworkID:       "",
+		Tags:            "",
+		Applications:    "",
 	}
 
 	log.Printf("Creating cluster %v", clusterConfig)
@@ -182,10 +206,26 @@ func (p *Provider) CreateCluster(ctx context.Context, config *ClusterConfig) (*C
 
 // UpdateCluster updates an existing cluster
 func (p *Provider) UpdateCluster(ctx context.Context, clusterID string, config *ClusterUpdateConfig) (*Cluster, error) {
+	// Resolve node size and count from NodeGroups or legacy Nodes
+	nodeSize := ""
+	nodeCount := len(config.Nodes)
+
+	if len(config.NodeGroups) > 0 {
+		ng := config.NodeGroups[0]
+		if ng.InstanceType != "" {
+			nodeSize = ng.InstanceType
+		}
+		if ng.Count > 0 {
+			nodeCount = ng.Count
+		}
+	} else if len(config.Nodes) > 0 {
+		nodeSize = config.Nodes[0]
+	}
+
 	updateConfig := &civogo.KubernetesClusterConfig{
 		Name:            config.Name,
-		NumTargetNodes:  len(config.Nodes),
-		TargetNodesSize: config.Nodes[0],
+		NumTargetNodes:  nodeCount,
+		TargetNodesSize: nodeSize,
 	}
 
 	cluster, err := p.client.UpdateKubernetesCluster(clusterID, updateConfig)
@@ -212,12 +252,14 @@ func (p *Provider) WaitForClusterReady(ctx context.Context, clusterID string) er
 
 		log.Printf("Cluster status: %s, waiting...", cluster.Status)
 
-		if cluster.Status == "ACTIVE" {
-			break
-		}
-
 		if cluster.Status == "FAILED" {
 			return fmt.Errorf("cluster creation failed")
+		}
+
+		// Wait for both ACTIVE status and a non-empty kubeconfig. The Civo API
+		// may briefly report ACTIVE before the kubeconfig is available.
+		if cluster.Status == "ACTIVE" && cluster.KubeConfig != "" {
+			break
 		}
 
 		time.Sleep(30 * time.Second)
@@ -242,6 +284,15 @@ func (p *Provider) GetClusterInfo(ctx context.Context, name string) (*ClusterInf
 		return nil, fmt.Errorf("failed to get cluster details for %s: %w", name, err)
 	}
 
+	var nodeGroups []types.NodeGroup
+	for _, pool := range clusterDetails.Pools {
+		nodeGroups = append(nodeGroups, types.NodeGroup{
+			Name:         pool.ID,
+			InstanceType: pool.Size,
+			Count:        pool.Count,
+		})
+	}
+
 	info := &ClusterInfo{
 		Name:       cluster.Name,
 		IPAddress:  clusterDetails.MasterIP,
@@ -249,6 +300,7 @@ func (p *Provider) GetClusterInfo(ctx context.Context, name string) (*ClusterInf
 		Kubeconfig: clusterDetails.KubeConfig,
 		Status:     cluster.Status,
 		ID:         cluster.ID,
+		NodeGroups: nodeGroups,
 	}
 
 	return info, nil
@@ -319,72 +371,6 @@ func (p *Provider) FindFirewallByName(ctx context.Context, name string) (*Firewa
 	}
 
 	return nil, nil
-}
-
-// ListLoadBalancers lists all load balancers
-func (p *Provider) ListLoadBalancers(ctx context.Context) ([]*LoadBalancer, error) {
-	civoLBs, err := p.client.ListLoadBalancers()
-	if err != nil {
-		return nil, err
-	}
-
-	var lbs []*LoadBalancer
-	for _, lb := range civoLBs {
-		lbs = append(lbs, &LoadBalancer{
-			ID:        lb.ID,
-			Name:      lb.Name,
-			PublicIP:  lb.PublicIP,
-			ClusterID: lb.ClusterID,
-		})
-	}
-
-	return lbs, nil
-}
-
-// DeployIngressController deploys ingress controller
-func (p *Provider) DeployIngressController(ctx context.Context, clusterID string, spec types.IngressSpec) (*LoadBalancer, error) {
-	if !spec.LoadBalancer {
-		return nil, nil
-	}
-
-	loadBalancers, err := p.client.ListLoadBalancers()
-	if err != nil {
-		return nil, err
-	}
-
-	for _, lb := range loadBalancers {
-		if lb.ClusterID == clusterID {
-			return &LoadBalancer{
-				ID:        lb.ID,
-				Name:      lb.Name,
-				PublicIP:  lb.PublicIP,
-				ClusterID: lb.ClusterID,
-			}, nil
-		}
-	}
-
-	return nil, nil
-}
-
-// RemoveIngressController removes ingress controller
-func (p *Provider) RemoveIngressController(ctx context.Context, clusterID string) error {
-	return nil
-}
-
-// GetLoadBalancerIP gets load balancer IP for cluster
-func (p *Provider) GetLoadBalancerIP(ctx context.Context, clusterID string) (string, error) {
-	loadBalancers, err := p.client.ListLoadBalancers()
-	if err != nil {
-		return "", err
-	}
-
-	for _, lb := range loadBalancers {
-		if lb.ClusterID == clusterID {
-			return lb.PublicIP, nil
-		}
-	}
-
-	return "", nil
 }
 
 // convertCluster converts a Civo cluster to provider cluster
